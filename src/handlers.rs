@@ -9,7 +9,7 @@ use axum::{
     http::{HeaderMap, Response, StatusCode},
     Json,
 };
-use endpoints::chat::ChatCompletionRequest;
+use endpoints::{chat::ChatCompletionRequest, embeddings::EmbeddingRequest};
 use std::sync::Arc;
 use tracing::{error, info};
 
@@ -69,6 +69,46 @@ pub(crate) async fn chat_handler(
             .body(Body::from(bytes))
             .unwrap()),
     }
+}
+
+pub(crate) async fn embeddings_handler(
+    State(state): State<Arc<AppState>>,
+    _headers: HeaderMap,
+    Json(request): Json<EmbeddingRequest>,
+) -> ServerResult<axum::response::Response> {
+    info!(target: "stdout", "handling embeddings request");
+
+    let embeddings_servers = state.embeddings_servers.read().await;
+    let embeddings_server_base_url = match embeddings_servers.next().await {
+        Ok(url) => url,
+        Err(e) => {
+            let err_msg = e.to_string();
+            error!(target: "stdout", "{}", &err_msg);
+            return Err(ServerError::Operation(err_msg));
+        }
+    };
+    let embeddings_service_url = format!("{}v1/embeddings", embeddings_server_base_url);
+    info!(target: "stdout", "dispatch the embeddings request to {}", embeddings_service_url);
+
+    let response = reqwest::Client::new()
+        .post(embeddings_service_url)
+        .json(&request)
+        .send()
+        .await
+        .map_err(|e| ServerError::Operation(e.to_string()))?;
+
+    let status = response.status();
+
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| ServerError::Operation(e.to_string()))?;
+
+    Ok(Response::builder()
+        .status(status)
+        .header("Content-Type", "application/json")
+        .body(Body::from(bytes))
+        .unwrap())
 }
 
 pub(crate) async fn register_downstream_server_handler(

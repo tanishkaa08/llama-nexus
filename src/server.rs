@@ -4,7 +4,7 @@ use axum::http::Uri;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::RwLock;
-use tracing::error;
+use tracing::{error, warn};
 
 /// Represents a LlamaEdge API server
 #[derive(Debug, Serialize)]
@@ -63,8 +63,8 @@ fn test_serialize_server() {
 pub enum ServerKind {
     #[serde(rename = "chat")]
     CHAT,
-    #[serde(rename = "embedding")]
-    EMBEDDING,
+    #[serde(rename = "embeddings")]
+    EMBEDDINGS,
     #[serde(rename = "image")]
     IMAGE,
     #[serde(rename = "translate")]
@@ -78,7 +78,7 @@ impl std::fmt::Display for ServerKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             ServerKind::CHAT => write!(f, "chat"),
-            ServerKind::EMBEDDING => write!(f, "embedding"),
+            ServerKind::EMBEDDINGS => write!(f, "embeddings"),
             ServerKind::IMAGE => write!(f, "image"),
             ServerKind::TRANSLATE => write!(f, "translate"),
             ServerKind::TRANSCRIPT => write!(f, "transcript"),
@@ -94,7 +94,7 @@ impl std::str::FromStr for ServerKind {
 
         match s.as_str() {
             "chat" => Ok(Self::CHAT),
-            "embedding" => Ok(Self::EMBEDDING),
+            "embeddings" => Ok(Self::EMBEDDINGS),
             "image" => Ok(Self::IMAGE),
             "translate" => Ok(Self::TRANSLATE),
             "transcript" => Ok(Self::TRANSCRIPT),
@@ -146,7 +146,7 @@ impl ServerGroup {
         {
             let err_msg = format!("Server already registered: {}", server.url);
 
-            error!(target: "stdout", "{}", &err_msg);
+            warn!(target: "stdout", "{}", &err_msg);
 
             return Err(ServerError::Operation(err_msg));
         }
