@@ -1,0 +1,25 @@
+use axum::{http::StatusCode, response::IntoResponse, Json};
+use thiserror::Error;
+
+pub type ServerResult<T> = std::result::Result<T, ServerError>;
+
+#[derive(Error, Debug, Clone)]
+pub enum ServerError {
+    #[error("{0}")]
+    Operation(String),
+    #[error("Not found available server. Please register a server via the `/admin/register/{0}` endpoint.")]
+    NotFoundServer(String),
+    #[error("Invalid server kind: {0}")]
+    InvalidServerKind(String),
+}
+impl IntoResponse for ServerError {
+    fn into_response(self) -> axum::response::Response {
+        let (status, err_response) = match &self {
+            ServerError::Operation(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            ServerError::NotFoundServer(e) => (StatusCode::NOT_FOUND, e.to_string()),
+            ServerError::InvalidServerKind(e) => (StatusCode::BAD_REQUEST, e.to_string()),
+        };
+
+        (status, Json(err_response)).into_response()
+    }
+}
