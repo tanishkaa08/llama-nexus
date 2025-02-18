@@ -71,6 +71,7 @@ async fn main() -> ServerResult<()> {
             "/v1/audio/translations",
             post(handlers::audio_translations_handler),
         )
+        .route("/v1/audio/speech", post(handlers::audio_tts_handler))
         .route(
             "/admin/servers/register",
             post(handlers::register_downstream_server_handler),
@@ -119,6 +120,7 @@ pub(crate) struct AppState {
     chat_servers: Arc<RwLock<ServerGroup>>,
     embeddings_servers: Arc<RwLock<ServerGroup>>,
     whisper_servers: Arc<RwLock<ServerGroup>>,
+    tts_servers: Arc<RwLock<ServerGroup>>,
     // audio_services: Arc<RwLock<ServerGroup>>,
     // image_services: Arc<RwLock<ServerGroup>>,
     // rag_services: Arc<RwLock<ServerGroup>>,
@@ -129,6 +131,7 @@ impl AppState {
             chat_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::Chat))),
             embeddings_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::Embeddings))),
             whisper_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::Whisper))),
+            tts_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::Tts))),
             // audio_services: Arc::new(RwLock::new(ServerGroup::new(ServerKind::TRANSCRIPT))),
             // image_services: Arc::new(RwLock::new(ServerGroup::new(ServerKind::IMAGE))),
             // rag_services: Arc::new(RwLock::new(ServerGroup::new(ServerKind::RAG))),
@@ -148,6 +151,10 @@ impl AppState {
             ServerKind::Whisper => {
                 let mut whisper_servers = self.whisper_servers.write().await;
                 whisper_servers.register(server).await
+            }
+            ServerKind::Tts => {
+                let mut tts_servers = self.tts_servers.write().await;
+                tts_servers.register(server).await
             }
             _ => {
                 let err_msg = format!(
@@ -175,6 +182,10 @@ impl AppState {
             ServerKind::Whisper => {
                 let mut whisper_servers = self.whisper_servers.write().await;
                 whisper_servers.unregister(server).await
+            }
+            ServerKind::Tts => {
+                let mut tts_servers = self.tts_servers.write().await;
+                tts_servers.unregister(server).await
             }
             _ => Err(ServerError::InvalidServerKind(format!(
                 "Invalid server kind: {}",
@@ -223,6 +234,18 @@ impl AppState {
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
         servers.insert(ServerKind::Whisper.to_string(), whisper_servers);
+
+        // list all the tts servers
+        let tts_servers = self
+            .tts_servers
+            .read()
+            .await
+            .list_servers()
+            .await
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<String>>();
+        servers.insert(ServerKind::Tts.to_string(), tts_servers);
 
         Ok(servers)
     }

@@ -9,7 +9,9 @@ use axum::{
     http::{HeaderMap, Response, StatusCode},
     Json,
 };
-use endpoints::{chat::ChatCompletionRequest, embeddings::EmbeddingRequest};
+use endpoints::{
+    audio::speech::SpeechRequest, chat::ChatCompletionRequest, embeddings::EmbeddingRequest,
+};
 use std::sync::Arc;
 use tracing::{debug, error, info};
 
@@ -314,6 +316,74 @@ pub(crate) async fn audio_translations_handler(
     }
 }
 
+pub(crate) async fn audio_tts_handler(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request<Body>,
+) -> ServerResult<axum::response::Response> {
+    info!(target: "stdout", "handling audio speech request");
+
+    let tts_servers = state.tts_servers.read().await;
+    let tts_server_base_url = match tts_servers.next().await {
+        Ok(url) => url,
+        Err(e) => {
+            let err_msg = format!("Failed to get the tts server: {}", e);
+
+            error!(target: "stdout", "{}", &err_msg);
+
+            return Err(ServerError::Operation(err_msg));
+        }
+    };
+    let tts_service_url = format!("{}v1/audio/speech", tts_server_base_url);
+    info!(
+        target: "stdout",
+        "dispatch the audio speech request to {}",
+        tts_service_url
+    );
+
+    let body = req.into_body();
+    let body_bytes = axum::body::to_bytes(body, usize::MAX).await.map_err(|e| {
+        let err_msg = format!("Failed to convert the request body into bytes: {}", e);
+
+        error!(target: "stdout", "{}", &err_msg);
+
+        ServerError::Operation(err_msg)
+    })?;
+
+    let response = reqwest::Client::new()
+        .post(tts_service_url)
+        .header("Content-Type", "application/json")
+        .body(body_bytes)
+        .send()
+        .await
+        .map_err(|e| {
+            let err_msg = format!(
+                "Failed to forward the request to the downstream server: {}",
+                e
+            );
+
+            error!(target: "stdout", "{}", &err_msg);
+
+            ServerError::Operation(err_msg)
+        })?;
+
+    let status = response.status();
+    let bytes = response.bytes().await.map_err(|e| {
+        let err_msg = format!("Failed to get the full response as bytes: {}", e);
+
+        error!(target: "stdout", "{}", &err_msg);
+
+        ServerError::Operation(err_msg)
+    })?;
+
+    let response = Response::builder()
+        .status(status)
+        .header("Content-Type", "application/json")
+        .body(Body::from(bytes))
+        .unwrap();
+
+    Ok(response)
+}
+
 pub(crate) async fn register_downstream_server_handler(
     State(state): State<Arc<AppState>>,
     Json(server): Json<Server>,
@@ -369,6 +439,7 @@ pub(crate) async fn list_downstream_servers_handler(
     State(state): State<Arc<AppState>>,
 ) -> ServerResult<axum::response::Response> {
     let servers = state.list_downstream_servers().await?;
+    info!(target: "stdout", "Found {} downstream servers", servers.len());
 
     let json_body = serde_json::json!({
         "servers": servers
@@ -378,7 +449,13 @@ pub(crate) async fn list_downstream_servers_handler(
         .status(StatusCode::OK)
         .header("Content-Type", "application/json")
         .body(Body::from(json_body.to_string()))
-        .map_err(|e| ServerError::Operation(e.to_string()))?;
+        .map_err(|e| {
+            let err_msg = format!("Failed to create the response: {}", e);
+
+            error!(target: "stdout", "{}", &err_msg);
+
+            ServerError::Operation(err_msg)
+        })?;
 
     Ok(response)
 }

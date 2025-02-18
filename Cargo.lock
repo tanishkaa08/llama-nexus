@@ -443,8 +443,7 @@ dependencies = [
 [[package]]
 name = "endpoints"
 version = "0.25.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "178be39927afb5c7125b92d1f25b81a04fb0aa46534a0e60d051e8b721521614"
+source = "git+https://github.com/LlamaEdge/LlamaEdge.git?branch=feat-support-tts#555d9e7ebb6a9bcbdca361621b4602e8095e1fc8"
 dependencies = [
  "indexmap",
  "serde",
