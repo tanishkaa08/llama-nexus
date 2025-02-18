@@ -11,7 +11,7 @@ use axum::{
 };
 use endpoints::{chat::ChatCompletionRequest, embeddings::EmbeddingRequest};
 use std::sync::Arc;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 
 pub(crate) async fn chat_handler(
     State(state): State<Arc<AppState>>,
@@ -24,7 +24,7 @@ pub(crate) async fn chat_handler(
     let chat_server_base_url = match chat_servers.next().await {
         Ok(url) => url,
         Err(e) => {
-            let err_msg = e.to_string();
+            let err_msg = format!("Failed to get the chat server: {}", e);
 
             error!(target: "stdout", "{}", &err_msg);
 
@@ -52,10 +52,13 @@ pub(crate) async fn chat_handler(
 
     let status = response.status();
 
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| ServerError::Operation(e.to_string()))?;
+    let bytes = response.bytes().await.map_err(|e| {
+        let err_msg = format!("Failed to get the full response as bytes: {}", e);
+
+        error!(target: "stdout", "{}", &err_msg);
+
+        ServerError::Operation(err_msg)
+    })?;
 
     match request.stream {
         Some(true) => Ok(Response::builder()
@@ -82,8 +85,10 @@ pub(crate) async fn embeddings_handler(
     let embeddings_server_base_url = match embeddings_servers.next().await {
         Ok(url) => url,
         Err(e) => {
-            let err_msg = e.to_string();
+            let err_msg = format!("Failed to get the embeddings server: {}", e);
+
             error!(target: "stdout", "{}", &err_msg);
+
             return Err(ServerError::Operation(err_msg));
         }
     };
@@ -95,20 +100,218 @@ pub(crate) async fn embeddings_handler(
         .json(&request)
         .send()
         .await
-        .map_err(|e| ServerError::Operation(e.to_string()))?;
+        .map_err(|e| {
+            let err_msg = format!(
+                "Failed to forward the request to the downstream server: {}",
+                e
+            );
+
+            error!(target: "stdout", "{}", &err_msg);
+
+            ServerError::Operation(err_msg)
+        })?;
 
     let status = response.status();
 
-    let bytes = response
-        .bytes()
-        .await
-        .map_err(|e| ServerError::Operation(e.to_string()))?;
+    let bytes = response.bytes().await.map_err(|e| {
+        let err_msg = format!("Failed to get the full response as bytes: {}", e);
+
+        error!(target: "stdout", "{}", &err_msg);
+
+        ServerError::Operation(err_msg)
+    })?;
 
     Ok(Response::builder()
         .status(status)
         .header("Content-Type", "application/json")
         .body(Body::from(bytes))
         .unwrap())
+}
+
+pub(crate) async fn audio_transcriptions_handler(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request<Body>,
+) -> ServerResult<axum::response::Response> {
+    info!(target: "stdout", "handling audio transcription request");
+
+    let whisper_servers = state.whisper_servers.read().await;
+    let whisper_server_base_url = match whisper_servers.next().await {
+        Ok(url) => url,
+        Err(e) => {
+            let err_msg = format!("Failed to get the whisper server: {}", e);
+
+            error!(target: "stdout", "{}", &err_msg);
+
+            return Err(ServerError::Operation(err_msg));
+        }
+    };
+    let transcription_service_url = format!("{}v1/audio/transcriptions", whisper_server_base_url);
+    info!(
+        target: "stdout",
+        "dispatch the audio transcription request to {}",
+        transcription_service_url
+    );
+
+    // parse the content-type header
+    let content_type = &req
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            let err_msg = "Missing Content-Type header".to_string();
+
+            error!(target: "stdout", "{}", &err_msg);
+
+            ServerError::Operation(err_msg)
+        })?;
+    let content_type = content_type.to_string();
+    debug!(target: "stdout", "content-type: {}", &content_type);
+
+    // convert the request body into bytes
+    let body = req.into_body();
+    let body_bytes = axum::body::to_bytes(body, usize::MAX).await.map_err(|e| {
+        let err_msg = format!("Failed to convert the request body into bytes: {}", e);
+
+        error!(target: "stdout", "{}", &err_msg);
+
+        ServerError::Operation(err_msg)
+    })?;
+
+    // send the request to the downstream server
+    let response = reqwest::Client::new()
+        .post(transcription_service_url)
+        .header("Content-Type", content_type)
+        .body(body_bytes)
+        .send()
+        .await
+        .map_err(|e| {
+            let err_msg = format!(
+                "Failed to forward the request to the downstream server: {}",
+                e
+            );
+
+            error!(target: "stdout", "{}", &err_msg);
+
+            ServerError::Operation(err_msg)
+        })?;
+
+    let status = response.status();
+    let bytes = response.bytes().await.map_err(|e| {
+        let err_msg = format!("Failed to get the full response as bytes: {}", e);
+
+        error!(target: "stdout", "{}", &err_msg);
+
+        ServerError::Operation(err_msg)
+    })?;
+
+    // create the response
+    match Response::builder()
+        .status(status)
+        .header("Content-Type", "application/json")
+        .body(Body::from(bytes))
+    {
+        Ok(response) => Ok(response),
+        Err(e) => {
+            let err_msg = format!("Failed to create the response: {}", e);
+
+            error!(target: "stdout", "{}", &err_msg);
+
+            Err(ServerError::Operation(err_msg))
+        }
+    }
+}
+
+pub(crate) async fn audio_translations_handler(
+    State(state): State<Arc<AppState>>,
+    req: axum::extract::Request<Body>,
+) -> ServerResult<axum::response::Response> {
+    info!(target: "stdout", "handling audio translation request");
+
+    let whisper_servers = state.whisper_servers.read().await;
+    let whisper_server_base_url = match whisper_servers.next().await {
+        Ok(url) => url,
+        Err(e) => {
+            let err_msg = format!("Failed to get the whisper server: {}", e);
+
+            error!(target: "stdout", "{}", &err_msg);
+
+            return Err(ServerError::Operation(err_msg));
+        }
+    };
+    let translation_service_url = format!("{}v1/audio/translations", whisper_server_base_url);
+    info!(
+        target: "stdout",
+        "dispatch the audio translation request to {}",
+        translation_service_url
+    );
+
+    // parse the content-type header
+    let content_type = &req
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            let err_msg = "Missing Content-Type header".to_string();
+
+            error!(target: "stdout", "{}", &err_msg);
+
+            ServerError::Operation(err_msg)
+        })?;
+    let content_type = content_type.to_string();
+    debug!(target: "stdout", "content-type: {}", &content_type);
+
+    // convert the request body into bytes
+    let body = req.into_body();
+    let body_bytes = axum::body::to_bytes(body, usize::MAX).await.map_err(|e| {
+        let err_msg = format!("Failed to convert the request body into bytes: {}", e);
+
+        error!(target: "stdout", "{}", &err_msg);
+
+        ServerError::Operation(err_msg)
+    })?;
+
+    // send the request to the downstream server
+    let response = reqwest::Client::new()
+        .post(translation_service_url)
+        .header("Content-Type", content_type)
+        .body(body_bytes)
+        .send()
+        .await
+        .map_err(|e| {
+            let err_msg = format!(
+                "Failed to forward the request to the downstream server: {}",
+                e
+            );
+
+            error!(target: "stdout", "{}", &err_msg);
+
+            ServerError::Operation(err_msg)
+        })?;
+
+    let status = response.status();
+    let bytes = response.bytes().await.map_err(|e| {
+        let err_msg = format!("Failed to get the full response as bytes: {}", e);
+
+        error!(target: "stdout", "{}", &err_msg);
+
+        ServerError::Operation(err_msg)
+    })?;
+
+    // create the response
+    match Response::builder()
+        .status(status)
+        .header("Content-Type", "application/json")
+        .body(Body::from(bytes))
+    {
+        Ok(response) => Ok(response),
+        Err(e) => {
+            let err_msg = format!("Failed to create the response: {}", e);
+
+            error!(target: "stdout", "{}", &err_msg);
+
+            Err(ServerError::Operation(err_msg))
+        }
+    }
 }
 
 pub(crate) async fn register_downstream_server_handler(
@@ -119,6 +322,7 @@ pub(crate) async fn register_downstream_server_handler(
     let server_kind = server.kind;
 
     state.register_downstream_server(server).await?;
+    info!(target: "stdout", "registered {} server: {}", server_kind, server_url);
 
     // create a response with status code 200. Content-Type is JSON
     let json_body = serde_json::json!({
@@ -140,9 +344,11 @@ pub(crate) async fn remove_downstream_server_handler(
     State(state): State<Arc<AppState>>,
     Json(server): Json<Server>,
 ) -> ServerResult<axum::response::Response> {
+    let server_kind = server.kind;
     let server_url = server.url.clone();
 
     state.unregister_downstream_server(server).await?;
+    info!(target: "stdout", "unregistered {} server: {}", server_kind, server_url);
 
     // create a response with status code 200. Content-Type is JSON
     let json_body = serde_json::json!({

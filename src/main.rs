@@ -43,7 +43,7 @@ async fn main() -> ServerResult<()> {
     info!(target: "stdout", "Version: {}", env!("CARGO_PKG_VERSION"));
 
     // Load the config
-    let config = Config::load(&cli.config.unwrap()).map_err(|e| {
+    let config = Config::load(cli.config.unwrap()).map_err(|e| {
         let err_msg = format!("Failed to load config: {}", e);
 
         error!(target: "stdout", "{}", err_msg);
@@ -63,6 +63,14 @@ async fn main() -> ServerResult<()> {
     let app = Router::new()
         .route("/v1/chat/completions", post(handlers::chat_handler))
         .route("/v1/embeddings", post(handlers::embeddings_handler))
+        .route(
+            "/v1/audio/transcriptions",
+            post(handlers::audio_transcriptions_handler),
+        )
+        .route(
+            "/v1/audio/translations",
+            post(handlers::audio_translations_handler),
+        )
         .route(
             "/admin/servers/register",
             post(handlers::register_downstream_server_handler),
@@ -110,6 +118,7 @@ async fn main() -> ServerResult<()> {
 pub(crate) struct AppState {
     chat_servers: Arc<RwLock<ServerGroup>>,
     embeddings_servers: Arc<RwLock<ServerGroup>>,
+    whisper_servers: Arc<RwLock<ServerGroup>>,
     // audio_services: Arc<RwLock<ServerGroup>>,
     // image_services: Arc<RwLock<ServerGroup>>,
     // rag_services: Arc<RwLock<ServerGroup>>,
@@ -117,8 +126,9 @@ pub(crate) struct AppState {
 impl AppState {
     pub(crate) fn new() -> Self {
         Self {
-            chat_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::CHAT))),
-            embeddings_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::EMBEDDINGS))),
+            chat_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::Chat))),
+            embeddings_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::Embeddings))),
+            whisper_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::Whisper))),
             // audio_services: Arc::new(RwLock::new(ServerGroup::new(ServerKind::TRANSCRIPT))),
             // image_services: Arc::new(RwLock::new(ServerGroup::new(ServerKind::IMAGE))),
             // rag_services: Arc::new(RwLock::new(ServerGroup::new(ServerKind::RAG))),
@@ -127,30 +137,44 @@ impl AppState {
 
     pub(crate) async fn register_downstream_server(&self, server: Server) -> ServerResult<()> {
         match server.kind {
-            ServerKind::CHAT => {
+            ServerKind::Chat => {
                 let mut chat_servers = self.chat_servers.write().await;
                 chat_servers.register(server).await
             }
-            ServerKind::EMBEDDINGS => {
+            ServerKind::Embeddings => {
                 let mut embeddings_servers = self.embeddings_servers.write().await;
                 embeddings_servers.register(server).await
             }
-            _ => Err(ServerError::InvalidServerKind(format!(
-                "Invalid server kind: {}",
-                server.kind
-            ))),
+            ServerKind::Whisper => {
+                let mut whisper_servers = self.whisper_servers.write().await;
+                whisper_servers.register(server).await
+            }
+            _ => {
+                let err_msg = format!(
+                    "Failed to register server. Invalid server kind: {}",
+                    server.kind
+                );
+
+                error!(target: "stdout", "{}", err_msg);
+
+                Err(ServerError::InvalidServerKind(err_msg))
+            }
         }
     }
 
     pub(crate) async fn unregister_downstream_server(&self, server: Server) -> ServerResult<()> {
         match server.kind {
-            ServerKind::CHAT => {
+            ServerKind::Chat => {
                 let mut chat_servers = self.chat_servers.write().await;
                 chat_servers.unregister(server).await
             }
-            ServerKind::EMBEDDINGS => {
+            ServerKind::Embeddings => {
                 let mut embeddings_servers = self.embeddings_servers.write().await;
                 embeddings_servers.unregister(server).await
+            }
+            ServerKind::Whisper => {
+                let mut whisper_servers = self.whisper_servers.write().await;
+                whisper_servers.unregister(server).await
             }
             _ => Err(ServerError::InvalidServerKind(format!(
                 "Invalid server kind: {}",
@@ -174,7 +198,7 @@ impl AppState {
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
-        servers.insert(ServerKind::CHAT.to_string(), chat_servers);
+        servers.insert(ServerKind::Chat.to_string(), chat_servers);
 
         // list all the embeddings servers
         let embeddings_servers = self
@@ -186,7 +210,19 @@ impl AppState {
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
-        servers.insert(ServerKind::EMBEDDINGS.to_string(), embeddings_servers);
+        servers.insert(ServerKind::Embeddings.to_string(), embeddings_servers);
+
+        // list all the whisper servers
+        let whisper_servers = self
+            .whisper_servers
+            .read()
+            .await
+            .list_servers()
+            .await
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<String>>();
+        servers.insert(ServerKind::Whisper.to_string(), whisper_servers);
 
         Ok(servers)
     }
