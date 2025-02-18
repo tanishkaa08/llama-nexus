@@ -43,13 +43,13 @@ fn test_deserialize_server() {
     let serialized = r#"{"url": "http://localhost:8000", "kind": "chat"}"#;
     let server: Server = serde_json::from_str(serialized).unwrap();
     assert_eq!(server.url, "http://localhost:8000");
-    assert_eq!(server.kind, ServerKind::CHAT);
+    assert_eq!(server.kind, ServerKind::Chat);
 }
 #[test]
 fn test_serialize_server() {
     let server = Server {
         url: "http://localhost:8000".to_string(),
-        kind: ServerKind::CHAT,
+        kind: ServerKind::Chat,
         connections: AtomicUsize::new(0),
     };
     let serialized = serde_json::to_string(&server).unwrap();
@@ -62,27 +62,30 @@ fn test_serialize_server() {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ServerKind {
     #[serde(rename = "chat")]
-    CHAT,
+    Chat,
     #[serde(rename = "embeddings")]
-    EMBEDDINGS,
+    Embeddings,
     #[serde(rename = "image")]
-    IMAGE,
+    Image,
     #[serde(rename = "translate")]
-    TRANSLATE,
+    Translate,
     #[serde(rename = "transcript")]
-    TRANSCRIPT,
+    Transcript,
     #[serde(rename = "tts")]
-    TTS,
+    Tts,
+    #[serde(rename = "whisper")]
+    Whisper,
 }
 impl std::fmt::Display for ServerKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            ServerKind::CHAT => write!(f, "chat"),
-            ServerKind::EMBEDDINGS => write!(f, "embeddings"),
-            ServerKind::IMAGE => write!(f, "image"),
-            ServerKind::TRANSLATE => write!(f, "translate"),
-            ServerKind::TRANSCRIPT => write!(f, "transcript"),
-            ServerKind::TTS => write!(f, "tts"),
+            ServerKind::Chat => write!(f, "chat"),
+            ServerKind::Embeddings => write!(f, "embeddings"),
+            ServerKind::Image => write!(f, "image"),
+            ServerKind::Translate => write!(f, "translate"),
+            ServerKind::Transcript => write!(f, "transcript"),
+            ServerKind::Tts => write!(f, "tts"),
+            ServerKind::Whisper => write!(f, "whisper"),
         }
     }
 }
@@ -93,12 +96,13 @@ impl std::str::FromStr for ServerKind {
         let s = s.to_lowercase();
 
         match s.as_str() {
-            "chat" => Ok(Self::CHAT),
-            "embeddings" => Ok(Self::EMBEDDINGS),
-            "image" => Ok(Self::IMAGE),
-            "translate" => Ok(Self::TRANSLATE),
-            "transcript" => Ok(Self::TRANSCRIPT),
-            "tts" => Ok(Self::TTS),
+            "chat" => Ok(Self::Chat),
+            "embeddings" => Ok(Self::Embeddings),
+            "image" => Ok(Self::Image),
+            "translate" => Ok(Self::Translate),
+            "transcript" => Ok(Self::Transcript),
+            "tts" => Ok(Self::Tts),
+            "whisper" => Ok(Self::Whisper),
             _ => Err(ServerError::InvalidServerKind(s)),
         }
     }
@@ -106,7 +110,7 @@ impl std::str::FromStr for ServerKind {
 
 #[test]
 fn test_serialize_server_kind() {
-    let kind = ServerKind::CHAT;
+    let kind = ServerKind::Chat;
     let serialized = serde_json::to_string(&kind).unwrap();
     assert_eq!(serialized, "\"chat\"");
 }
@@ -115,7 +119,7 @@ fn test_serialize_server_kind() {
 fn test_deserialize_server_kind() {
     let serialized = "\"chat\"";
     let kind: ServerKind = serde_json::from_str(serialized).unwrap();
-    assert_eq!(kind, ServerKind::CHAT);
+    assert_eq!(kind, ServerKind::Chat);
 }
 
 #[derive(Debug)]
