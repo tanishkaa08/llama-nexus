@@ -97,23 +97,23 @@ async fn main() -> ServerResult<()> {
         .layer(TraceLayer::new_for_http())
         .layer(axum::middleware::from_fn(
             |mut req: Request<Body>, next: axum::middleware::Next| async move {
-                // 生成请求 ID
+                // Generate request ID
                 let request_id = Uuid::new_v4().to_string();
 
-                // 将请求 ID 添加到请求头
+                // Add request ID to headers
                 req.headers_mut()
                     .insert("x-request-id", HeaderValue::from_str(&request_id).unwrap());
 
-                // 添加取消令牌
+                // Add cancellation token
                 let cancel_token = CancellationToken::new();
                 req.extensions_mut().insert(cancel_token);
 
-                // 记录请求开始的日志
+                // Log request start
                 info!(target: "stdout", "Request started - ID: {}", request_id);
 
                 let response = next.run(req).await;
 
-                // 记录请求结束的日志
+                // Log request completion
                 info!(target: "stdout", "Request completed - ID: {}", request_id);
 
                 response
