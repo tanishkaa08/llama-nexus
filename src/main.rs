@@ -72,6 +72,8 @@ async fn main() -> ServerResult<()> {
             post(handlers::audio_translations_handler),
         )
         .route("/v1/audio/speech", post(handlers::audio_tts_handler))
+        .route("/v1/images/generations", post(handlers::image_handler))
+        .route("/v1/images/edits", post(handlers::image_handler))
         .route(
             "/admin/servers/register",
             post(handlers::register_downstream_server_handler),
@@ -121,9 +123,7 @@ pub(crate) struct AppState {
     embeddings_servers: Arc<RwLock<ServerGroup>>,
     whisper_servers: Arc<RwLock<ServerGroup>>,
     tts_servers: Arc<RwLock<ServerGroup>>,
-    // audio_services: Arc<RwLock<ServerGroup>>,
-    // image_services: Arc<RwLock<ServerGroup>>,
-    // rag_services: Arc<RwLock<ServerGroup>>,
+    image_servers: Arc<RwLock<ServerGroup>>,
 }
 impl AppState {
     pub(crate) fn new() -> Self {
@@ -132,9 +132,7 @@ impl AppState {
             embeddings_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::Embeddings))),
             whisper_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::Whisper))),
             tts_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::Tts))),
-            // audio_services: Arc::new(RwLock::new(ServerGroup::new(ServerKind::TRANSCRIPT))),
-            // image_services: Arc::new(RwLock::new(ServerGroup::new(ServerKind::IMAGE))),
-            // rag_services: Arc::new(RwLock::new(ServerGroup::new(ServerKind::RAG))),
+            image_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::Image))),
         }
     }
 
@@ -156,15 +154,9 @@ impl AppState {
                 let mut tts_servers = self.tts_servers.write().await;
                 tts_servers.register(server).await
             }
-            _ => {
-                let err_msg = format!(
-                    "Failed to register server. Invalid server kind: {}",
-                    server.kind
-                );
-
-                error!(target: "stdout", "{}", err_msg);
-
-                Err(ServerError::InvalidServerKind(err_msg))
+            ServerKind::Image => {
+                let mut image_servers = self.image_servers.write().await;
+                image_servers.register(server).await
             }
         }
     }
@@ -187,10 +179,10 @@ impl AppState {
                 let mut tts_servers = self.tts_servers.write().await;
                 tts_servers.unregister(server).await
             }
-            _ => Err(ServerError::InvalidServerKind(format!(
-                "Invalid server kind: {}",
-                server.kind
-            ))),
+            ServerKind::Image => {
+                let mut image_servers = self.image_servers.write().await;
+                image_servers.unregister(server).await
+            }
         }
     }
 
@@ -246,6 +238,18 @@ impl AppState {
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
         servers.insert(ServerKind::Tts.to_string(), tts_servers);
+
+        // list all the image servers
+        let image_servers = self
+            .image_servers
+            .read()
+            .await
+            .list_servers()
+            .await
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<String>>();
+        servers.insert(ServerKind::Image.to_string(), image_servers);
 
         Ok(servers)
     }
