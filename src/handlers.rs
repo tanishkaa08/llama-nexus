@@ -9,7 +9,7 @@ use axum::{
     http::{Response, StatusCode},
     Json,
 };
-use endpoints::{chat::ChatCompletionRequest, embeddings::EmbeddingRequest};
+use endpoints::chat::ChatCompletionRequest;
 use std::sync::Arc;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
@@ -123,7 +123,7 @@ pub(crate) async fn chat_handler(
 pub(crate) async fn embeddings_handler(
     State(state): State<Arc<AppState>>,
     Extension(cancel_token): Extension<CancellationToken>,
-    Json(request): Json<EmbeddingRequest>,
+    req: axum::extract::Request<Body>,
 ) -> ServerResult<axum::response::Response> {
     debug!(target: "stdout", "Received a new embeddings request");
 
@@ -139,9 +139,37 @@ pub(crate) async fn embeddings_handler(
     let embeddings_service_url = format!("{}v1/embeddings", embeddings_server_base_url);
     info!(target: "stdout", "Forward the embeddings request to {}", embeddings_service_url);
 
+    // parse the content-type header
+    let content_type = &req
+        .headers()
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| {
+            let err_msg = "Missing Content-Type header".to_string();
+
+            error!(target: "stdout", "{}", &err_msg);
+
+            ServerError::Operation(err_msg)
+        })?;
+    let content_type = content_type.to_string();
+    debug!(target: "stdout", "content-type: {}", &content_type);
+
+    // convert the request body into bytes
+    let body = req.into_body();
+    let body_bytes = axum::body::to_bytes(body, usize::MAX).await.map_err(|e| {
+        let err_msg = format!("Failed to convert the request body into bytes: {}", e);
+
+        error!(target: "stdout", "{}", &err_msg);
+
+        ServerError::Operation(err_msg)
+    })?;
+
     // Create request client
     let client = reqwest::Client::new();
-    let request = client.post(embeddings_service_url).json(&request);
+    let request = client
+        .post(embeddings_service_url)
+        .header("Content-Type", content_type)
+        .body(body_bytes);
 
     // Use select! to handle request cancellation
     let response = select! {
