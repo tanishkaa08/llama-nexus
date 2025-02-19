@@ -67,10 +67,6 @@ pub enum ServerKind {
     Embeddings,
     #[serde(rename = "image")]
     Image,
-    #[serde(rename = "translate")]
-    Translate,
-    #[serde(rename = "transcript")]
-    Transcript,
     #[serde(rename = "tts")]
     Tts,
     #[serde(rename = "whisper")]
@@ -82,8 +78,6 @@ impl std::fmt::Display for ServerKind {
             ServerKind::Chat => write!(f, "chat"),
             ServerKind::Embeddings => write!(f, "embeddings"),
             ServerKind::Image => write!(f, "image"),
-            ServerKind::Translate => write!(f, "translate"),
-            ServerKind::Transcript => write!(f, "transcript"),
             ServerKind::Tts => write!(f, "tts"),
             ServerKind::Whisper => write!(f, "whisper"),
         }
@@ -99,8 +93,6 @@ impl std::str::FromStr for ServerKind {
             "chat" => Ok(Self::Chat),
             "embeddings" => Ok(Self::Embeddings),
             "image" => Ok(Self::Image),
-            "translate" => Ok(Self::Translate),
-            "transcript" => Ok(Self::Transcript),
             "tts" => Ok(Self::Tts),
             "whisper" => Ok(Self::Whisper),
             _ => Err(ServerError::InvalidServerKind(s)),
