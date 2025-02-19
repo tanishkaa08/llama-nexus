@@ -5,17 +5,19 @@ use crate::{
 };
 use axum::{
     body::Body,
-    extract::State,
-    http::{HeaderMap, Response, StatusCode},
+    extract::{Extension, State},
+    http::{Response, StatusCode},
     Json,
 };
 use endpoints::{chat::ChatCompletionRequest, embeddings::EmbeddingRequest};
 use std::sync::Arc;
-use tracing::{debug, error, info};
+use tokio::select;
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
 
 pub(crate) async fn chat_handler(
     State(state): State<Arc<AppState>>,
-    _headers: HeaderMap,
+    Extension(cancel_token): Extension<CancellationToken>,
     Json(request): Json<ChatCompletionRequest>,
 ) -> ServerResult<axum::response::Response> {
     debug!(target: "stdout", "Received a new chat request");
@@ -25,42 +27,58 @@ pub(crate) async fn chat_handler(
         Ok(url) => url,
         Err(e) => {
             let err_msg = format!("Failed to get the chat server: {}", e);
-
             error!(target: "stdout", "{}", &err_msg);
-
             return Err(ServerError::Operation(err_msg));
         }
     };
+
     let chat_service_url = format!("{}v1/chat/completions", chat_server_base_url);
     info!(target: "stdout", "Forward the chat request to {}", chat_service_url);
 
-    let response = reqwest::Client::new()
-        .post(chat_service_url)
-        .json(&request)
-        .send()
-        .await
-        .map_err(|e| {
-            let err_msg = format!(
-                "failed to forward the request to the downstream server: {}",
-                e
-            );
+    let stream = request.stream;
 
-            error!(target: "stdout", "{}", &err_msg);
+    // Create a request client that can be cancelled
+    let client = reqwest::Client::new();
+    let request = client.post(chat_service_url).json(&request);
 
-            ServerError::Operation(err_msg)
-        })?;
+    // Use select! to handle request cancellation
+    let response = select! {
+        response = request.send() => {
+            response.map_err(|e| {
+                let err_msg = format!(
+                    "Failed to forward the request to the downstream server: {}",
+                    e
+                );
+                error!(target: "stdout", "{}", &err_msg);
+                ServerError::Operation(err_msg)
+            })?
+        }
+        _ = cancel_token.cancelled() => {
+            let warn_msg = "Request was cancelled by client";
+            warn!(target: "stdout", "{}", &warn_msg);
+            return Err(ServerError::Operation(warn_msg.to_string()));
+        }
+    };
 
     let status = response.status();
 
-    let bytes = response.bytes().await.map_err(|e| {
-        let err_msg = format!("Failed to get the full response as bytes: {}", e);
+    // Handle response body reading with cancellation
+    let bytes = select! {
+        bytes = response.bytes() => {
+            bytes.map_err(|e| {
+                let err_msg = format!("Failed to get the full response as bytes: {}", e);
+                error!(target: "stdout", "{}", &err_msg);
+                ServerError::Operation(err_msg)
+            })?
+        }
+        _ = cancel_token.cancelled() => {
+            let warn_msg = "Request was cancelled while reading response";
+            warn!(target: "stdout", "{}", &warn_msg);
+            return Err(ServerError::Operation(warn_msg.to_string()));
+        }
+    };
 
-        error!(target: "stdout", "{}", &err_msg);
-
-        ServerError::Operation(err_msg)
-    })?;
-
-    match request.stream {
+    match stream {
         Some(true) => {
             match Response::builder()
                 .status(status)
@@ -104,7 +122,7 @@ pub(crate) async fn chat_handler(
 
 pub(crate) async fn embeddings_handler(
     State(state): State<Arc<AppState>>,
-    _headers: HeaderMap,
+    Extension(cancel_token): Extension<CancellationToken>,
     Json(request): Json<EmbeddingRequest>,
 ) -> ServerResult<axum::response::Response> {
     debug!(target: "stdout", "Received a new embeddings request");
@@ -114,40 +132,52 @@ pub(crate) async fn embeddings_handler(
         Ok(url) => url,
         Err(e) => {
             let err_msg = format!("Failed to get the embeddings server: {}", e);
-
             error!(target: "stdout", "{}", &err_msg);
-
             return Err(ServerError::Operation(err_msg));
         }
     };
     let embeddings_service_url = format!("{}v1/embeddings", embeddings_server_base_url);
     info!(target: "stdout", "Forward the embeddings request to {}", embeddings_service_url);
 
-    let response = reqwest::Client::new()
-        .post(embeddings_service_url)
-        .json(&request)
-        .send()
-        .await
-        .map_err(|e| {
-            let err_msg = format!(
-                "Failed to forward the request to the downstream server: {}",
-                e
-            );
+    // Create request client
+    let client = reqwest::Client::new();
+    let request = client.post(embeddings_service_url).json(&request);
 
-            error!(target: "stdout", "{}", &err_msg);
-
-            ServerError::Operation(err_msg)
-        })?;
+    // Use select! to handle request cancellation
+    let response = select! {
+        response = request.send() => {
+            response.map_err(|e| {
+                let err_msg = format!(
+                    "Failed to forward the request to the downstream server: {}",
+                    e
+                );
+                error!(target: "stdout", "{}", &err_msg);
+                ServerError::Operation(err_msg)
+            })?
+        }
+        _ = cancel_token.cancelled() => {
+            let warn_msg = "Request was cancelled by client";
+            warn!(target: "stdout", "{}", warn_msg);
+            return Err(ServerError::Operation(warn_msg.to_string()));
+        }
+    };
 
     let status = response.status();
 
-    let bytes = response.bytes().await.map_err(|e| {
-        let err_msg = format!("Failed to get the full response as bytes: {}", e);
-
-        error!(target: "stdout", "{}", &err_msg);
-
-        ServerError::Operation(err_msg)
-    })?;
+    // Handle response body reading with cancellation
+    let bytes = select! {
+        bytes = response.bytes() => {
+            bytes.map_err(|e| {
+                let err_msg = format!("Failed to get the full response as bytes: {}", e);
+                error!(target: "stdout", "{}", &err_msg);
+                ServerError::Operation(err_msg)
+            })?
+        }
+        _ = cancel_token.cancelled() => {
+            info!(target: "stdout", "Request was cancelled while reading response");
+            return Err(ServerError::Operation("Request cancelled by client".to_string()));
+        }
+    };
 
     match Response::builder()
         .status(status)
@@ -170,6 +200,7 @@ pub(crate) async fn embeddings_handler(
 
 pub(crate) async fn audio_transcriptions_handler(
     State(state): State<Arc<AppState>>,
+    Extension(cancel_token): Extension<CancellationToken>,
     req: axum::extract::Request<Body>,
 ) -> ServerResult<axum::response::Response> {
     debug!(target: "stdout", "Received a new audio transcription request");
@@ -217,32 +248,49 @@ pub(crate) async fn audio_transcriptions_handler(
         ServerError::Operation(err_msg)
     })?;
 
-    // send the request to the downstream server
-    let response = reqwest::Client::new()
+    // Create request client
+    let client = reqwest::Client::new();
+    let request = client
         .post(transcription_service_url)
         .header("Content-Type", content_type)
-        .body(body_bytes)
-        .send()
-        .await
-        .map_err(|e| {
-            let err_msg = format!(
-                "Failed to forward the request to the downstream server: {}",
-                e
-            );
+        .body(body_bytes);
 
-            error!(target: "stdout", "{}", &err_msg);
-
-            ServerError::Operation(err_msg)
-        })?;
+    // Use select! to handle request cancellation
+    let response = select! {
+        response = request.send() => {
+            response.map_err(|e| {
+                let err_msg = format!(
+                    "Failed to forward the request to the downstream server: {}",
+                    e
+                );
+                error!(target: "stdout", "{}", &err_msg);
+                ServerError::Operation(err_msg)
+            })?
+        }
+        _ = cancel_token.cancelled() => {
+            let warn_msg = "Request was cancelled by client";
+            warn!(target: "stdout", "{}", &warn_msg);
+            return Err(ServerError::Operation(warn_msg.to_string()));
+        }
+    };
 
     let status = response.status();
-    let bytes = response.bytes().await.map_err(|e| {
-        let err_msg = format!("Failed to get the full response as bytes: {}", e);
 
-        error!(target: "stdout", "{}", &err_msg);
-
-        ServerError::Operation(err_msg)
-    })?;
+    // Handle response body reading with cancellation
+    let bytes = select! {
+        bytes = response.bytes() => {
+            bytes.map_err(|e| {
+                let err_msg = format!("Failed to get the full response as bytes: {}", e);
+                error!(target: "stdout", "{}", &err_msg);
+                ServerError::Operation(err_msg)
+            })?
+        }
+        _ = cancel_token.cancelled() => {
+            let warn_msg = "Request was cancelled while reading response";
+            warn!(target: "stdout", "{}", &warn_msg);
+            return Err(ServerError::Operation(warn_msg.to_string()));
+        }
+    };
 
     // create the response
     match Response::builder()
@@ -266,6 +314,7 @@ pub(crate) async fn audio_transcriptions_handler(
 
 pub(crate) async fn audio_translations_handler(
     State(state): State<Arc<AppState>>,
+    Extension(cancel_token): Extension<CancellationToken>,
     req: axum::extract::Request<Body>,
 ) -> ServerResult<axum::response::Response> {
     debug!(target: "stdout", "Received a new audio translation request");
@@ -313,32 +362,49 @@ pub(crate) async fn audio_translations_handler(
         ServerError::Operation(err_msg)
     })?;
 
-    // send the request to the downstream server
-    let response = reqwest::Client::new()
+    // Create request client
+    let client = reqwest::Client::new();
+    let request = client
         .post(translation_service_url)
         .header("Content-Type", content_type)
-        .body(body_bytes)
-        .send()
-        .await
-        .map_err(|e| {
-            let err_msg = format!(
-                "Failed to forward the request to the downstream server: {}",
-                e
-            );
+        .body(body_bytes);
 
-            error!(target: "stdout", "{}", &err_msg);
-
-            ServerError::Operation(err_msg)
-        })?;
+    // Use select! to handle request cancellation
+    let response = select! {
+        response = request.send() => {
+            response.map_err(|e| {
+                let err_msg = format!(
+                    "Failed to forward the request to the downstream server: {}",
+                    e
+                );
+                error!(target: "stdout", "{}", &err_msg);
+                ServerError::Operation(err_msg)
+            })?
+        }
+        _ = cancel_token.cancelled() => {
+            let warn_msg = "Request was cancelled by client";
+            warn!(target: "stdout", "{}", &warn_msg);
+            return Err(ServerError::Operation(warn_msg.to_string()));
+        }
+    };
 
     let status = response.status();
-    let bytes = response.bytes().await.map_err(|e| {
-        let err_msg = format!("Failed to get the full response as bytes: {}", e);
 
-        error!(target: "stdout", "{}", &err_msg);
-
-        ServerError::Operation(err_msg)
-    })?;
+    // Handle response body reading with cancellation
+    let bytes = select! {
+        bytes = response.bytes() => {
+            bytes.map_err(|e| {
+                let err_msg = format!("Failed to get the full response as bytes: {}", e);
+                error!(target: "stdout", "{}", &err_msg);
+                ServerError::Operation(err_msg)
+            })?
+        }
+        _ = cancel_token.cancelled() => {
+            let warn_msg = "Request was cancelled while reading response";
+            warn!(target: "stdout", "{}", &warn_msg);
+            return Err(ServerError::Operation(warn_msg.to_string()));
+        }
+    };
 
     // create the response
     match Response::builder()
@@ -362,6 +428,7 @@ pub(crate) async fn audio_translations_handler(
 
 pub(crate) async fn audio_tts_handler(
     State(state): State<Arc<AppState>>,
+    Extension(cancel_token): Extension<CancellationToken>,
     req: axum::extract::Request<Body>,
 ) -> ServerResult<axum::response::Response> {
     debug!(target: "stdout", "Received a new audio speech request");
@@ -393,31 +460,49 @@ pub(crate) async fn audio_tts_handler(
         ServerError::Operation(err_msg)
     })?;
 
-    let response = reqwest::Client::new()
+    // Create request client
+    let client = reqwest::Client::new();
+    let request = client
         .post(tts_service_url)
         .header("Content-Type", "application/json")
-        .body(body_bytes)
-        .send()
-        .await
-        .map_err(|e| {
-            let err_msg = format!(
-                "Failed to forward the request to the downstream server: {}",
-                e
-            );
+        .body(body_bytes);
 
-            error!(target: "stdout", "{}", &err_msg);
-
-            ServerError::Operation(err_msg)
-        })?;
+    // Use select! to handle request cancellation
+    let response = select! {
+        response = request.send() => {
+            response.map_err(|e| {
+                let err_msg = format!(
+                    "Failed to forward the request to the downstream server: {}",
+                    e
+                );
+                error!(target: "stdout", "{}", &err_msg);
+                ServerError::Operation(err_msg)
+            })?
+        }
+        _ = cancel_token.cancelled() => {
+            let warn_msg = "Request was cancelled by client";
+            warn!(target: "stdout", "{}", &warn_msg);
+            return Err(ServerError::Operation(warn_msg.to_string()));
+        }
+    };
 
     let status = response.status();
-    let bytes = response.bytes().await.map_err(|e| {
-        let err_msg = format!("Failed to get the full response as bytes: {}", e);
 
-        error!(target: "stdout", "{}", &err_msg);
-
-        ServerError::Operation(err_msg)
-    })?;
+    // Handle response body reading with cancellation
+    let bytes = select! {
+        bytes = response.bytes() => {
+            bytes.map_err(|e| {
+                let err_msg = format!("Failed to get the full response as bytes: {}", e);
+                error!(target: "stdout", "{}", &err_msg);
+                ServerError::Operation(err_msg)
+            })?
+        }
+        _ = cancel_token.cancelled() => {
+            let warn_msg = "Request was cancelled while reading response";
+            warn!(target: "stdout", "{}", &warn_msg);
+            return Err(ServerError::Operation(warn_msg.to_string()));
+        }
+    };
 
     match Response::builder()
         .status(status)
@@ -440,6 +525,7 @@ pub(crate) async fn audio_tts_handler(
 
 pub(crate) async fn image_handler(
     State(state): State<Arc<AppState>>,
+    Extension(cancel_token): Extension<CancellationToken>,
     req: axum::extract::Request<Body>,
 ) -> ServerResult<axum::response::Response> {
     debug!(target: "stdout", "Received a new image request");
@@ -487,32 +573,49 @@ pub(crate) async fn image_handler(
         ServerError::Operation(err_msg)
     })?;
 
-    // send the request to the downstream server
-    let response = reqwest::Client::new()
+    // Create request client
+    let client = reqwest::Client::new();
+    let request = client
         .post(image_service_url)
         .header("Content-Type", content_type)
-        .body(body_bytes)
-        .send()
-        .await
-        .map_err(|e| {
-            let err_msg = format!(
-                "Failed to forward the request to the downstream server: {}",
-                e
-            );
+        .body(body_bytes);
 
-            error!(target: "stdout", "{}", &err_msg);
-
-            ServerError::Operation(err_msg)
-        })?;
+    // Use select! to handle request cancellation
+    let response = select! {
+        response = request.send() => {
+            response.map_err(|e| {
+                let err_msg = format!(
+                    "Failed to forward the request to the downstream server: {}",
+                    e
+                );
+                error!(target: "stdout", "{}", &err_msg);
+                ServerError::Operation(err_msg)
+            })?
+        }
+        _ = cancel_token.cancelled() => {
+            let warn_msg = "Request was cancelled by client";
+            warn!(target: "stdout", "{}", &warn_msg);
+            return Err(ServerError::Operation(warn_msg.to_string()));
+        }
+    };
 
     let status = response.status();
-    let bytes = response.bytes().await.map_err(|e| {
-        let err_msg = format!("Failed to get the full response as bytes: {}", e);
 
-        error!(target: "stdout", "{}", &err_msg);
-
-        ServerError::Operation(err_msg)
-    })?;
+    // Handle response body reading with cancellation
+    let bytes = select! {
+        bytes = response.bytes() => {
+            bytes.map_err(|e| {
+                let err_msg = format!("Failed to get the full response as bytes: {}", e);
+                error!(target: "stdout", "{}", &err_msg);
+                ServerError::Operation(err_msg)
+            })?
+        }
+        _ = cancel_token.cancelled() => {
+            let warn_msg = "Request was cancelled while reading response";
+            warn!(target: "stdout", "{}", &warn_msg);
+            return Err(ServerError::Operation(warn_msg.to_string()));
+        }
+    };
 
     // create the response
     match Response::builder()

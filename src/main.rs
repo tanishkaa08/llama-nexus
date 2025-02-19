@@ -4,12 +4,18 @@ mod handlers;
 mod server;
 
 use crate::server::{Server, ServerGroup, ServerKind};
-use axum::routing::{get, post, Router};
+use axum::{
+    body::Body,
+    http::Request,
+    routing::{get, post, Router},
+};
 use clap::Parser;
 use config::Config;
 use error::{ServerError, ServerResult};
 use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc};
+use tokio::signal;
 use tokio::sync::RwLock;
+use tokio_util::sync::CancellationToken;
 use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
@@ -86,9 +92,16 @@ async fn main() -> ServerResult<()> {
             "/admin/servers",
             get(handlers::list_downstream_servers_handler),
         )
-        .layer(TraceLayer::new_for_http())
         .layer(cors)
-        .with_state(state);
+        .layer(TraceLayer::new_for_http())
+        .layer(axum::middleware::from_fn(
+            |mut req: Request<Body>, next: axum::middleware::Next| async move {
+                let cancel_token = CancellationToken::new();
+                req.extensions_mut().insert(cancel_token);
+                next.run(req).await
+            },
+        ))
+        .with_state(state.clone());
 
     let addr: SocketAddr = format!("{}:{}", &config.server.host, &config.server.port)
         .parse()
@@ -104,16 +117,49 @@ async fn main() -> ServerResult<()> {
     })?;
     info!(target: "stdout", "Listening on {}", addr);
 
+    // Set up graceful shutdown
+    let server =
+        axum::serve(listener, app.into_make_service()).with_graceful_shutdown(shutdown_signal());
+
     // Start the server
-    match axum::serve(listener, app.into_make_service()).await {
-        Ok(_) => Ok(()),
-        Err(e) => {
-            let err_msg = format!("Server failed to start: {}", e);
-
-            error!(target: "stdout", "{}", err_msg);
-
-            return Err(ServerError::Operation(err_msg));
+    match server.await {
+        Ok(_) => {
+            info!(target: "stdout", "Server shutdown completed");
+            Ok(())
         }
+        Err(e) => {
+            let err_msg = format!("Server failed: {}", e);
+            error!(target: "stdout", "{}", err_msg);
+            Err(ServerError::Operation(err_msg))
+        }
+    }
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        signal::ctrl_c()
+            .await
+            .expect("failed to install Ctrl+C handler");
+    };
+
+    #[cfg(unix)]
+    let terminate = async {
+        signal::unix::signal(signal::unix::SignalKind::terminate())
+            .expect("failed to install signal handler")
+            .recv()
+            .await;
+    };
+
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        _ = ctrl_c => {
+            info!(target: "stdout", "Received Ctrl+C, starting graceful shutdown");
+        },
+        _ = terminate => {
+            info!(target: "stdout", "Received SIGTERM, starting graceful shutdown");
+        },
     }
 }
 
