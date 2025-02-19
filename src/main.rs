@@ -6,7 +6,7 @@ mod server;
 use crate::server::{Server, ServerGroup, ServerKind};
 use axum::{
     body::Body,
-    http::Request,
+    http::{HeaderValue, Request},
     routing::{get, post, Router},
 };
 use clap::Parser;
@@ -21,6 +21,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 use tracing::{error, info, Level};
+use uuid::Uuid;
 
 #[derive(Debug, Parser)]
 #[command(name = "LlamaEdge-Q", version = env!("CARGO_PKG_VERSION"), author = env!("CARGO_PKG_AUTHORS"), about = "LlamaEdge Proxy Server")]
@@ -96,9 +97,26 @@ async fn main() -> ServerResult<()> {
         .layer(TraceLayer::new_for_http())
         .layer(axum::middleware::from_fn(
             |mut req: Request<Body>, next: axum::middleware::Next| async move {
+                // 生成请求 ID
+                let request_id = Uuid::new_v4().to_string();
+
+                // 将请求 ID 添加到请求头
+                req.headers_mut()
+                    .insert("x-request-id", HeaderValue::from_str(&request_id).unwrap());
+
+                // 添加取消令牌
                 let cancel_token = CancellationToken::new();
                 req.extensions_mut().insert(cancel_token);
-                next.run(req).await
+
+                // 记录请求开始的日志
+                info!(target: "stdout", "Request started - ID: {}", request_id);
+
+                let response = next.run(req).await;
+
+                // 记录请求结束的日志
+                info!(target: "stdout", "Request completed - ID: {}", request_id);
+
+                response
             },
         ))
         .with_state(state.clone());
