@@ -1,4 +1,4 @@
-mod config;
+// mod config;
 mod error;
 mod handlers;
 mod server;
@@ -9,10 +9,9 @@ use axum::{
     http::{HeaderValue, Request},
     routing::{get, post, Router},
 };
-use clap::Parser;
-use config::Config;
+use clap::{ArgGroup, Parser};
 use error::{ServerError, ServerResult};
-use std::{collections::HashMap, net::SocketAddr, path::PathBuf, str::FromStr, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc};
 use tokio::signal;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -23,12 +22,19 @@ use tower_http::{
 use tracing::{error, info, Level};
 use uuid::Uuid;
 
+// default port
+const DEFAULT_PORT: &str = "9069";
+
 #[derive(Debug, Parser)]
 #[command(name = "LlamaEdge-Q", version = env!("CARGO_PKG_VERSION"), author = env!("CARGO_PKG_AUTHORS"), about = "LlamaEdge Proxy Server")]
+#[command(group = ArgGroup::new("socket_address_group").multiple(false).args(&["socket_addr", "port"]))]
 struct Cli {
-    /// Path to the configuration file (*.toml)
-    #[arg(short, long, default_value = "config.toml")]
-    config: Option<PathBuf>,
+    /// Socket address of LlamaEdge API Server instance
+    #[arg(long, default_value = None, value_parser = clap::value_parser!(SocketAddr), group = "socket_address_group")]
+    socket_addr: Option<SocketAddr>,
+    /// Port number
+    #[arg(long, default_value = DEFAULT_PORT, value_parser = clap::value_parser!(u16), group = "socket_address_group")]
+    port: u16,
 }
 
 #[tokio::main]
@@ -48,15 +54,6 @@ async fn main() -> ServerResult<()> {
 
     // log the version of the server
     info!(target: "stdout", "Version: {}", env!("CARGO_PKG_VERSION"));
-
-    // Load the config
-    let config = Config::load(cli.config.unwrap()).map_err(|e| {
-        let err_msg = format!("Failed to load config: {}", e);
-
-        error!(target: "stdout", "{}", err_msg);
-
-        ServerError::Operation(err_msg)
-    })?;
 
     // Set up CORS
     let cors = CorsLayer::new()
@@ -121,9 +118,11 @@ async fn main() -> ServerResult<()> {
         ))
         .with_state(state.clone());
 
-    let addr: SocketAddr = format!("{}:{}", &config.server.host, &config.server.port)
-        .parse()
-        .expect("Invalid host/port configuration");
+    // socket address
+    let addr = match cli.socket_addr {
+        Some(addr) => addr,
+        None => SocketAddr::from(([0, 0, 0, 0], cli.port)),
+    };
 
     // Create the listener
     let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| {
