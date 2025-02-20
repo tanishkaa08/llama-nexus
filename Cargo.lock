@@ -9,6 +9,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "axum",
+ "bitflags",
  "clap",
  "config",
  "endpoints",

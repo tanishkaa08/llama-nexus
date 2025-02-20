@@ -12,7 +12,7 @@ use axum::{
 use clap::Parser;
 use config::Config;
 use error::{ServerError, ServerResult};
-use std::{collections::HashMap, net::SocketAddr, path::PathBuf, sync::Arc};
+use std::{collections::HashMap, net::SocketAddr, path::PathBuf, str::FromStr, sync::Arc};
 use tokio::signal;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -183,138 +183,123 @@ async fn shutdown_signal() {
 
 /// Application state
 pub(crate) struct AppState {
-    chat_servers: Arc<RwLock<ServerGroup>>,
-    embeddings_servers: Arc<RwLock<ServerGroup>>,
-    whisper_servers: Arc<RwLock<ServerGroup>>,
-    tts_servers: Arc<RwLock<ServerGroup>>,
-    image_servers: Arc<RwLock<ServerGroup>>,
+    servers: Arc<RwLock<HashMap<ServerKind, ServerGroup>>>,
 }
 impl AppState {
     pub(crate) fn new() -> Self {
         Self {
-            chat_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::Chat))),
-            embeddings_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::Embeddings))),
-            whisper_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::Whisper))),
-            tts_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::Tts))),
-            image_servers: Arc::new(RwLock::new(ServerGroup::new(ServerKind::Image))),
+            servers: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
     pub(crate) async fn register_downstream_server(&self, server: Server) -> ServerResult<()> {
-        match server.kind {
-            ServerKind::Chat => {
-                let mut chat_servers = self.chat_servers.write().await;
-                chat_servers.register(server).await
-            }
-            ServerKind::Embeddings => {
-                let mut embeddings_servers = self.embeddings_servers.write().await;
-                embeddings_servers.register(server).await
-            }
-            ServerKind::Whisper => {
-                let mut whisper_servers = self.whisper_servers.write().await;
-                whisper_servers.register(server).await
-            }
-            ServerKind::Tts => {
-                let mut tts_servers = self.tts_servers.write().await;
-                tts_servers.register(server).await
-            }
-            ServerKind::Image => {
-                let mut image_servers = self.image_servers.write().await;
-                image_servers.register(server).await
-            }
+        let server_kind = &server.kind;
+
+        if server_kind.contains(ServerKind::chat) {
+            self.servers
+                .write()
+                .await
+                .entry(ServerKind::chat)
+                .or_insert(ServerGroup::new(ServerKind::chat))
+                .register(&server)
+                .await?;
         }
+        if server_kind.contains(ServerKind::embeddings) {
+            self.servers
+                .write()
+                .await
+                .entry(ServerKind::embeddings)
+                .or_insert(ServerGroup::new(ServerKind::embeddings))
+                .register(&server)
+                .await?;
+        }
+        if server.kind.contains(ServerKind::image) {
+            self.servers
+                .write()
+                .await
+                .entry(ServerKind::image)
+                .or_insert(ServerGroup::new(ServerKind::image))
+                .register(&server)
+                .await?;
+        }
+        if server.kind.contains(ServerKind::tts) {
+            self.servers
+                .write()
+                .await
+                .entry(ServerKind::tts)
+                .or_insert(ServerGroup::new(ServerKind::tts))
+                .register(&server)
+                .await?;
+        }
+        if server_kind.contains(ServerKind::translate) {
+            self.servers
+                .write()
+                .await
+                .entry(ServerKind::translate)
+                .or_insert(ServerGroup::new(ServerKind::translate))
+                .register(&server)
+                .await?;
+        }
+        if server_kind.contains(ServerKind::transcribe) {
+            self.servers
+                .write()
+                .await
+                .entry(ServerKind::transcribe)
+                .or_insert(ServerGroup::new(ServerKind::transcribe))
+                .register(&server)
+                .await?;
+        }
+
+        Ok(())
     }
 
-    pub(crate) async fn unregister_downstream_server(&self, server: Server) -> ServerResult<()> {
-        match server.kind {
-            ServerKind::Chat => {
-                let mut chat_servers = self.chat_servers.write().await;
-                chat_servers.unregister(server).await
-            }
-            ServerKind::Embeddings => {
-                let mut embeddings_servers = self.embeddings_servers.write().await;
-                embeddings_servers.unregister(server).await
-            }
-            ServerKind::Whisper => {
-                let mut whisper_servers = self.whisper_servers.write().await;
-                whisper_servers.unregister(server).await
-            }
-            ServerKind::Tts => {
-                let mut tts_servers = self.tts_servers.write().await;
-                tts_servers.unregister(server).await
-            }
-            ServerKind::Image => {
-                let mut image_servers = self.image_servers.write().await;
-                image_servers.unregister(server).await
+    pub(crate) async fn unregister_downstream_server(
+        &self,
+        server_id: impl AsRef<str>,
+    ) -> ServerResult<()> {
+        let mut servers = self.servers.write().await;
+        let mut found = false;
+
+        let server_kind_s = server_id.as_ref().split("-server-").next().unwrap();
+        for kind in server_kind_s.split("-") {
+            let kind = ServerKind::from_str(kind).unwrap();
+            if let Some(servers) = servers.get_mut(&kind) {
+                servers.unregister(server_id.as_ref()).await?;
+                info!(
+                    target: "stdout",
+                    message = format!("Unregistered {} server: {}", &kind, server_id.as_ref())
+                );
+
+                if !found {
+                    found = true;
+                }
             }
         }
+
+        if !found {
+            return Err(ServerError::Operation(format!(
+                "Server {} not found",
+                server_id.as_ref()
+            )));
+        }
+
+        Ok(())
     }
 
     pub(crate) async fn list_downstream_servers(
         &self,
-    ) -> ServerResult<HashMap<String, Vec<String>>> {
-        let mut servers = HashMap::new();
+    ) -> ServerResult<HashMap<ServerKind, Vec<Server>>> {
+        let servers = self.servers.read().await;
 
-        // list all the chat servers
-        let chat_servers = self
-            .chat_servers
-            .read()
-            .await
-            .list_servers()
-            .await
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<String>>();
-        servers.insert(ServerKind::Chat.to_string(), chat_servers);
+        let mut server_groups = HashMap::new();
+        for (kind, group) in servers.iter() {
+            if !group.is_empty().await {
+                let servers = group.servers.read().await;
 
-        // list all the embeddings servers
-        let embeddings_servers = self
-            .embeddings_servers
-            .read()
-            .await
-            .list_servers()
-            .await
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<String>>();
-        servers.insert(ServerKind::Embeddings.to_string(), embeddings_servers);
+                server_groups.insert(*kind, servers.clone());
+            }
+        }
 
-        // list all the whisper servers
-        let whisper_servers = self
-            .whisper_servers
-            .read()
-            .await
-            .list_servers()
-            .await
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<String>>();
-        servers.insert(ServerKind::Whisper.to_string(), whisper_servers);
-
-        // list all the tts servers
-        let tts_servers = self
-            .tts_servers
-            .read()
-            .await
-            .list_servers()
-            .await
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<String>>();
-        servers.insert(ServerKind::Tts.to_string(), tts_servers);
-
-        // list all the image servers
-        let image_servers = self
-            .image_servers
-            .read()
-            .await
-            .list_servers()
-            .await
-            .iter()
-            .map(|s| s.to_string())
-            .collect::<Vec<String>>();
-        servers.insert(ServerKind::Image.to_string(), image_servers);
-
-        Ok(servers)
+        Ok(server_groups)
     }
 }

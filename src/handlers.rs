@@ -1,6 +1,6 @@
 use crate::{
     error::{ServerError, ServerResult},
-    server::{RoutingPolicy, Server},
+    server::{RoutingPolicy, Server, ServerIdToRemove, ServerKind},
     AppState,
 };
 use axum::{
@@ -33,18 +33,40 @@ pub(crate) async fn chat_handler(
         message = "Received a new chat request"
     );
 
-    let chat_servers = state.chat_servers.read().await;
+    // get the chat server
+    let servers = state.servers.read().await;
+    let chat_servers = match servers.get(&ServerKind::chat) {
+        Some(servers) => servers,
+        None => {
+            let err_msg = "No chat server available";
+            error!(
+                target: "stdout",
+                request_id = %request_id,
+                message = %err_msg,
+            );
+            return Err(ServerError::Operation(err_msg.to_string()));
+        }
+    };
+
     let chat_server_base_url = match chat_servers.next().await {
         Ok(url) => url,
         Err(e) => {
             let err_msg = format!("Failed to get the chat server: {}", e);
-            error!(target: "stdout", "{}", &err_msg);
+            error!(
+                target: "stdout",
+                request_id = %request_id,
+                message = %err_msg,
+            );
             return Err(ServerError::Operation(err_msg));
         }
     };
 
     let chat_service_url = format!("{}v1/chat/completions", chat_server_base_url);
-    info!(target: "stdout", "Forward the chat request to {}", chat_service_url);
+    info!(
+        target: "stdout",
+        request_id = %request_id,
+        message = format!("Forward the chat request to {}", chat_service_url),
+    );
 
     let stream = request.stream;
 
@@ -60,13 +82,21 @@ pub(crate) async fn chat_handler(
                     "Failed to forward the request to the downstream server: {}",
                     e
                 );
-                error!(target: "stdout", "{}", &err_msg);
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
                 ServerError::Operation(err_msg)
             })?
         }
         _ = cancel_token.cancelled() => {
             let warn_msg = "Request was cancelled by client";
-            warn!(target: "stdout", "{}", &warn_msg);
+            warn!(
+                target: "stdout",
+                request_id = %request_id,
+                message = %warn_msg,
+            );
             return Err(ServerError::Operation(warn_msg.to_string()));
         }
     };
@@ -78,13 +108,21 @@ pub(crate) async fn chat_handler(
         bytes = response.bytes() => {
             bytes.map_err(|e| {
                 let err_msg = format!("Failed to get the full response as bytes: {}", e);
-                error!(target: "stdout", "{}", &err_msg);
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
                 ServerError::Operation(err_msg)
             })?
         }
         _ = cancel_token.cancelled() => {
             let warn_msg = "Request was cancelled while reading response";
-            warn!(target: "stdout", "{}", &warn_msg);
+            warn!(
+                target: "stdout",
+                request_id = %request_id,
+                message = %warn_msg,
+            );
             return Err(ServerError::Operation(warn_msg.to_string()));
         }
     };
@@ -97,14 +135,20 @@ pub(crate) async fn chat_handler(
                 .body(Body::from(bytes))
             {
                 Ok(response) => {
-                    info!(target: "stdout", "Handled the chat request");
+                    info!(
+                        target: "stdout",
+                        request_id = %request_id,
+                        message = "Chat request completed successfully",
+                    );
                     Ok(response)
                 }
                 Err(e) => {
                     let err_msg = format!("Failed to create the response: {}", e);
-
-                    error!(target: "stdout", "{}", &err_msg);
-
+                    error!(
+                        target: "stdout",
+                        request_id = %request_id,
+                        message = %err_msg,
+                    );
                     Err(ServerError::Operation(err_msg))
                 }
             }
@@ -116,14 +160,20 @@ pub(crate) async fn chat_handler(
                 .body(Body::from(bytes))
             {
                 Ok(response) => {
-                    info!(target: "stdout", "Handled the chat request");
+                    info!(
+                        target: "stdout",
+                        request_id = %request_id,
+                        message = "Chat request completed successfully",
+                    );
                     Ok(response)
                 }
                 Err(e) => {
                     let err_msg = format!("Failed to create the response: {}", e);
-
-                    error!(target: "stdout", "{}", &err_msg);
-
+                    error!(
+                        target: "stdout",
+                        request_id = %request_id,
+                        message = %err_msg,
+                    );
                     Err(ServerError::Operation(err_msg))
                 }
             }
@@ -150,7 +200,21 @@ pub(crate) async fn embeddings_handler(
         message = "Received a new embeddings request"
     );
 
-    let embeddings_servers = state.embeddings_servers.read().await;
+    // get the embeddings server
+    let servers = state.servers.read().await;
+    let embeddings_servers = match servers.get(&ServerKind::embeddings) {
+        Some(servers) => servers,
+        None => {
+            let err_msg = "No embeddings server available";
+            error!(
+                target: "stdout",
+                request_id = %request_id,
+                message = %err_msg,
+            );
+            return Err(ServerError::Operation(err_msg.to_string()));
+        }
+    };
+
     let embeddings_server_base_url = match embeddings_servers.next().await {
         Ok(url) => url,
         Err(e) => {
@@ -158,7 +222,7 @@ pub(crate) async fn embeddings_handler(
             error!(
                 target: "stdout",
                 request_id = %request_id,
-                message = format!("Failed to get embeddings server: {}", err_msg),
+                message = %err_msg,
             );
             return Err(ServerError::Operation(err_msg));
         }
@@ -180,7 +244,7 @@ pub(crate) async fn embeddings_handler(
             error!(
                 target: "stdout",
                 request_id = %request_id,
-                message = format!("Content-Type header missing: {}", err_msg),
+                message = %err_msg,
             );
             ServerError::Operation(err_msg)
         })?;
@@ -198,7 +262,7 @@ pub(crate) async fn embeddings_handler(
         error!(
             target: "stdout",
             request_id = %request_id,
-            message = format!("Failed to read request body: {}", err_msg),
+            message = %err_msg,
         );
         ServerError::Operation(err_msg)
     })?;
@@ -221,7 +285,7 @@ pub(crate) async fn embeddings_handler(
                 error!(
                     target: "stdout",
                     request_id = %request_id,
-                    message = format!("Failed to forward request: {}", err_msg),
+                    message = %err_msg,
                 );
                 ServerError::Operation(err_msg)
             })?
@@ -231,7 +295,7 @@ pub(crate) async fn embeddings_handler(
             warn!(
                 target: "stdout",
                 request_id = %request_id,
-                message = "Request cancelled by client",
+                message = %warn_msg,
             );
             return Err(ServerError::Operation(warn_msg.to_string()));
         }
@@ -247,7 +311,7 @@ pub(crate) async fn embeddings_handler(
                 error!(
                     target: "stdout",
                     request_id = %request_id,
-                    message = format!("Failed to read response: {}", err_msg),
+                    message = %err_msg,
                 );
                 ServerError::Operation(err_msg)
             })?
@@ -257,7 +321,7 @@ pub(crate) async fn embeddings_handler(
             warn!(
                 target: "stdout",
                 request_id = %request_id,
-                message = "Request cancelled by client",
+                message = %warn_msg,
             );
             return Err(ServerError::Operation(warn_msg.to_string()));
         }
@@ -281,7 +345,7 @@ pub(crate) async fn embeddings_handler(
             error!(
                 target: "stdout",
                 request_id = %request_id,
-                message = format!("Failed to create response: {}", err_msg),
+                message = %err_msg,
             );
             Err(ServerError::Operation(err_msg))
         }
@@ -307,20 +371,35 @@ pub(crate) async fn audio_transcriptions_handler(
         message = "Received a new audio transcription request"
     );
 
-    let whisper_servers = state.whisper_servers.read().await;
-    let whisper_server_base_url = match whisper_servers.next().await {
-        Ok(url) => url,
-        Err(e) => {
-            let err_msg = format!("Failed to get the whisper server: {}", e);
+    // get the transcribe server
+    let servers = state.servers.read().await;
+    let transcribe_servers = match servers.get(&ServerKind::transcribe) {
+        Some(servers) => servers,
+        None => {
+            let err_msg = "No transcribe server available";
             error!(
                 target: "stdout",
                 request_id = %request_id,
-                message = format!("Failed to get whisper server: {}", err_msg),
+                message = %err_msg,
+            );
+            return Err(ServerError::Operation(err_msg.to_string()));
+        }
+    };
+
+    let transcribe_server_base_url = match transcribe_servers.next().await {
+        Ok(url) => url,
+        Err(e) => {
+            let err_msg = format!("Failed to get the transcribe server: {}", e);
+            error!(
+                target: "stdout",
+                request_id = %request_id,
+                message = %err_msg,
             );
             return Err(ServerError::Operation(err_msg));
         }
     };
-    let transcription_service_url = format!("{}v1/audio/transcriptions", whisper_server_base_url);
+    let transcription_service_url =
+        format!("{}v1/audio/transcriptions", transcribe_server_base_url);
     info!(
         target: "stdout",
         request_id = %request_id,
@@ -378,7 +457,7 @@ pub(crate) async fn audio_transcriptions_handler(
                 error!(
                     target: "stdout",
                     request_id = %request_id,
-                    message = format!("Failed to forward request: {}", err_msg),
+                    message = %err_msg,
                 );
                 ServerError::Operation(err_msg)
             })?
@@ -388,7 +467,7 @@ pub(crate) async fn audio_transcriptions_handler(
             warn!(
                 target: "stdout",
                 request_id = %request_id,
-                message = "Request cancelled by client",
+                message = %warn_msg,
             );
             return Err(ServerError::Operation(warn_msg.to_string()));
         }
@@ -404,7 +483,7 @@ pub(crate) async fn audio_transcriptions_handler(
                 error!(
                     target: "stdout",
                     request_id = %request_id,
-                    message = format!("Failed to read response: {}", err_msg),
+                    message = %err_msg,
                 );
                 ServerError::Operation(err_msg)
             })?
@@ -414,7 +493,7 @@ pub(crate) async fn audio_transcriptions_handler(
             warn!(
                 target: "stdout",
                 request_id = %request_id,
-                message = "Request cancelled by client",
+                message = %warn_msg,
             );
             return Err(ServerError::Operation(warn_msg.to_string()));
         }
@@ -438,7 +517,7 @@ pub(crate) async fn audio_transcriptions_handler(
             error!(
                 target: "stdout",
                 request_id = %request_id,
-                message = format!("Failed to create response: {}", err_msg),
+                message = %err_msg,
             );
             Err(ServerError::Operation(err_msg))
         }
@@ -464,20 +543,34 @@ pub(crate) async fn audio_translations_handler(
         message = "Received a new audio translation request"
     );
 
-    let whisper_servers = state.whisper_servers.read().await;
-    let whisper_server_base_url = match whisper_servers.next().await {
-        Ok(url) => url,
-        Err(e) => {
-            let err_msg = format!("Failed to get the whisper server: {}", e);
+    // get the transcribe server
+    let servers = state.servers.read().await;
+    let translate_servers = match servers.get(&ServerKind::translate) {
+        Some(servers) => servers,
+        None => {
+            let err_msg = "No translate server available";
             error!(
                 target: "stdout",
                 request_id = %request_id,
-                message = format!("Failed to get whisper server: {}", err_msg),
+                message = %err_msg,
+            );
+            return Err(ServerError::Operation(err_msg.to_string()));
+        }
+    };
+
+    let translate_server_base_url = match translate_servers.next().await {
+        Ok(url) => url,
+        Err(e) => {
+            let err_msg = format!("Failed to get the translate server: {}", e);
+            error!(
+                target: "stdout",
+                request_id = %request_id,
+                message = %err_msg,
             );
             return Err(ServerError::Operation(err_msg));
         }
     };
-    let translation_service_url = format!("{}v1/audio/translations", whisper_server_base_url);
+    let translation_service_url = format!("{}v1/audio/translations", translate_server_base_url);
     info!(
         target: "stdout",
         request_id = %request_id,
@@ -494,7 +587,7 @@ pub(crate) async fn audio_translations_handler(
             error!(
                 target: "stdout",
                 request_id = %request_id,
-                message = format!("Content-Type header missing: {}", err_msg),
+                message = %err_msg,
             );
             ServerError::Operation(err_msg)
         })?;
@@ -512,7 +605,7 @@ pub(crate) async fn audio_translations_handler(
         error!(
             target: "stdout",
             request_id = %request_id,
-            message = format!("Failed to read request body: {}", err_msg),
+            message = %err_msg,
         );
         ServerError::Operation(err_msg)
     })?;
@@ -535,7 +628,7 @@ pub(crate) async fn audio_translations_handler(
                 error!(
                     target: "stdout",
                     request_id = %request_id,
-                    message = format!("Failed to forward request: {}", err_msg),
+                    message = %err_msg,
                 );
                 ServerError::Operation(err_msg)
             })?
@@ -545,7 +638,7 @@ pub(crate) async fn audio_translations_handler(
             warn!(
                 target: "stdout",
                 request_id = %request_id,
-                message = "Request cancelled by client",
+                message = %warn_msg,
             );
             return Err(ServerError::Operation(warn_msg.to_string()));
         }
@@ -561,7 +654,7 @@ pub(crate) async fn audio_translations_handler(
                 error!(
                     target: "stdout",
                     request_id = %request_id,
-                    message = format!("Failed to read response: {}", err_msg),
+                    message = %err_msg,
                 );
                 ServerError::Operation(err_msg)
             })?
@@ -571,7 +664,7 @@ pub(crate) async fn audio_translations_handler(
             warn!(
                 target: "stdout",
                 request_id = %request_id,
-                message = "Request cancelled by client",
+                message = %warn_msg,
             );
             return Err(ServerError::Operation(warn_msg.to_string()));
         }
@@ -595,7 +688,7 @@ pub(crate) async fn audio_translations_handler(
             error!(
                 target: "stdout",
                 request_id = %request_id,
-                message = format!("Failed to create response: {}", err_msg),
+                message = %err_msg,
             );
             Err(ServerError::Operation(err_msg))
         }
@@ -621,7 +714,21 @@ pub(crate) async fn audio_tts_handler(
         message = "Received a new audio speech request"
     );
 
-    let tts_servers = state.tts_servers.read().await;
+    // get the tts server
+    let servers = state.servers.read().await;
+    let tts_servers = match servers.get(&ServerKind::tts) {
+        Some(servers) => servers,
+        None => {
+            let err_msg = "No tts server available";
+            error!(
+                target: "stdout",
+                request_id = %request_id,
+                message = %err_msg,
+            );
+            return Err(ServerError::Operation(err_msg.to_string()));
+        }
+    };
+
     let tts_server_base_url = match tts_servers.next().await {
         Ok(url) => url,
         Err(e) => {
@@ -629,7 +736,7 @@ pub(crate) async fn audio_tts_handler(
             error!(
                 target: "stdout",
                 request_id = %request_id,
-                message = format!("Failed to get tts server: {}", err_msg),
+                message = %err_msg,
             );
             return Err(ServerError::Operation(err_msg));
         }
@@ -647,7 +754,7 @@ pub(crate) async fn audio_tts_handler(
         error!(
             target: "stdout",
             request_id = %request_id,
-            message = format!("Failed to read request body: {}", err_msg),
+            message = %err_msg,
         );
         ServerError::Operation(err_msg)
     })?;
@@ -670,7 +777,7 @@ pub(crate) async fn audio_tts_handler(
                 error!(
                     target: "stdout",
                     request_id = %request_id,
-                    message = format!("Failed to forward request: {}", err_msg),
+                    message = %err_msg,
                 );
                 ServerError::Operation(err_msg)
             })?
@@ -680,7 +787,7 @@ pub(crate) async fn audio_tts_handler(
             warn!(
                 target: "stdout",
                 request_id = %request_id,
-                message = "Request cancelled by client",
+                message = %warn_msg,
             );
             return Err(ServerError::Operation(warn_msg.to_string()));
         }
@@ -696,7 +803,7 @@ pub(crate) async fn audio_tts_handler(
                 error!(
                     target: "stdout",
                     request_id = %request_id,
-                    message = format!("Failed to read response: {}", err_msg),
+                    message = %err_msg,
                 );
                 ServerError::Operation(err_msg)
             })?
@@ -706,7 +813,7 @@ pub(crate) async fn audio_tts_handler(
             warn!(
                 target: "stdout",
                 request_id = %request_id,
-                message = "Request cancelled by client",
+                message = %warn_msg,
             );
             return Err(ServerError::Operation(warn_msg.to_string()));
         }
@@ -730,7 +837,7 @@ pub(crate) async fn audio_tts_handler(
             error!(
                 target: "stdout",
                 request_id = %request_id,
-                message = format!("Failed to create response: {}", err_msg),
+                message = %err_msg,
             );
             Err(ServerError::Operation(err_msg))
         }
@@ -756,7 +863,21 @@ pub(crate) async fn image_handler(
         message = "Received a new image request"
     );
 
-    let image_servers = state.image_servers.read().await;
+    // get the image server
+    let servers = state.servers.read().await;
+    let image_servers = match servers.get(&ServerKind::image) {
+        Some(servers) => servers,
+        None => {
+            let err_msg = "No image server available";
+            error!(
+                target: "stdout",
+                request_id = %request_id,
+                message = %err_msg,
+            );
+            return Err(ServerError::Operation(err_msg.to_string()));
+        }
+    };
+
     let image_server_base_url = match image_servers.next().await {
         Ok(url) => url,
         Err(e) => {
@@ -764,7 +885,7 @@ pub(crate) async fn image_handler(
             error!(
                 target: "stdout",
                 request_id = %request_id,
-                message = format!("Failed to get image server: {}", err_msg),
+                message = %err_msg,
             );
             return Err(ServerError::Operation(err_msg));
         }
@@ -786,7 +907,7 @@ pub(crate) async fn image_handler(
             error!(
                 target: "stdout",
                 request_id = %request_id,
-                message = format!("Content-Type header missing: {}", err_msg),
+                message = %err_msg,
             );
             ServerError::Operation(err_msg)
         })?;
@@ -804,7 +925,7 @@ pub(crate) async fn image_handler(
         error!(
             target: "stdout",
             request_id = %request_id,
-            message = format!("Failed to read request body: {}", err_msg),
+            message = %err_msg,
         );
         ServerError::Operation(err_msg)
     })?;
@@ -827,7 +948,7 @@ pub(crate) async fn image_handler(
                 error!(
                     target: "stdout",
                     request_id = %request_id,
-                    message = format!("Failed to forward request: {}", err_msg),
+                    message = %err_msg,
                 );
                 ServerError::Operation(err_msg)
             })?
@@ -837,7 +958,7 @@ pub(crate) async fn image_handler(
             warn!(
                 target: "stdout",
                 request_id = %request_id,
-                message = "Request cancelled by client",
+                message = %warn_msg,
             );
             return Err(ServerError::Operation(warn_msg.to_string()));
         }
@@ -853,7 +974,7 @@ pub(crate) async fn image_handler(
                 error!(
                     target: "stdout",
                     request_id = %request_id,
-                    message = format!("Failed to read response: {}", err_msg),
+                    message = %err_msg,
                 );
                 ServerError::Operation(err_msg)
             })?
@@ -863,7 +984,7 @@ pub(crate) async fn image_handler(
             warn!(
                 target: "stdout",
                 request_id = %request_id,
-                message = "Request cancelled by client",
+                message = %warn_msg,
             );
             return Err(ServerError::Operation(warn_msg.to_string()));
         }
@@ -887,7 +1008,7 @@ pub(crate) async fn image_handler(
             error!(
                 target: "stdout",
                 request_id = %request_id,
-                message = format!("Failed to create response: {}", err_msg),
+                message = %err_msg,
             );
             Err(ServerError::Operation(err_msg))
         }
@@ -908,17 +1029,18 @@ pub(crate) async fn register_downstream_server_handler(
 
     let server_url = server.url.clone();
     let server_kind = server.kind;
+    let server_id = server.id.clone();
 
     state.register_downstream_server(server).await?;
     info!(
         target: "stdout",
         request_id = %request_id,
-        message = format!("Registered {} server: {}", server_kind, server_url),
+        message = format!("Registered server successfully. Id: {}", server_id),
     );
 
     // create a response with status code 200. Content-Type is JSON
     let json_body = serde_json::json!({
-        "message": "URL registered successfully",
+        "id": server_id,
         "url": server_url,
         "kind": server_kind
     });
@@ -932,7 +1054,7 @@ pub(crate) async fn register_downstream_server_handler(
             error!(
                 target: "stdout",
                 request_id = %request_id,
-                message = format!("Failed to create response: {}", err_msg),
+                message = %err_msg,
             );
             ServerError::Operation(err_msg)
         })?;
@@ -943,7 +1065,7 @@ pub(crate) async fn register_downstream_server_handler(
 pub(crate) async fn remove_downstream_server_handler(
     State(state): State<Arc<AppState>>,
     headers: HeaderMap,
-    Json(server): Json<Server>,
+    Json(server_id): Json<ServerIdToRemove>,
 ) -> ServerResult<axum::response::Response> {
     // Get request ID from headers
     let request_id = headers
@@ -952,20 +1074,12 @@ pub(crate) async fn remove_downstream_server_handler(
         .unwrap_or("unknown")
         .to_string();
 
-    let server_url = server.url.clone();
-    let server_kind = server.kind;
-
-    state.unregister_downstream_server(server).await?;
-    info!(
-        target: "stdout",
-        request_id = %request_id,
-        message = format!("Unregistered {} server: {}", server_kind, server_url),
-    );
+    state.unregister_downstream_server(&server_id.id).await?;
 
     // create a response with status code 200. Content-Type is JSON
     let json_body = serde_json::json!({
-        "message": "URL unregistered successfully",
-        "url": server_url
+        "message": "Server unregistered successfully.",
+        "id": server_id.id,
     });
 
     let response = Response::builder()
@@ -977,7 +1091,7 @@ pub(crate) async fn remove_downstream_server_handler(
             error!(
                 target: "stdout",
                 request_id = %request_id,
-                message = format!("Failed to create response: {}", err_msg),
+                message = %err_msg,
             );
             ServerError::Operation(err_msg)
         })?;
@@ -997,6 +1111,7 @@ pub(crate) async fn list_downstream_servers_handler(
         .to_string();
 
     let servers = state.list_downstream_servers().await?;
+
     // compute the total number of servers
     let total_servers = servers.values().fold(0, |acc, servers| acc + servers.len());
     info!(
@@ -1005,20 +1120,18 @@ pub(crate) async fn list_downstream_servers_handler(
         message = format!("Found {} downstream servers", total_servers),
     );
 
-    let json_body = serde_json::json!({
-        "servers": servers
-    });
+    let json_body = serde_json::to_string(&servers).unwrap();
 
     let response = Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/json")
-        .body(Body::from(json_body.to_string()))
+        .body(Body::from(json_body))
         .map_err(|e| {
             let err_msg = format!("Failed to create response: {}", e);
             error!(
                 target: "stdout",
                 request_id = %request_id,
-                message = format!("Failed to create response: {}", err_msg),
+                message = %err_msg,
             );
             ServerError::Operation(err_msg)
         })?;
