@@ -108,13 +108,15 @@ fn test_serialize_server() {
 bitflags! {
     /// Represents the kind of server
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    pub struct ServerKind: u32{
-        const chat = 0b00000001;
-        const embeddings = 0b00000010;
-        const image = 0b00000100;
-        const tts = 0b00001000;
-        const translate = 0b00010000;
-        const transcribe = 0b00100000;
+    pub struct ServerKind: u16{
+        const chat = 1;
+        const embeddings = 1 << 1;
+        const image = 1 << 2;
+        const tts = 1 << 3;
+        const translate = 1 << 4;
+        const transcribe = 1 << 5;
+        const vdb = 1 << 6;
+        const kw_search = 1 << 7;
     }
 }
 impl std::fmt::Display for ServerKind {
@@ -137,6 +139,12 @@ impl std::fmt::Display for ServerKind {
         }
         if self.contains(ServerKind::transcribe) {
             kind_str.push_str("transcribe,");
+        }
+        if self.contains(ServerKind::vdb) {
+            kind_str.push_str("vdb,");
+        }
+        if self.contains(ServerKind::kw_search) {
+            kind_str.push_str("kw_search,");
         }
 
         if !kind_str.is_empty() {
@@ -161,6 +169,8 @@ impl std::str::FromStr for ServerKind {
                 "tts" => kind.set(Self::tts, true),
                 "translate" => kind.set(Self::translate, true),
                 "transcribe" => kind.set(Self::transcribe, true),
+                "vdb" => kind.set(Self::vdb, true),
+                "kw_search" => kind.set(Self::kw_search, true),
                 _ => return Err(ServerError::InvalidServerKind(s.to_string())),
             }
         }
@@ -191,6 +201,12 @@ impl Serialize for ServerKind {
         }
         if self.contains(ServerKind::transcribe) {
             kind_str.push_str("transcribe,");
+        }
+        if self.contains(ServerKind::vdb) {
+            kind_str.push_str("vdb,");
+        }
+        if self.contains(ServerKind::kw_search) {
+            kind_str.push_str("kw_search,");
         }
 
         // Remove trailing comma if present
@@ -230,6 +246,10 @@ fn test_serialize_server_kind() {
     let kind = ServerKind::chat;
     let serialized = serde_json::to_string(&kind).unwrap();
     assert_eq!(serialized, "\"chat\"");
+
+    let kind = ServerKind::vdb;
+    let serialized = serde_json::to_string(&kind).unwrap();
+    assert_eq!(serialized, "\"vdb\"");
 }
 
 #[test]
@@ -241,6 +261,10 @@ fn test_deserialize_server_kind() {
     let serialized = "\"chat\"";
     let kind: ServerKind = serde_json::from_str(serialized).unwrap();
     assert_eq!(kind, ServerKind::chat);
+
+    let serialized = "\"vdb\"";
+    let kind: ServerKind = serde_json::from_str(serialized).unwrap();
+    assert_eq!(kind, ServerKind::vdb);
 }
 
 #[derive(Debug)]
