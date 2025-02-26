@@ -11,6 +11,10 @@ pub enum ServerError {
     NotFoundServer(String),
     #[error("Invalid server kind: {0}")]
     InvalidServerKind(String),
+    #[error("Bad request: {0}")]
+    BadRequest(String),
+    #[error("Failed to load config: {0}")]
+    FailedToLoadConfig(String),
 }
 impl IntoResponse for ServerError {
     fn into_response(self) -> axum::response::Response {
@@ -18,6 +22,8 @@ impl IntoResponse for ServerError {
             ServerError::Operation(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
             ServerError::NotFoundServer(e) => (StatusCode::NOT_FOUND, e.to_string()),
             ServerError::InvalidServerKind(e) => (StatusCode::BAD_REQUEST, e.to_string()),
+            ServerError::BadRequest(e) => (StatusCode::BAD_REQUEST, e.to_string()),
+            ServerError::FailedToLoadConfig(e) => (StatusCode::BAD_REQUEST, e.to_string()),
         };
 
         (status, Json(err_response)).into_response()

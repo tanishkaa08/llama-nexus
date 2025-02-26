@@ -1,5 +1,6 @@
 use crate::{
     error::{ServerError, ServerResult},
+    rag,
     server::{RoutingPolicy, Server, ServerIdToRemove, ServerKind},
     AppState,
 };
@@ -9,13 +10,42 @@ use axum::{
     http::{HeaderMap, Response, StatusCode},
     Json,
 };
-use endpoints::chat::ChatCompletionRequest;
+use endpoints::{chat::ChatCompletionRequest, embeddings::EmbeddingRequest};
 use std::sync::Arc;
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
 
 pub(crate) async fn chat_handler(
+    State(state): State<Arc<AppState>>,
+    Extension(cancel_token): Extension<CancellationToken>,
+    headers: HeaderMap,
+    Json(request): Json<ChatCompletionRequest>,
+) -> ServerResult<axum::response::Response> {
+    let enable_rag = state.config.read().await.rag.enable;
+    match enable_rag {
+        true => {
+            rag::chat(
+                State(state),
+                Extension(cancel_token),
+                headers,
+                Json(request),
+            )
+            .await
+        }
+        false => {
+            chat(
+                State(state),
+                Extension(cancel_token),
+                headers,
+                Json(request),
+            )
+            .await
+        }
+    }
+}
+
+pub(crate) async fn chat(
     State(state): State<Arc<AppState>>,
     Extension(cancel_token): Extension<CancellationToken>,
     headers: HeaderMap,
@@ -184,11 +214,11 @@ pub(crate) async fn chat_handler(
 pub(crate) async fn embeddings_handler(
     State(state): State<Arc<AppState>>,
     Extension(cancel_token): Extension<CancellationToken>,
-    req: axum::extract::Request<Body>,
+    headers: HeaderMap,
+    Json(request): Json<EmbeddingRequest>,
 ) -> ServerResult<axum::response::Response> {
     // Get request ID from headers
-    let request_id = req
-        .headers()
+    let request_id = headers
         .get("x-request-id")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("unknown")
@@ -235,8 +265,7 @@ pub(crate) async fn embeddings_handler(
     );
 
     // parse the content-type header
-    let content_type = &req
-        .headers()
+    let content_type = headers
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .ok_or_else(|| {
@@ -255,24 +284,12 @@ pub(crate) async fn embeddings_handler(
         message = format!("Request content type: {}", content_type)
     );
 
-    // convert the request body into bytes
-    let body = req.into_body();
-    let body_bytes = axum::body::to_bytes(body, usize::MAX).await.map_err(|e| {
-        let err_msg = format!("Failed to convert the request body into bytes: {}", e);
-        error!(
-            target: "stdout",
-            request_id = %request_id,
-            message = %err_msg,
-        );
-        ServerError::Operation(err_msg)
-    })?;
-
     // Create request client
     let client = reqwest::Client::new();
     let request = client
         .post(embeddings_service_url)
         .header("Content-Type", content_type)
-        .body(body_bytes);
+        .json(&request);
 
     // Use select! to handle request cancellation
     let response = select! {
@@ -1015,126 +1032,276 @@ pub(crate) async fn image_handler(
     }
 }
 
-pub(crate) async fn register_downstream_server_handler(
-    State(state): State<Arc<AppState>>,
+pub(crate) async fn chunks_handler(
+    State(_state): State<Arc<AppState>>,
+    Extension(_cancel_token): Extension<CancellationToken>,
     headers: HeaderMap,
-    Json(server): Json<Server>,
+    mut multipart: axum::extract::Multipart,
 ) -> ServerResult<axum::response::Response> {
-    // Get request ID from headers
     let request_id = headers
         .get("x-request-id")
         .and_then(|h| h.to_str().ok())
         .unwrap_or("unknown")
         .to_string();
 
-    let server_url = server.url.clone();
-    let server_kind = server.kind;
-    let server_id = server.id.clone();
-
-    state.register_downstream_server(server).await?;
     info!(
         target: "stdout",
         request_id = %request_id,
-        message = format!("Registered server successfully. Id: {}", server_id),
+        message = "Received a new chunks request"
     );
 
-    // create a response with status code 200. Content-Type is JSON
-    let json_body = serde_json::json!({
-        "id": server_id,
-        "url": server_url,
-        "kind": server_kind
-    });
+    // Process multipart form data
+    let mut contents = String::new();
+    let mut extension = String::new();
+    let mut chunk_capacity: usize = 0;
+    while let Some(mut field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| ServerError::Operation(format!("Failed to get next field: {}", e)))?
+    {
+        match field.name() {
+            Some("file") => {
+                // Get content type if available
+                if let Some(content_type) = field.content_type() {
+                    // check if the content type is a multipart/form-data
+                    match content_type {
+                        "text/plain" => {
+                            extension = "txt".to_string();
+                        }
+                        "text/markdown" => {
+                            extension = "md".to_string();
+                        }
+                        _ => {
+                            let err_msg = "The file should be a plain text or markdown file";
+                            error!(
+                                target: "stdout",
+                                request_id = %request_id,
+                                message = %err_msg,
+                            );
+                            return Err(ServerError::Operation(err_msg.to_string()));
+                        }
+                    }
+                }
 
-    let response = Response::builder()
+                // get the file contents
+                while let Some(chunk) = field.chunk().await.map_err(|e| {
+                    let err_msg = format!("Failed to get the next chunk: {}", e);
+                    error!(target: "stdout", request_id = %request_id, message = %err_msg);
+                    ServerError::Operation(err_msg)
+                })? {
+                    let chunk_data = String::from_utf8(chunk.to_vec()).map_err(|e| {
+                        let err_msg =
+                            format!("Failed to convert the chunk data to a string: {}", e);
+                        error!(target: "stdout", request_id = %request_id, message = %err_msg);
+                        ServerError::Operation(err_msg)
+                    })?;
+
+                    contents.push_str(&chunk_data);
+                }
+            }
+            Some("chunk_capacity") => {
+                // Get content type if available
+                if let Some(content_type) = field.content_type() {
+                    info!(
+                        target: "stdout",
+                        request_id = %request_id,
+                        message = format!("Content type: {}", content_type)
+                    );
+                }
+
+                // Get the field data as a string
+                let capacity = field.text().await.map_err(|e| {
+                    let err_msg = format!("`chunk_capacity` field should be a text field. {}", e);
+                    error!(
+                        target: "stdout",
+                        request_id = %request_id,
+                        message = %err_msg,
+                    );
+                    ServerError::Operation(err_msg)
+                })?;
+
+                chunk_capacity = capacity.parse().map_err(|e| {
+                    let err_msg = format!("Failed to convert the chunk capacity to a usize: {}", e);
+                    error!(
+                        target: "stdout",
+                        request_id = %request_id,
+                        message = %err_msg,
+                    );
+                    ServerError::Operation(err_msg)
+                })?;
+
+                debug!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = format!("Got chunk capacity: {}", chunk_capacity),
+                );
+            }
+            Some(field_name) => {
+                let warn_msg = format!("Unknown field: {}", field_name);
+                warn!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %warn_msg,
+                );
+            }
+            None => {
+                let warn_msg = "No field name found";
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %warn_msg,
+                );
+                return Err(ServerError::Operation(warn_msg.to_string()));
+            }
+        }
+    }
+
+    let chunks = rag::chunk_text(&contents, extension, chunk_capacity)?;
+
+    let json_body = serde_json::json!({
+        "chunks": chunks,
+    });
+    let data = serde_json::to_string(&json_body).map_err(|e| {
+        let err_msg = format!("Failed to serialize chunks response: {}", e);
+        error!(target: "stdout", request_id = %request_id, message = %err_msg);
+        ServerError::Operation(err_msg)
+    })?;
+
+    Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/json")
-        .body(Body::from(json_body.to_string()))
+        .body(Body::from(data))
         .map_err(|e| {
             let err_msg = format!("Failed to create response: {}", e);
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = %err_msg,
-            );
+            error!(target: "stdout", request_id = %request_id, message = %err_msg);
             ServerError::Operation(err_msg)
-        })?;
-
-    Ok(response)
+        })
 }
 
-pub(crate) async fn remove_downstream_server_handler(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-    Json(server_id): Json<ServerIdToRemove>,
-) -> ServerResult<axum::response::Response> {
-    // Get request ID from headers
-    let request_id = headers
-        .get("x-request-id")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("unknown")
-        .to_string();
+pub(crate) mod admin {
+    use super::*;
 
-    state.unregister_downstream_server(&server_id.id).await?;
+    pub(crate) async fn register_downstream_server_handler(
+        State(state): State<Arc<AppState>>,
+        headers: HeaderMap,
+        Json(server): Json<Server>,
+    ) -> ServerResult<axum::response::Response> {
+        // Get request ID from headers
+        let request_id = headers
+            .get("x-request-id")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("unknown")
+            .to_string();
 
-    // create a response with status code 200. Content-Type is JSON
-    let json_body = serde_json::json!({
-        "message": "Server unregistered successfully.",
-        "id": server_id.id,
-    });
+        let server_url = server.url.clone();
+        let server_kind = server.kind;
+        let server_id = server.id.clone();
 
-    let response = Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "application/json")
-        .body(Body::from(json_body.to_string()))
-        .map_err(|e| {
-            let err_msg = format!("Failed to create response: {}", e);
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = %err_msg,
-            );
-            ServerError::Operation(err_msg)
-        })?;
+        state.register_downstream_server(server).await?;
+        info!(
+            target: "stdout",
+            request_id = %request_id,
+            message = format!("Registered successfully. Assigned Server Id: {}", server_id),
+        );
 
-    Ok(response)
-}
+        // create a response with status code 200. Content-Type is JSON
+        let json_body = serde_json::json!({
+            "id": server_id,
+            "url": server_url,
+            "kind": server_kind
+        });
 
-pub(crate) async fn list_downstream_servers_handler(
-    State(state): State<Arc<AppState>>,
-    headers: HeaderMap,
-) -> ServerResult<axum::response::Response> {
-    // Get request ID from headers
-    let request_id = headers
-        .get("x-request-id")
-        .and_then(|h| h.to_str().ok())
-        .unwrap_or("unknown")
-        .to_string();
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .body(Body::from(json_body.to_string()))
+            .map_err(|e| {
+                let err_msg = format!("Failed to create response: {}", e);
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                ServerError::Operation(err_msg)
+            })?;
 
-    let servers = state.list_downstream_servers().await?;
+        Ok(response)
+    }
 
-    // compute the total number of servers
-    let total_servers = servers.values().fold(0, |acc, servers| acc + servers.len());
-    info!(
-        target: "stdout",
-        request_id = %request_id,
-        message = format!("Found {} downstream servers", total_servers),
-    );
+    pub(crate) async fn remove_downstream_server_handler(
+        State(state): State<Arc<AppState>>,
+        headers: HeaderMap,
+        Json(server_id): Json<ServerIdToRemove>,
+    ) -> ServerResult<axum::response::Response> {
+        // Get request ID from headers
+        let request_id = headers
+            .get("x-request-id")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("unknown")
+            .to_string();
 
-    let json_body = serde_json::to_string(&servers).unwrap();
+        state.unregister_downstream_server(&server_id.id).await?;
 
-    let response = Response::builder()
-        .status(StatusCode::OK)
-        .header("Content-Type", "application/json")
-        .body(Body::from(json_body))
-        .map_err(|e| {
-            let err_msg = format!("Failed to create response: {}", e);
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = %err_msg,
-            );
-            ServerError::Operation(err_msg)
-        })?;
+        // create a response with status code 200. Content-Type is JSON
+        let json_body = serde_json::json!({
+            "message": "Server unregistered successfully.",
+            "id": server_id.id,
+        });
 
-    Ok(response)
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .body(Body::from(json_body.to_string()))
+            .map_err(|e| {
+                let err_msg = format!("Failed to create response: {}", e);
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                ServerError::Operation(err_msg)
+            })?;
+
+        Ok(response)
+    }
+
+    pub(crate) async fn list_downstream_servers_handler(
+        State(state): State<Arc<AppState>>,
+        headers: HeaderMap,
+    ) -> ServerResult<axum::response::Response> {
+        // Get request ID from headers
+        let request_id = headers
+            .get("x-request-id")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let servers = state.list_downstream_servers().await?;
+
+        // compute the total number of servers
+        let total_servers = servers.values().fold(0, |acc, servers| acc + servers.len());
+        info!(
+            target: "stdout",
+            request_id = %request_id,
+            message = format!("Found {} downstream servers", total_servers),
+        );
+
+        let json_body = serde_json::to_string(&servers).unwrap();
+
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .body(Body::from(json_body))
+            .map_err(|e| {
+                let err_msg = format!("Failed to create response: {}", e);
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                ServerError::Operation(err_msg)
+            })?;
+
+        Ok(response)
+    }
 }

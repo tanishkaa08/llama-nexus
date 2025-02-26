@@ -1,17 +1,25 @@
-// mod config;
+mod config;
 mod error;
 mod handlers;
+mod rag;
 mod server;
 
 use crate::server::{Server, ServerGroup, ServerKind};
 use axum::{
     body::Body,
-    http::{HeaderValue, Request},
+    http::{self, HeaderValue, Request},
     routing::{get, post, Router},
 };
-use clap::{ArgGroup, Parser};
+use clap::Parser;
+use config::Config;
 use error::{ServerError, ServerResult};
-use std::{collections::HashMap, net::SocketAddr, str::FromStr, sync::Arc};
+use once_cell::sync::OnceCell;
+use std::{
+    collections::HashMap,
+    net::{IpAddr, SocketAddr},
+    str::FromStr,
+    sync::Arc,
+};
 use tokio::signal;
 use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
@@ -22,19 +30,17 @@ use tower_http::{
 use tracing::{error, info, Level};
 use uuid::Uuid;
 
-// default port
-const DEFAULT_PORT: &str = "9069";
+// global system prompt
+pub(crate) static GLOBAL_RAG_PROMPT: OnceCell<String> = OnceCell::new();
+
+// Global context window used for setting the max number of user messages for the retrieval
+pub(crate) static CONTEXT_WINDOW: OnceCell<u64> = OnceCell::new();
 
 #[derive(Debug, Parser)]
-#[command(name = "LlamaEdge-Q", version = env!("CARGO_PKG_VERSION"), author = env!("CARGO_PKG_AUTHORS"), about = "LlamaEdge Proxy Server")]
-#[command(group = ArgGroup::new("socket_address_group").multiple(false).args(&["socket_addr", "port"]))]
 struct Cli {
-    /// Socket address of LlamaEdge API Server instance
-    #[arg(long, default_value = None, value_parser = clap::value_parser!(SocketAddr), group = "socket_address_group")]
-    socket_addr: Option<SocketAddr>,
-    /// Port number
-    #[arg(long, default_value = DEFAULT_PORT, value_parser = clap::value_parser!(u16), group = "socket_address_group")]
-    port: u16,
+    /// Path to the config file
+    #[arg(long, default_value = "config.toml", value_parser = clap::value_parser!(String))]
+    config: String,
 }
 
 #[tokio::main]
@@ -46,7 +52,7 @@ async fn main() -> ServerResult<()> {
         .with_file(true)
         .with_line_number(true)
         .with_thread_ids(true)
-        .with_max_level(Level::INFO)
+        .with_max_level(get_log_level_from_env())
         .init();
 
     // parse the command line arguments
@@ -57,11 +63,30 @@ async fn main() -> ServerResult<()> {
 
     // Set up CORS
     let cors = CorsLayer::new()
-        .allow_methods(Any)
+        .allow_methods([http::Method::GET, http::Method::POST])
         .allow_headers(Any)
         .allow_origin(Any);
 
-    let state = Arc::new(AppState::new());
+    // load the config
+    let config = Config::load(&cli.config).map_err(|e| {
+        let err_msg = format!("Failed to load config: {}", e);
+
+        error!(target: "stdout", "{}", err_msg);
+
+        ServerError::FailedToLoadConfig(err_msg)
+    })?;
+
+    if config.rag.enable {
+        info!(target: "stdout", "RAG is enabled");
+    }
+
+    // socket address
+    let addr = SocketAddr::from((
+        config.server.host.parse::<IpAddr>().unwrap(),
+        config.server.port,
+    ));
+
+    let state = Arc::new(AppState::new(config));
 
     // Set up the router
     let app = Router::new()
@@ -78,17 +103,18 @@ async fn main() -> ServerResult<()> {
         .route("/v1/audio/speech", post(handlers::audio_tts_handler))
         .route("/v1/images/generations", post(handlers::image_handler))
         .route("/v1/images/edits", post(handlers::image_handler))
+        .route("/v1/chunks", post(handlers::chunks_handler))
         .route(
             "/admin/servers/register",
-            post(handlers::register_downstream_server_handler),
+            post(handlers::admin::register_downstream_server_handler),
         )
         .route(
             "/admin/servers/unregister",
-            post(handlers::remove_downstream_server_handler),
+            post(handlers::admin::remove_downstream_server_handler),
         )
         .route(
             "/admin/servers",
-            get(handlers::list_downstream_servers_handler),
+            get(handlers::admin::list_downstream_servers_handler),
         )
         .layer(cors)
         .layer(TraceLayer::new_for_http())
@@ -117,12 +143,6 @@ async fn main() -> ServerResult<()> {
             },
         ))
         .with_state(state.clone());
-
-    // socket address
-    let addr = match cli.socket_addr {
-        Some(addr) => addr,
-        None => SocketAddr::from(([0, 0, 0, 0], cli.port)),
-    };
 
     // Create the listener
     let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| {
@@ -183,11 +203,13 @@ async fn shutdown_signal() {
 /// Application state
 pub(crate) struct AppState {
     servers: Arc<RwLock<HashMap<ServerKind, ServerGroup>>>,
+    config: Arc<RwLock<Config>>,
 }
 impl AppState {
-    pub(crate) fn new() -> Self {
+    pub(crate) fn new(config: Config) -> Self {
         Self {
             servers: Arc::new(RwLock::new(HashMap::new())),
+            config: Arc::new(RwLock::new(config)),
         }
     }
 
@@ -300,5 +322,16 @@ impl AppState {
         }
 
         Ok(server_groups)
+    }
+}
+
+fn get_log_level_from_env() -> Level {
+    match std::env::var("LLAMA_LOG").ok().as_deref() {
+        Some("trace") => Level::TRACE,
+        Some("debug") => Level::DEBUG,
+        Some("info") => Level::INFO,
+        Some("warn") => Level::WARN,
+        Some("error") => Level::ERROR,
+        _ => Level::INFO,
     }
 }

@@ -1,0 +1,912 @@
+use crate::{
+    error::{ServerError, ServerResult},
+    server::{RoutingPolicy, ServerKind},
+    AppState, CONTEXT_WINDOW, GLOBAL_RAG_PROMPT,
+};
+use axum::{
+    extract::{Extension, State},
+    http::HeaderMap,
+    Json,
+};
+use chat_prompts::{
+    error as ChatPromptsError, MergeRagContext, MergeRagContextPolicy, PromptTemplateType,
+};
+use endpoints::{
+    chat::{ChatCompletionRequest, ChatCompletionRequestMessage, ChatCompletionUserMessageContent},
+    embeddings::{EmbeddingRequest, EmbeddingsResponse, InputText},
+    rag::{RagScoredPoint, RetrieveObject},
+};
+use qdrant::ScoredPoint;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::{
+    collections::{HashMap, HashSet},
+    fmt,
+    sync::Arc,
+};
+use text_splitter::{MarkdownSplitter, TextSplitter};
+use tokio_util::sync::CancellationToken;
+use tracing::{debug, error, info, warn};
+
+pub(crate) async fn chat(
+    State(state): State<Arc<AppState>>,
+    Extension(cancel_token): Extension<CancellationToken>,
+    headers: HeaderMap,
+    Json(mut chat_request): Json<ChatCompletionRequest>,
+) -> ServerResult<axum::response::Response> {
+    let request_id = headers
+        .get("x-request-id")
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("unknown")
+        .to_string();
+
+    info!(
+        target: "stdout",
+        request_id = %request_id,
+        message = "Received a new chat request"
+    );
+
+    // get the chat server
+    let servers = state.servers.read().await;
+    let chat_servers = match servers.get(&ServerKind::chat) {
+        Some(servers) => servers,
+        None => {
+            let err_msg = "No chat server available";
+            error!(
+                target: "stdout",
+                request_id = %request_id,
+                message = %err_msg,
+            );
+            return Err(ServerError::Operation(err_msg.to_string()));
+        }
+    };
+
+    let chat_server_base_url = match chat_servers.next().await {
+        Ok(url) => url,
+        Err(e) => {
+            let err_msg = format!("Failed to get the chat server: {}", e);
+            error!(
+                target: "stdout",
+                request_id = %request_id,
+                message = %err_msg,
+            );
+            return Err(ServerError::Operation(err_msg));
+        }
+    };
+
+    // qdrant config
+    let qdrant_config_vec =
+        match get_qdrant_configs(State(state.clone()), &chat_request, &request_id).await {
+            Ok(qdrant_config_vec) => qdrant_config_vec,
+            Err(e) => {
+                let err_msg = format!("Failed to get the VectorDB config: {}", e);
+                error!(target: "stdout", request_id = %request_id, message = %err_msg);
+                return Err(ServerError::Operation(err_msg));
+            }
+        };
+
+    // retrieve context
+    let retrieve_object_vec = retrieve_context_with_multiple_qdrant_configs(
+        State(state.clone()),
+        Extension(cancel_token.clone()),
+        headers.clone(),
+        &request_id,
+        &chat_request,
+        &qdrant_config_vec,
+    )
+    .await?;
+
+    // log retrieve object
+    debug!(target: "stdout", request_id = %request_id, message = format!("retrieve_object_vec:\n{}", serde_json::to_string_pretty(&retrieve_object_vec).unwrap()));
+
+    // extract the context from retrieved objects
+    let mut context = String::new();
+    for (idx, retrieve_object) in retrieve_object_vec.iter().enumerate() {
+        match retrieve_object.points.as_ref() {
+            Some(scored_points) => {
+                match scored_points.is_empty() {
+                    false => {
+                        for (idx, point) in scored_points.iter().enumerate() {
+                            // log
+                            debug!(target: "stdout", request_id = %request_id, message = format!("Point-{}, score: {}, source: {}", idx, point.score, &point.source));
+
+                            context.push_str(&point.source);
+                            context.push_str("\n\n");
+                        }
+                    }
+                    true => {
+                        // log
+                        warn!(target: "stdout", request_id = %request_id, message = format!("No point retrieved from the collection `{}` (score < threshold {})", qdrant_config_vec[idx].collection_name, qdrant_config_vec[idx].score_threshold));
+                    }
+                }
+            }
+            None => {
+                // log
+                warn!(target: "stdout", request_id = %request_id, message = format!("No point retrieved from the collection `{}` (score < threshold {})", qdrant_config_vec[idx].collection_name, qdrant_config_vec[idx].score_threshold));
+            }
+        }
+    }
+
+    // merge context into chat request
+    if !context.is_empty() {
+        if chat_request.messages.is_empty() {
+            let err_msg = "Found empty chat messages";
+
+            // log
+            error!(target: "stdout", request_id = %request_id, message = %err_msg);
+
+            return Err(ServerError::BadRequest(err_msg.to_string()));
+        }
+
+        let chat_service_url = format!("{}v1/info", chat_server_base_url);
+        info!(
+            target: "stdout",
+            request_id = %request_id,
+            message = format!("Forward the chat request to {}", chat_service_url),
+        );
+
+        // get prompt template
+        let response = reqwest::Client::new()
+            .get(chat_service_url)
+            .send()
+            .await
+            .map_err(|e| {
+                let err_msg = format!("Failed to get the prompt template: {}", e);
+                error!(target: "stdout", request_id = %request_id, message = %err_msg);
+                ServerError::Operation(err_msg)
+            })?;
+
+        // parse the reponse
+        let server_info: ServerInfo = response.json().await.map_err(|e| {
+            let err_msg = format!("Failed to parse server info: {}", e);
+            error!(target: "stdout", request_id = %request_id, message = %err_msg);
+            ServerError::Operation(err_msg)
+        })?;
+
+        // get the prompt template
+        let prompt_template = server_info.chat_model.unwrap().prompt_template.unwrap();
+
+        // get the rag policy
+        let rag_policy = state.config.read().await.rag.rag_policy.to_owned();
+
+        // insert rag context into chat request
+        if let Err(e) = RagPromptBuilder::build(
+            &mut chat_request.messages,
+            &[context],
+            prompt_template.has_system_prompt(),
+            rag_policy,
+        ) {
+            let err_msg = e.to_string();
+
+            // log
+            error!(target: "stdout", request_id = %request_id, message = %err_msg);
+
+            return Err(ServerError::Operation(err_msg));
+        }
+    }
+
+    // perform chat completion
+    crate::handlers::chat(
+        State(state.clone()),
+        Extension(cancel_token.clone()),
+        headers,
+        Json(chat_request),
+    )
+    .await
+}
+
+async fn get_qdrant_configs(
+    State(state): State<Arc<AppState>>,
+    chat_request: &ChatCompletionRequest,
+    request_id: impl AsRef<str>,
+) -> Result<Vec<QdrantConfig>, ServerError> {
+    let request_id = request_id.as_ref();
+
+    match (
+        chat_request.vdb_server_url.as_deref(),
+        chat_request.vdb_collection_name.as_deref(),
+        chat_request.limit.as_deref(),
+        chat_request.score_threshold.as_deref(),
+    ) {
+        (Some(url), Some(collection_name), Some(limit), Some(score_threshold)) => {
+            // check if the length of collection name, limit, score_threshold are same
+            if collection_name.len() != limit.len()
+                || collection_name.len() != score_threshold.len()
+            {
+                let err_msg =
+                    "The number of elements of `collection name`, `limit`, `score_threshold` in the request should be same.";
+
+                // log
+                error!(target: "stdout", request_id = %request_id, message = %err_msg);
+
+                return Err(ServerError::Operation(err_msg.into()));
+            }
+
+            info!(target: "stdout", request_id = %request_id, message = "Use the VectorDB settings from the request.");
+
+            let collection_name_str = collection_name.join(",");
+            let limit_str = limit
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<String>>()
+                .join(",");
+            let score_threshold_str = score_threshold
+                .iter()
+                .map(|n| n.to_string())
+                .collect::<Vec<String>>()
+                .join(",");
+            info!(target: "stdout", request_id = %request_id, message = format!("qdrant url: {}, collection name: {}, limit: {}, score threshold: {}", url, collection_name_str, limit_str, score_threshold_str));
+
+            let mut qdrant_config_vec = vec![];
+            for (idx, col_name) in collection_name.iter().enumerate() {
+                qdrant_config_vec.push(QdrantConfig {
+                    url: url.to_string(),
+                    collection_name: col_name.to_string(),
+                    limit: limit[idx],
+                    score_threshold: score_threshold[idx],
+                });
+            }
+
+            Ok(qdrant_config_vec)
+        }
+        (None, None, None, None) => {
+            info!(target: "stdout", request_id = %request_id, message = "Use the default VectorDB settings.");
+
+            let vdb_config = &state.config.read().await.rag.vector_db;
+            let mut qdrant_config_vec = vec![];
+            for cname in vdb_config.collection_name.iter() {
+                qdrant_config_vec.push(QdrantConfig {
+                    url: vdb_config.url.clone(),
+                    collection_name: cname.clone(),
+                    limit: vdb_config.limit,
+                    score_threshold: vdb_config.score_threshold,
+                });
+            }
+
+            Ok(qdrant_config_vec)
+        }
+        _ => {
+            let err_msg = "The VectorDB settings in the request are not correct. The `url_vdb_server`, `collection_name`, `limit`, `score_threshold` fields in the request should be provided. The number of elements of `collection name`, `limit`, `score_threshold` should be same.";
+
+            error!(target: "stdout", request_id = %request_id, message = %err_msg);
+
+            Err(ServerError::Operation(err_msg.into()))
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub(crate) struct QdrantConfig {
+    pub(crate) url: String,
+    pub(crate) collection_name: String,
+    pub(crate) limit: u64,
+    pub(crate) score_threshold: f32,
+}
+impl fmt::Display for QdrantConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "url: {}, collection_name: {}, limit: {}, score_threshold: {}",
+            self.url, self.collection_name, self.limit, self.score_threshold
+        )
+    }
+}
+
+async fn retrieve_context_with_multiple_qdrant_configs(
+    State(state): State<Arc<AppState>>,
+    Extension(cancel_token): Extension<CancellationToken>,
+    headers: HeaderMap,
+    request_id: impl AsRef<str>,
+    chat_request: &ChatCompletionRequest,
+    qdrant_config_vec: &[QdrantConfig],
+) -> Result<Vec<RetrieveObject>, ServerError> {
+    let mut retrieve_object_vec: Vec<RetrieveObject> = Vec::new();
+    let mut set: HashSet<String> = HashSet::new();
+    for qdrant_config in qdrant_config_vec {
+        let mut retrieve_object = retrieve_context_with_single_qdrant_config(
+            State(state.clone()),
+            Extension(cancel_token.clone()),
+            headers.clone(),
+            &request_id,
+            chat_request,
+            qdrant_config,
+        )
+        .await?;
+
+        if let Some(points) = retrieve_object.points.as_mut() {
+            if !points.is_empty() {
+                // find the duplicate points
+                let mut idx_removed = vec![];
+                for (idx, point) in points.iter().enumerate() {
+                    if set.contains(&point.source) {
+                        idx_removed.push(idx);
+                    } else {
+                        set.insert(point.source.clone());
+                    }
+                }
+
+                // remove the duplicate points
+                if !idx_removed.is_empty() {
+                    let num = idx_removed.len();
+
+                    for idx in idx_removed.iter().rev() {
+                        points.remove(*idx);
+                    }
+
+                    info!(target: "stdout", "removed duplicated {} point(s) retrieved from the collection `{}`", num, qdrant_config.collection_name);
+                }
+
+                if !points.is_empty() {
+                    retrieve_object_vec.push(retrieve_object);
+                }
+            }
+        }
+    }
+
+    Ok(retrieve_object_vec)
+}
+
+async fn retrieve_context_with_single_qdrant_config(
+    State(state): State<Arc<AppState>>,
+    Extension(cancel_token): Extension<CancellationToken>,
+    headers: HeaderMap,
+    request_id: impl AsRef<str>,
+    chat_request: &ChatCompletionRequest,
+    qdrant_config: &QdrantConfig,
+) -> Result<RetrieveObject, ServerError> {
+    let request_id = request_id.as_ref();
+
+    info!(target: "stdout", request_id = %request_id, message = "Compute embeddings for user query.");
+
+    // get context_window: chat_request.context_window prioritized CONTEXT_WINDOW
+    let context_window = chat_request
+        .context_window
+        .or_else(|| CONTEXT_WINDOW.get().copied())
+        .unwrap_or(1);
+    info!(target: "stdout", request_id = %request_id, message = format!("Context window: {}", context_window));
+
+    // compute embeddings for user query
+    let embedding_response = match chat_request.messages.is_empty() {
+        true => {
+            let err_msg = "Found empty chat messages";
+
+            // log
+            error!(target: "stdout", request_id = %request_id, message = %err_msg);
+
+            return Err(ServerError::BadRequest(err_msg.to_string()));
+        }
+        false => {
+            // get the last `n` user messages in the context window.
+            // `n` is determined by the `context_window` in the chat request.
+            let mut last_n_user_messages = Vec::new();
+            for (idx, message) in chat_request.messages.iter().rev().enumerate() {
+                if let ChatCompletionRequestMessage::User(user_message) = message {
+                    if let ChatCompletionUserMessageContent::Text(text) = user_message.content() {
+                        if !text.ends_with("<server-health>") {
+                            last_n_user_messages.push(text.clone());
+                        } else if idx == 0 {
+                            let content = text.trim_end_matches("<server-health>").to_string();
+                            last_n_user_messages.push(content);
+                            break;
+                        }
+                    }
+                }
+
+                if last_n_user_messages.len() == context_window as usize {
+                    break;
+                }
+            }
+
+            // join the user messages in the context window into a single string
+            let query_text = if !last_n_user_messages.is_empty() {
+                info!(target: "stdout", request_id = %request_id, message = format!("Found the latest {} user message(s)", last_n_user_messages.len()));
+
+                last_n_user_messages.reverse();
+                last_n_user_messages.join("\n")
+            } else {
+                let error_msg = "No user messages found.";
+
+                // log
+                error!(target: "stdout", request_id = %request_id, message = %error_msg);
+
+                return Err(ServerError::BadRequest(error_msg.to_string()));
+            };
+
+            // log
+            info!(target: "stdout", request_id = %request_id, message = format!("Query text for the context retrieval: {}", query_text));
+
+            // create a embedding request
+            let embedding_request = EmbeddingRequest {
+                model: None,
+                input: InputText::String(query_text),
+                encoding_format: None,
+                user: chat_request.user.clone(),
+                vdb_server_url: None,
+                vdb_collection_name: None,
+                vdb_api_key: None,
+            };
+
+            // compute embeddings for query
+            let response = crate::handlers::embeddings_handler(
+                State(state.clone()),
+                Extension(cancel_token.clone()),
+                headers.clone(),
+                Json(embedding_request),
+            )
+            .await?;
+
+            // parse the response
+            let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .map_err(|e| {
+                    let err_msg = format!("Failed to parse embeddings response: {}", e);
+
+                    // log
+                    error!(target: "stdout", request_id = %request_id, message = %err_msg);
+
+                    ServerError::Operation(err_msg)
+                })?;
+
+            // parse the response
+            serde_json::from_slice::<EmbeddingsResponse>(&bytes).map_err(|e| {
+                let err_msg = format!("Failed to parse embeddings response: {}", e);
+
+                // log
+                error!(target: "stdout", request_id = %request_id, message = %err_msg);
+
+                ServerError::Operation(err_msg)
+            })?
+        }
+    };
+
+    let query_embedding: Vec<f32> = match embedding_response.data.first() {
+        Some(embedding) => embedding.embedding.iter().map(|x| *x as f32).collect(),
+        None => {
+            let err_msg = "No embeddings returned";
+
+            // log
+            error!(target: "stdout", request_id = %request_id, message = %err_msg);
+
+            return Err(ServerError::Operation(err_msg.to_string()));
+        }
+    };
+
+    // get vdb_api_key if it is provided in the request, otherwise get it from the environment variable `VDB_API_KEY`
+    let vdb_api_key = chat_request
+        .vdb_api_key
+        .clone()
+        .or_else(|| std::env::var("VDB_API_KEY").ok());
+
+    // let servers = state.servers.read().await;
+    // let vdb_servers = match servers.get(&ServerKind::vdb) {
+    //     Some(servers) => servers,
+    //     None => {
+    //         let err_msg = "No VectorDB server available";
+    //         error!(
+    //             target: "stdout",
+    //             request_id = %request_id,
+    //             message = %err_msg,
+    //         );
+    //         return Err(ServerError::Operation(err_msg.to_string()));
+    //     }
+    // };
+
+    // let vdb_server_base_url = match vdb_servers.next().await {
+    //     Ok(url) => url.to_string(),
+    //     Err(e) => {
+    //         let err_msg = format!("Failed to get the VectorDB server: {}", e);
+    //         error!(
+    //             target: "stdout",
+    //             request_id = %request_id,
+    //             message = %err_msg,
+    //         );
+    //         return Err(ServerError::Operation(err_msg));
+    //     }
+    // };
+
+    // get the VectorDB server URL from the config file
+    let config = state.config.read().await;
+    let vdb_server_base_url = config.rag.vector_db.url.clone();
+    if vdb_server_base_url.is_empty() {
+        let err_msg = "No VectorDB server URL provided in the config file";
+        error!(target: "stdout", request_id = %request_id, message = %err_msg);
+        return Err(ServerError::Operation(err_msg.to_string()));
+    }
+
+    // perform the context retrieval
+    let mut retrieve_object: RetrieveObject = match retrieve_context(
+        query_embedding.as_slice(),
+        vdb_server_base_url,
+        qdrant_config.collection_name.as_str(),
+        qdrant_config.limit as usize,
+        Some(qdrant_config.score_threshold),
+        vdb_api_key,
+        request_id,
+    )
+    .await
+    {
+        Ok(search_result) => search_result,
+        Err(e) => {
+            let err_msg = format!("No point retrieved. {}", e);
+
+            // log
+            error!(target: "stdout", "{}", &err_msg);
+
+            return Err(ServerError::Operation(err_msg));
+        }
+    };
+    if retrieve_object.points.is_none() {
+        retrieve_object.points = Some(Vec::new());
+    }
+
+    info!(target: "stdout", request_id = %request_id, message = format!("Retrieved {} point(s) from the collection `{}`", retrieve_object.points.as_ref().unwrap().len(), qdrant_config.collection_name));
+
+    Ok(retrieve_object)
+}
+
+async fn retrieve_context(
+    query_embedding: &[f32],
+    vdb_server_url: impl AsRef<str>,
+    vdb_collection_name: impl AsRef<str>,
+    limit: usize,
+    score_threshold: Option<f32>,
+    vdb_api_key: Option<String>,
+    request_id: impl AsRef<str>,
+) -> Result<RetrieveObject, ServerError> {
+    let request_id = request_id.as_ref();
+
+    info!(target: "stdout", request_id = %request_id, message = format!("Retrieve context from {}/collections/{}, max number of result to return: {}, score threshold: {}", vdb_server_url.as_ref(), vdb_collection_name.as_ref(), limit, score_threshold.unwrap_or_default()));
+
+    // create a Qdrant client
+    let mut qdrant_client = qdrant::Qdrant::new_with_url(vdb_server_url.as_ref().to_string());
+
+    // set the API key if provided
+    if let Some(key) = vdb_api_key.as_deref() {
+        if !key.is_empty() {
+            debug!(target: "stdout", request_id = %request_id, message = "Set the API key for the VectorDB server.");
+            qdrant_client.set_api_key(key);
+        }
+    }
+
+    info!(target: "stdout", request_id = %request_id, message = "Search similar points from the qdrant instance");
+
+    // search for similar points
+    let scored_points = qdrant_client
+        .search_points(
+            vdb_collection_name.as_ref(),
+            query_embedding.to_vec(),
+            limit as u64,
+            score_threshold,
+        )
+        .await
+        .map_err(|e| {
+            let err_msg = format!(
+                "Failed to search similar points from the qdrant instance: {}",
+                e
+            );
+            error!(target: "stdout", request_id = %request_id, message = %err_msg);
+            ServerError::Operation(err_msg)
+        })?;
+
+    info!(target: "stdout", request_id = %request_id, message = "Try to remove duplicated points");
+
+    // remove duplicates, which have the same source
+    let mut seen = HashSet::new();
+    let unique_scored_points: Vec<ScoredPoint> = scored_points
+        .into_iter()
+        .filter(|point| {
+            seen.insert(
+                point
+                    .payload
+                    .as_ref()
+                    .unwrap()
+                    .get("source")
+                    .unwrap()
+                    .to_string(),
+            )
+        })
+        .collect();
+
+    debug!(target: "stdout", request_id = %request_id, message = format!("Found {} unique scored points", unique_scored_points.len()));
+
+    let ro = match unique_scored_points.is_empty() {
+        true => RetrieveObject {
+            points: None,
+            limit,
+            score_threshold: score_threshold.unwrap_or(0.0),
+        },
+        false => {
+            let mut points: Vec<RagScoredPoint> = vec![];
+            for point in unique_scored_points.iter() {
+                if let Some(payload) = &point.payload {
+                    if let Some(source) = payload.get("source").and_then(Value::as_str) {
+                        points.push(RagScoredPoint {
+                            source: source.to_string(),
+                            score: point.score,
+                        })
+                    }
+
+                    // For debugging purpose, log the optional search field if it exists
+                    if let Some(search) = payload.get("search").and_then(Value::as_str) {
+                        info!(target: "stdout", request_id = %request_id, message = format!("search: {}", search));
+                    }
+                }
+            }
+
+            RetrieveObject {
+                points: Some(points),
+                limit,
+                score_threshold: score_threshold.unwrap_or(0.0),
+            }
+        }
+    };
+
+    Ok(ro)
+}
+
+#[derive(Debug, Default)]
+struct RagPromptBuilder;
+impl MergeRagContext for RagPromptBuilder {
+    fn build(
+        messages: &mut Vec<endpoints::chat::ChatCompletionRequestMessage>,
+        context: &[String],
+        has_system_prompt: bool,
+        policy: MergeRagContextPolicy,
+    ) -> ChatPromptsError::Result<()> {
+        if messages.is_empty() {
+            error!(target: "stdout", message = "Found empty messages in the chat request.");
+
+            return Err(ChatPromptsError::PromptError::NoMessages);
+        }
+
+        if context.is_empty() {
+            let err_msg = "No context provided.";
+
+            // log
+            error!(target: "stdout", "{}", &err_msg);
+
+            return Err(ChatPromptsError::PromptError::Operation(err_msg.into()));
+        }
+
+        info!(target: "stdout", "rag policy: {}", &policy);
+        if policy == MergeRagContextPolicy::SystemMessage && !has_system_prompt {
+            let err_msg = "The chat model does not support system message";
+
+            // log
+            error!(target: "stdout", "{}", &err_msg);
+
+            return Err(ChatPromptsError::PromptError::Operation(err_msg.into()));
+        }
+
+        let context = context[0].trim_end();
+        info!(target: "stdout", "context:\n{}", context);
+
+        match policy {
+            MergeRagContextPolicy::SystemMessage => {
+                match &messages[0] {
+                    ChatCompletionRequestMessage::System(message) => {
+                        let system_message = {
+                            match GLOBAL_RAG_PROMPT.get() {
+                                Some(global_rag_prompt) => {
+                                    // compose new system message content
+                                    let content = format!(
+                                        "{system_message}\n{rag_prompt}\n{context}",
+                                        system_message = message.content().trim(),
+                                        rag_prompt = global_rag_prompt.to_owned(),
+                                        context = context
+                                    );
+
+                                    // create system message
+                                    ChatCompletionRequestMessage::new_system_message(
+                                        content,
+                                        message.name().cloned(),
+                                    )
+                                }
+                                None => {
+                                    // compose new system message content
+                                    let content = format!(
+                                        "{system_message}\n{context}",
+                                        system_message = message.content().trim(),
+                                        context = context
+                                    );
+
+                                    // create system message
+                                    ChatCompletionRequestMessage::new_system_message(
+                                        content,
+                                        message.name().cloned(),
+                                    )
+                                }
+                            }
+                        };
+
+                        // replace the original system message
+                        messages[0] = system_message;
+                    }
+                    _ => {
+                        let system_message = match GLOBAL_RAG_PROMPT.get() {
+                            Some(global_rag_prompt) => {
+                                // compose new system message content
+                                let content = format!(
+                                    "{rag_prompt}\n{context}",
+                                    rag_prompt = global_rag_prompt.to_owned(),
+                                    context = context
+                                );
+
+                                // create system message
+                                ChatCompletionRequestMessage::new_system_message(content, None)
+                            }
+                            None => {
+                                // create system message
+                                ChatCompletionRequestMessage::new_system_message(
+                                    context.to_string(),
+                                    None,
+                                )
+                            }
+                        };
+
+                        // insert system message
+                        messages.insert(0, system_message);
+                    }
+                }
+            }
+            MergeRagContextPolicy::LastUserMessage => {
+                info!(target: "stdout", "Merge RAG context into last user message.");
+
+                let len = messages.len();
+                match &messages.last() {
+                    Some(ChatCompletionRequestMessage::User(message)) => {
+                        if let ChatCompletionUserMessageContent::Text(content) = message.content() {
+                            // compose new user message content
+                            let content = format!(
+                                    "{context}\nAnswer the question based on the pieces of context above. The question is:\n{user_message}",
+                                    context = context,
+                                    user_message = content.trim(),
+                                );
+
+                            let content = ChatCompletionUserMessageContent::Text(content);
+
+                            // create user message
+                            let user_message = ChatCompletionRequestMessage::new_user_message(
+                                content,
+                                message.name().cloned(),
+                            );
+                            // replace the original user message
+                            messages[len - 1] = user_message;
+                        }
+                    }
+                    _ => {
+                        let err_msg =
+                            "The last message in the chat request should be a user message.";
+
+                        // log
+                        error!(target: "stdout", "{}", &err_msg);
+
+                        return Err(ChatPromptsError::PromptError::BadMessages(err_msg.into()));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct ServerInfo {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[serde(rename = "node_version")]
+    node: Option<String>,
+    #[serde(rename = "api_server")]
+    server: ApiServer,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    chat_model: Option<ModelConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    embedding_model: Option<ModelConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tts_model: Option<ModelConfig>,
+    extras: HashMap<String, String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct ApiServer {
+    #[serde(rename = "type")]
+    ty: String,
+    version: String,
+    #[serde(rename = "ggml_plugin_version")]
+    plugin_version: String,
+    port: String,
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+pub(crate) struct ModelConfig {
+    // model name
+    name: String,
+    // type: chat or embedding
+    #[serde(rename = "type")]
+    ty: String,
+    pub ctx_size: u64,
+    pub batch_size: u64,
+    pub ubatch_size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub prompt_template: Option<PromptTemplateType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n_predict: Option<i32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reverse_prompt: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub n_gpu_layers: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub use_mmap: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub temperature: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_p: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repeat_penalty: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub presence_penalty: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frequency_penalty: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub split_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub main_gpu: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tensor_split: Option<String>,
+}
+
+// Segment the given text into chunks
+pub(crate) fn chunk_text(
+    text: impl AsRef<str>,
+    ty: impl AsRef<str>,
+    chunk_capacity: usize,
+) -> Result<Vec<String>, ServerError> {
+    if ty.as_ref().to_lowercase().as_str() != "txt" && ty.as_ref().to_lowercase().as_str() != "md" {
+        let err_msg = "Failed to upload the target file. Only files with 'txt' and 'md' extensions are supported.";
+
+        error!(target: "stdout", "{}", err_msg);
+
+        return Err(ServerError::Operation(err_msg.into()));
+    }
+
+    match ty.as_ref().to_lowercase().as_str() {
+        "txt" => {
+            info!(target: "stdout", "Chunk the plain text contents.");
+
+            // create a text splitter
+            let splitter = TextSplitter::new(chunk_capacity);
+
+            let chunks = splitter
+                .chunks(text.as_ref())
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>();
+
+            info!(target: "stdout", "Number of chunks: {}", chunks.len());
+
+            Ok(chunks)
+        }
+        "md" => {
+            info!(target: "stdout", "Chunk the markdown contents.");
+
+            // create a markdown splitter
+            let splitter = MarkdownSplitter::new(chunk_capacity);
+
+            let chunks = splitter
+                .chunks(text.as_ref())
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>();
+
+            info!(target: "stdout", "Number of chunks: {}", chunks.len());
+
+            Ok(chunks)
+        }
+        _ => {
+            let err_msg =
+                "Failed to upload the target file. Only text and markdown files are supported.";
+
+            error!(target: "stdout", "{}", err_msg);
+
+            Err(ServerError::Operation(err_msg.into()))
+        }
+    }
+}
