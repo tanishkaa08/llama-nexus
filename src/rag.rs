@@ -13,10 +13,10 @@ use chat_prompts::{
 };
 use endpoints::{
     chat::{ChatCompletionRequest, ChatCompletionRequestMessage, ChatCompletionUserMessageContent},
-    embeddings::{EmbeddingRequest, EmbeddingsResponse, InputText},
+    embeddings::{EmbeddingObject, EmbeddingRequest, EmbeddingsResponse, InputText},
     rag::{RagScoredPoint, RetrieveObject},
 };
-use qdrant::ScoredPoint;
+use qdrant::{Point, PointId, ScoredPoint};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -860,18 +860,21 @@ pub(crate) fn chunk_text(
     text: impl AsRef<str>,
     ty: impl AsRef<str>,
     chunk_capacity: usize,
+    request_id: impl AsRef<str>,
 ) -> Result<Vec<String>, ServerError> {
+    let request_id = request_id.as_ref();
+
     if ty.as_ref().to_lowercase().as_str() != "txt" && ty.as_ref().to_lowercase().as_str() != "md" {
         let err_msg = "Failed to upload the target file. Only files with 'txt' and 'md' extensions are supported.";
 
-        error!(target: "stdout", "{}", err_msg);
+        error!(target: "stdout", request_id = %request_id, message = %err_msg);
 
         return Err(ServerError::Operation(err_msg.into()));
     }
 
     match ty.as_ref().to_lowercase().as_str() {
         "txt" => {
-            info!(target: "stdout", "Chunk the plain text contents.");
+            info!(target: "stdout", request_id = %request_id, message = "Chunk the plain text contents.");
 
             // create a text splitter
             let splitter = TextSplitter::new(chunk_capacity);
@@ -881,7 +884,7 @@ pub(crate) fn chunk_text(
                 .map(|s| s.to_string())
                 .collect::<Vec<_>>();
 
-            info!(target: "stdout", "Number of chunks: {}", chunks.len());
+            info!(target: "stdout", request_id = %request_id, message = format!("{} chunks", chunks.len()));
 
             Ok(chunks)
         }
@@ -909,4 +912,75 @@ pub(crate) fn chunk_text(
             Err(ServerError::Operation(err_msg.into()))
         }
     }
+}
+
+pub(crate) async fn qdrant_create_collection(
+    qdrant_client: &qdrant::Qdrant,
+    collection_name: impl AsRef<str>,
+    dim: usize,
+    request_id: impl AsRef<str>,
+) -> Result<(), ServerError> {
+    let request_id = request_id.as_ref();
+
+    info!(target: "stdout", request_id = %request_id, message = format!("Create a collection `{}` of {} dimensions.", collection_name.as_ref(), dim));
+
+    if let Err(e) = qdrant_client
+        .create_collection(collection_name.as_ref(), dim as u32)
+        .await
+    {
+        let err_msg = e.to_string();
+
+        error!(target: "stdout", request_id = %request_id, message = %err_msg);
+
+        return Err(ServerError::Operation(err_msg));
+    }
+
+    Ok(())
+}
+
+pub(crate) async fn qdrant_persist_embeddings(
+    qdrant_client: &qdrant::Qdrant,
+    collection_name: impl AsRef<str>,
+    embeddings: &[EmbeddingObject],
+    chunks: &[String],
+    request_id: impl AsRef<str>,
+) -> Result<(), ServerError> {
+    let request_id = request_id.as_ref();
+
+    info!(target: "stdout", request_id = %request_id, message = "Persist embeddings to the Qdrant instance");
+
+    let mut points = Vec::<Point>::new();
+    for embedding in embeddings {
+        // convert the embedding to a vector
+        let vector: Vec<_> = embedding.embedding.iter().map(|x| *x as f32).collect();
+
+        // create a payload
+        let payload = serde_json::json!({"source": chunks[embedding.index as usize]})
+            .as_object()
+            .map(|m| m.to_owned());
+
+        // create a point
+        let p = Point {
+            id: PointId::Num(embedding.index),
+            vector,
+            payload,
+        };
+
+        points.push(p);
+    }
+
+    info!(target: "stdout", request_id = %request_id, message = format!("{} points to be upserted", points.len()));
+
+    if let Err(e) = qdrant_client
+        .upsert_points(collection_name.as_ref(), points)
+        .await
+    {
+        let err_msg = format!("{}", e);
+
+        error!(target: "stdout", request_id = %request_id, message = %err_msg);
+
+        return Err(ServerError::Operation(err_msg));
+    }
+
+    Ok(())
 }

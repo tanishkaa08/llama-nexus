@@ -103,6 +103,7 @@ async fn main() -> ServerResult<()> {
         .route("/v1/audio/speech", post(handlers::audio_tts_handler))
         .route("/v1/images/generations", post(handlers::image_handler))
         .route("/v1/images/edits", post(handlers::image_handler))
+        .route("/v1/create/rag", post(handlers::create_rag_handler))
         .route("/v1/chunks", post(handlers::chunks_handler))
         .route(
             "/admin/servers/register",
