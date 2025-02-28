@@ -1,10 +1,14 @@
 mod config;
 mod error;
 mod handlers;
+mod info;
 mod rag;
 mod server;
 
-use crate::server::{Server, ServerGroup, ServerKind};
+use crate::{
+    info::ServerInfo,
+    server::{Server, ServerGroup, ServerKind},
+};
 use axum::{
     body::Body,
     http::{self, HeaderValue, Request},
@@ -86,7 +90,20 @@ async fn main() -> ServerResult<()> {
         config.server.port,
     ));
 
-    let state = Arc::new(AppState::new(config));
+    let mut server_info = ServerInfo::default();
+    {
+        // get the environment variable `NODE_VERSION`
+        // Note that this is for satisfying the requirement of `gaianet-node` project.
+        let node = std::env::var("NODE_VERSION").ok();
+        if node.is_some() {
+            // log node version
+            info!(target: "stdout", "gaianet_node_version: {}", node.as_ref().unwrap());
+        }
+
+        server_info.node = node;
+    }
+
+    let state = Arc::new(AppState::new(config, server_info));
 
     // Set up the router
     let app = Router::new()
@@ -105,6 +122,8 @@ async fn main() -> ServerResult<()> {
         .route("/v1/images/edits", post(handlers::image_handler))
         .route("/v1/create/rag", post(handlers::create_rag_handler))
         .route("/v1/chunks", post(handlers::chunks_handler))
+        .route("/v1/models", get(handlers::models_handler))
+        .route("/v1/info", get(handlers::info_handler))
         .route(
             "/admin/servers/register",
             post(handlers::admin::register_downstream_server_handler),
@@ -205,12 +224,16 @@ async fn shutdown_signal() {
 pub(crate) struct AppState {
     servers: Arc<RwLock<HashMap<ServerKind, ServerGroup>>>,
     config: Arc<RwLock<Config>>,
+    server_info: Arc<RwLock<ServerInfo>>,
+    models: Arc<RwLock<Vec<endpoints::models::Model>>>,
 }
 impl AppState {
-    pub(crate) fn new(config: Config) -> Self {
+    pub(crate) fn new(config: Config, server_info: ServerInfo) -> Self {
         Self {
             servers: Arc::new(RwLock::new(HashMap::new())),
             config: Arc::new(RwLock::new(config)),
+            server_info: Arc::new(RwLock::new(server_info)),
+            models: Arc::new(RwLock::new(Vec::new())),
         }
     }
 
