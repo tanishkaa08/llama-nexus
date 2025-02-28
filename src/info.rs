@@ -22,7 +22,13 @@ pub(crate) struct ApiServer {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) embedding_model: Option<ModelConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) image_model: Option<ModelConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) tts_model: Option<ModelConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) translate_model: Option<ModelConfig>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) transcribe_model: Option<ModelConfig>,
     pub(crate) extras: HashMap<String, String>,
 }
 
