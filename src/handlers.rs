@@ -69,30 +69,32 @@ pub(crate) async fn chat(
     );
 
     // get the chat server
-    let servers = state.servers.read().await;
-    let chat_servers = match servers.get(&ServerKind::chat) {
-        Some(servers) => servers,
-        None => {
-            let err_msg = "No chat server available";
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = %err_msg,
-            );
-            return Err(ServerError::Operation(err_msg.to_string()));
-        }
-    };
+    let chat_server_base_url = {
+        let servers = state.servers.read().await;
+        let chat_servers = match servers.get(&ServerKind::chat) {
+            Some(servers) => servers,
+            None => {
+                let err_msg = "No chat server available";
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                return Err(ServerError::Operation(err_msg.to_string()));
+            }
+        };
 
-    let chat_server_base_url = match chat_servers.next().await {
-        Ok(url) => url,
-        Err(e) => {
-            let err_msg = format!("Failed to get the chat server: {}", e);
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = %err_msg,
-            );
-            return Err(ServerError::Operation(err_msg));
+        match chat_servers.next().await {
+            Ok(url) => url,
+            Err(e) => {
+                let err_msg = format!("Failed to get the chat server: {}", e);
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                return Err(ServerError::Operation(err_msg));
+            }
         }
     };
 
@@ -106,12 +108,14 @@ pub(crate) async fn chat(
     let stream = request.stream;
 
     // Create a request client that can be cancelled
-    let client = reqwest::Client::new();
-    let request = client.post(chat_service_url).json(&request);
+    let request_builder = reqwest::Client::new()
+        .post(chat_service_url)
+        .header("content-type", "application/json")
+        .json(&request);
 
     // Use select! to handle request cancellation
-    let response = select! {
-        response = request.send() => {
+    let ds_response = select! {
+        response = request_builder.send() => {
             response.map_err(|e| {
                 let err_msg = format!(
                     "Failed to forward the request to the downstream server: {}",
@@ -136,11 +140,11 @@ pub(crate) async fn chat(
         }
     };
 
-    let status = response.status();
+    let status = ds_response.status();
 
     // Handle response body reading with cancellation
     let bytes = select! {
-        bytes = response.bytes() => {
+        bytes = ds_response.bytes() => {
             bytes.map_err(|e| {
                 let err_msg = format!("Failed to get the full response as bytes: {}", e);
                 error!(
@@ -394,32 +398,35 @@ pub(crate) async fn audio_transcriptions_handler(
     );
 
     // get the transcribe server
-    let servers = state.servers.read().await;
-    let transcribe_servers = match servers.get(&ServerKind::transcribe) {
-        Some(servers) => servers,
-        None => {
-            let err_msg = "No transcribe server available";
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = %err_msg,
-            );
-            return Err(ServerError::Operation(err_msg.to_string()));
+    let transcribe_server_base_url = {
+        let servers = state.servers.read().await;
+        let transcribe_servers = match servers.get(&ServerKind::transcribe) {
+            Some(servers) => servers,
+            None => {
+                let err_msg = "No transcribe server available";
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                return Err(ServerError::Operation(err_msg.to_string()));
+            }
+        };
+
+        match transcribe_servers.next().await {
+            Ok(url) => url,
+            Err(e) => {
+                let err_msg = format!("Failed to get the transcribe server: {}", e);
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                return Err(ServerError::Operation(err_msg));
+            }
         }
     };
 
-    let transcribe_server_base_url = match transcribe_servers.next().await {
-        Ok(url) => url,
-        Err(e) => {
-            let err_msg = format!("Failed to get the transcribe server: {}", e);
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = %err_msg,
-            );
-            return Err(ServerError::Operation(err_msg));
-        }
-    };
     let transcription_service_url =
         format!("{}v1/audio/transcriptions", transcribe_server_base_url);
     info!(
@@ -428,26 +435,11 @@ pub(crate) async fn audio_transcriptions_handler(
         message = format!("Forward the audio transcription request to {}", transcription_service_url),
     );
 
-    // parse the content-type header
-    let content_type = &req
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| {
-            let err_msg = "Missing Content-Type header".to_string();
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = format!("Content-Type header missing: {}", err_msg),
-            );
-            ServerError::Operation(err_msg)
-        })?;
-    let content_type = content_type.to_string();
-    debug!(
-        target: "stdout",
-        request_id = %request_id,
-        message = format!("Request content type: {}", content_type)
-    );
+    // Create request client
+    let mut request_builder = reqwest::Client::new().post(transcription_service_url);
+    for (name, value) in req.headers().iter() {
+        request_builder = request_builder.header(name, value);
+    }
 
     // convert the request body into bytes
     let body = req.into_body();
@@ -456,21 +448,16 @@ pub(crate) async fn audio_transcriptions_handler(
         error!(
             target: "stdout",
             request_id = %request_id,
-            message = format!("Failed to read request body: {}", err_msg),
+            message = %err_msg,
         );
         ServerError::Operation(err_msg)
     })?;
 
-    // Create request client
-    let client = reqwest::Client::new();
-    let request = client
-        .post(transcription_service_url)
-        .header("Content-Type", content_type)
-        .body(body_bytes);
+    request_builder = request_builder.body(body_bytes);
 
     // Use select! to handle request cancellation
     let response = select! {
-        response = request.send() => {
+        response = request_builder.send() => {
             response.map_err(|e| {
                 let err_msg = format!(
                     "Failed to forward the request to the downstream server: {}",
@@ -566,32 +553,35 @@ pub(crate) async fn audio_translations_handler(
     );
 
     // get the transcribe server
-    let servers = state.servers.read().await;
-    let translate_servers = match servers.get(&ServerKind::translate) {
-        Some(servers) => servers,
-        None => {
-            let err_msg = "No translate server available";
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = %err_msg,
-            );
-            return Err(ServerError::Operation(err_msg.to_string()));
+    let translate_server_base_url = {
+        let servers = state.servers.read().await;
+        let translate_servers = match servers.get(&ServerKind::translate) {
+            Some(servers) => servers,
+            None => {
+                let err_msg = "No translate server available";
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                return Err(ServerError::Operation(err_msg.to_string()));
+            }
+        };
+
+        match translate_servers.next().await {
+            Ok(url) => url,
+            Err(e) => {
+                let err_msg = format!("Failed to get the translate server: {}", e);
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                return Err(ServerError::Operation(err_msg));
+            }
         }
     };
 
-    let translate_server_base_url = match translate_servers.next().await {
-        Ok(url) => url,
-        Err(e) => {
-            let err_msg = format!("Failed to get the translate server: {}", e);
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = %err_msg,
-            );
-            return Err(ServerError::Operation(err_msg));
-        }
-    };
     let translation_service_url = format!("{}v1/audio/translations", translate_server_base_url);
     info!(
         target: "stdout",
@@ -599,26 +589,11 @@ pub(crate) async fn audio_translations_handler(
         message = format!("Forward the audio translation request to {}", translation_service_url),
     );
 
-    // parse the content-type header
-    let content_type = &req
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| {
-            let err_msg = "Missing Content-Type header".to_string();
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = %err_msg,
-            );
-            ServerError::Operation(err_msg)
-        })?;
-    let content_type = content_type.to_string();
-    debug!(
-        target: "stdout",
-        request_id = %request_id,
-        message = format!("Request content type: {}", content_type)
-    );
+    // Create request client
+    let mut request_builder = reqwest::Client::new().post(translation_service_url);
+    for (name, value) in req.headers().iter() {
+        request_builder = request_builder.header(name, value);
+    }
 
     // convert the request body into bytes
     let body = req.into_body();
@@ -632,16 +607,11 @@ pub(crate) async fn audio_translations_handler(
         ServerError::Operation(err_msg)
     })?;
 
-    // Create request client
-    let client = reqwest::Client::new();
-    let request = client
-        .post(translation_service_url)
-        .header("Content-Type", content_type)
-        .body(body_bytes);
+    request_builder = request_builder.body(body_bytes);
 
     // Use select! to handle request cancellation
     let response = select! {
-        response = request.send() => {
+        response = request_builder.send() => {
             response.map_err(|e| {
                 let err_msg = format!(
                     "Failed to forward the request to the downstream server: {}",
@@ -737,38 +707,47 @@ pub(crate) async fn audio_tts_handler(
     );
 
     // get the tts server
-    let servers = state.servers.read().await;
-    let tts_servers = match servers.get(&ServerKind::tts) {
-        Some(servers) => servers,
-        None => {
-            let err_msg = "No tts server available";
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = %err_msg,
-            );
-            return Err(ServerError::Operation(err_msg.to_string()));
+    let tts_server_base_url = {
+        let servers = state.servers.read().await;
+        let tts_servers = match servers.get(&ServerKind::tts) {
+            Some(servers) => servers,
+            None => {
+                let err_msg = "No tts server available";
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                return Err(ServerError::Operation(err_msg.to_string()));
+            }
+        };
+
+        match tts_servers.next().await {
+            Ok(url) => url,
+            Err(e) => {
+                let err_msg = format!("Failed to get the tts server: {}", e);
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                return Err(ServerError::Operation(err_msg));
+            }
         }
     };
 
-    let tts_server_base_url = match tts_servers.next().await {
-        Ok(url) => url,
-        Err(e) => {
-            let err_msg = format!("Failed to get the tts server: {}", e);
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = %err_msg,
-            );
-            return Err(ServerError::Operation(err_msg));
-        }
-    };
     let tts_service_url = format!("{}v1/audio/speech", tts_server_base_url);
     info!(
         target: "stdout",
         request_id = %request_id,
         message = format!("Forward the audio speech request to {}", tts_service_url),
     );
+
+    // Create request client
+    let mut request_builder = reqwest::Client::new().post(tts_service_url);
+    for (name, value) in req.headers().iter() {
+        request_builder = request_builder.header(name, value);
+    }
 
     let body = req.into_body();
     let body_bytes = axum::body::to_bytes(body, usize::MAX).await.map_err(|e| {
@@ -781,16 +760,11 @@ pub(crate) async fn audio_tts_handler(
         ServerError::Operation(err_msg)
     })?;
 
-    // Create request client
-    let client = reqwest::Client::new();
-    let request = client
-        .post(tts_service_url)
-        .header("Content-Type", "application/json")
-        .body(body_bytes);
+    request_builder = request_builder.body(body_bytes);
 
     // Use select! to handle request cancellation
-    let response = select! {
-        response = request.send() => {
+    let ds_response = select! {
+        response = request_builder.send() => {
             response.map_err(|e| {
                 let err_msg = format!(
                     "Failed to forward the request to the downstream server: {}",
@@ -815,11 +789,15 @@ pub(crate) async fn audio_tts_handler(
         }
     };
 
-    let status = response.status();
+    // create a response builder with the status and headers of the downstream response
+    let mut response_builder = Response::builder().status(ds_response.status());
+    for (name, value) in ds_response.headers().iter() {
+        response_builder = response_builder.header(name, value);
+    }
 
     // Handle response body reading with cancellation
     let bytes = select! {
-        bytes = response.bytes() => {
+        bytes = ds_response.bytes() => {
             bytes.map_err(|e| {
                 let err_msg = format!("Failed to get the full response as bytes: {}", e);
                 error!(
@@ -841,11 +819,7 @@ pub(crate) async fn audio_tts_handler(
         }
     };
 
-    match Response::builder()
-        .status(status)
-        .header("Content-Type", "application/json")
-        .body(Body::from(bytes))
-    {
+    match response_builder.body(Body::from(bytes)) {
         Ok(response) => {
             info!(
                 target: "stdout",
@@ -886,32 +860,35 @@ pub(crate) async fn image_handler(
     );
 
     // get the image server
-    let servers = state.servers.read().await;
-    let image_servers = match servers.get(&ServerKind::image) {
-        Some(servers) => servers,
-        None => {
-            let err_msg = "No image server available";
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = %err_msg,
-            );
-            return Err(ServerError::Operation(err_msg.to_string()));
+    let image_server_base_url = {
+        let servers = state.servers.read().await;
+        let image_servers = match servers.get(&ServerKind::image) {
+            Some(servers) => servers,
+            None => {
+                let err_msg = "No image server available";
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                return Err(ServerError::Operation(err_msg.to_string()));
+            }
+        };
+
+        match image_servers.next().await {
+            Ok(url) => url,
+            Err(e) => {
+                let err_msg = format!("Failed to get the image server: {}", e);
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                return Err(ServerError::Operation(err_msg));
+            }
         }
     };
 
-    let image_server_base_url = match image_servers.next().await {
-        Ok(url) => url,
-        Err(e) => {
-            let err_msg = format!("Failed to get the image server: {}", e);
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = %err_msg,
-            );
-            return Err(ServerError::Operation(err_msg));
-        }
-    };
     let image_service_url = format!("{}v1/images/generations", image_server_base_url);
     info!(
         target: "stdout",
@@ -919,26 +896,11 @@ pub(crate) async fn image_handler(
         message = format!("Forward the image request to {}", image_service_url),
     );
 
-    // parse the content-type header
-    let content_type = &req
-        .headers()
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .ok_or_else(|| {
-            let err_msg = "Missing Content-Type header".to_string();
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = %err_msg,
-            );
-            ServerError::Operation(err_msg)
-        })?;
-    let content_type = content_type.to_string();
-    debug!(
-        target: "stdout",
-        request_id = %request_id,
-        message = format!("Request content type: {}", content_type)
-    );
+    // Create request client
+    let mut request_builder = reqwest::Client::new().post(image_service_url);
+    for (name, value) in req.headers().iter() {
+        request_builder = request_builder.header(name, value);
+    }
 
     // convert the request body into bytes
     let body = req.into_body();
@@ -952,16 +914,11 @@ pub(crate) async fn image_handler(
         ServerError::Operation(err_msg)
     })?;
 
-    // Create request client
-    let client = reqwest::Client::new();
-    let request = client
-        .post(image_service_url)
-        .header("Content-Type", content_type)
-        .body(body_bytes);
+    request_builder = request_builder.body(body_bytes);
 
     // Use select! to handle request cancellation
-    let response = select! {
-        response = request.send() => {
+    let ds_response = select! {
+        response = request_builder.send() => {
             response.map_err(|e| {
                 let err_msg = format!(
                     "Failed to forward the request to the downstream server: {}",
@@ -986,11 +943,15 @@ pub(crate) async fn image_handler(
         }
     };
 
-    let status = response.status();
+    // create a response builder with the status and headers of the downstream response
+    let mut response_builder = Response::builder().status(ds_response.status());
+    for (name, value) in ds_response.headers().iter() {
+        response_builder = response_builder.header(name, value);
+    }
 
     // Handle response body reading with cancellation
     let bytes = select! {
-        bytes = response.bytes() => {
+        bytes = ds_response.bytes() => {
             bytes.map_err(|e| {
                 let err_msg = format!("Failed to get the full response as bytes: {}", e);
                 error!(
@@ -1012,11 +973,7 @@ pub(crate) async fn image_handler(
         }
     };
 
-    match Response::builder()
-        .status(status)
-        .header("Content-Type", "application/json")
-        .body(Body::from(bytes))
-    {
+    match response_builder.body(Body::from(bytes)) {
         Ok(response) => {
             info!(
                 target: "stdout",
@@ -1638,7 +1595,9 @@ pub(crate) mod admin {
         let server_id = server.id.clone();
 
         // verify the server
-        verify_server(State(state.clone()), &request_id, &server_url, &server_kind).await?;
+        if server_kind.contains(ServerKind::chat) || server_kind.contains(ServerKind::embeddings) {
+            verify_server(State(state.clone()), &request_id, &server_url, &server_kind).await?;
+        }
 
         state.register_downstream_server(server).await?;
         info!(
@@ -1719,71 +1678,61 @@ pub(crate) mod admin {
 
         // verify the server kind
         {
-            if server_kind.contains(ServerKind::chat) {
-                if api_server.chat_model.is_none() {
-                    let err_msg = "You are trying to register a chat server. However, the server does not support `chat`. Please check the server kind.";
-                    error!(
-                        target: "stdout",
-                        request_id = %request_id,
-                        message = %err_msg,
-                    );
-                    return Err(ServerError::Operation(err_msg.to_string()));
-                }
+            if server_kind.contains(ServerKind::chat) && api_server.chat_model.is_none() {
+                let err_msg = "You are trying to register a chat server. However, the server does not support `chat`. Please check the server kind.";
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                return Err(ServerError::Operation(err_msg.to_string()));
             }
-            if server_kind.contains(ServerKind::embeddings) {
-                if api_server.embedding_model.is_none() {
-                    let err_msg = "You are trying to register an embedding server. However, the server does not support `embeddings`. Please check the server kind.";
-                    error!(
-                        target: "stdout",
-                        request_id = %request_id,
-                        message = %err_msg,
-                    );
-                    return Err(ServerError::Operation(err_msg.to_string()));
-                }
+            if server_kind.contains(ServerKind::embeddings) && api_server.embedding_model.is_none()
+            {
+                let err_msg = "You are trying to register an embedding server. However, the server does not support `embeddings`. Please check the server kind.";
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                return Err(ServerError::Operation(err_msg.to_string()));
             }
-            if server_kind.contains(ServerKind::image) {
-                if api_server.image_model.is_none() {
-                    let err_msg = "You are trying to register an image server. However, the server does not support `image`. Please check the server kind.";
-                    error!(
-                        target: "stdout",
-                        request_id = %request_id,
-                        message = %err_msg,
-                    );
-                    return Err(ServerError::Operation(err_msg.to_string()));
-                }
+            if server_kind.contains(ServerKind::image) && api_server.image_model.is_none() {
+                let err_msg = "You are trying to register an image server. However, the server does not support `image`. Please check the server kind.";
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                return Err(ServerError::Operation(err_msg.to_string()));
             }
-            if server_kind.contains(ServerKind::tts) {
-                if api_server.tts_model.is_none() {
-                    let err_msg = "You are trying to register a TTS server. However, the server does not support `tts`. Please check the server kind.";
-                    error!(
-                        target: "stdout",
-                        request_id = %request_id,
-                        message = %err_msg,
-                    );
-                    return Err(ServerError::Operation(err_msg.to_string()));
-                }
+            if server_kind.contains(ServerKind::tts) && api_server.tts_model.is_none() {
+                let err_msg = "You are trying to register a TTS server. However, the server does not support `tts`. Please check the server kind.";
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                return Err(ServerError::Operation(err_msg.to_string()));
             }
-            if server_kind.contains(ServerKind::translate) {
-                if api_server.translate_model.is_none() {
-                    let err_msg = "You are trying to register a translation server. However, the server does not support `translate`. Please check the server kind.";
-                    error!(
-                        target: "stdout",
-                        request_id = %request_id,
-                        message = %err_msg,
-                    );
-                    return Err(ServerError::Operation(err_msg.to_string()));
-                }
+            if server_kind.contains(ServerKind::translate) && api_server.translate_model.is_none() {
+                let err_msg = "You are trying to register a translation server. However, the server does not support `translate`. Please check the server kind.";
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                return Err(ServerError::Operation(err_msg.to_string()));
             }
-            if server_kind.contains(ServerKind::transcribe) {
-                if api_server.transcribe_model.is_none() {
-                    let err_msg = "You are trying to register a transcription server. However, the server does not support `transcribe`. Please check the server kind.";
-                    error!(
-                        target: "stdout",
-                        request_id = %request_id,
-                        message = %err_msg,
-                    );
-                    return Err(ServerError::Operation(err_msg.to_string()));
-                }
+            if server_kind.contains(ServerKind::transcribe) && api_server.transcribe_model.is_none()
+            {
+                let err_msg = "You are trying to register a transcription server. However, the server does not support `transcribe`. Please check the server kind.";
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                return Err(ServerError::Operation(err_msg.to_string()));
             }
         }
 
