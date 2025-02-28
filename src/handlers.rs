@@ -1638,7 +1638,7 @@ pub(crate) mod admin {
         let server_id = server.id.clone();
 
         // verify the server
-        verify_server(State(state.clone()), &request_id, &server_url).await?;
+        verify_server(State(state.clone()), &request_id, &server_url, &server_kind).await?;
 
         state.register_downstream_server(server).await?;
         info!(
@@ -1671,10 +1671,12 @@ pub(crate) mod admin {
         Ok(response)
     }
 
+    // verify the server and get the server info and model list
     async fn verify_server(
         State(state): State<Arc<AppState>>,
         request_id: impl AsRef<str>,
         server_url: impl AsRef<str>,
+        server_kind: &ServerKind,
     ) -> ServerResult<()> {
         let request_id = request_id.as_ref();
         let server_url = server_url.as_ref();
@@ -1714,6 +1716,76 @@ pub(crate) mod admin {
             );
             ServerError::Operation(err_msg)
         })?;
+
+        // verify the server kind
+        {
+            if server_kind.contains(ServerKind::chat) {
+                if api_server.chat_model.is_none() {
+                    let err_msg = "You are trying to register a chat server. However, the server does not support `chat`. Please check the server kind.";
+                    error!(
+                        target: "stdout",
+                        request_id = %request_id,
+                        message = %err_msg,
+                    );
+                    return Err(ServerError::Operation(err_msg.to_string()));
+                }
+            }
+            if server_kind.contains(ServerKind::embeddings) {
+                if api_server.embedding_model.is_none() {
+                    let err_msg = "You are trying to register an embedding server. However, the server does not support `embeddings`. Please check the server kind.";
+                    error!(
+                        target: "stdout",
+                        request_id = %request_id,
+                        message = %err_msg,
+                    );
+                    return Err(ServerError::Operation(err_msg.to_string()));
+                }
+            }
+            if server_kind.contains(ServerKind::image) {
+                if api_server.image_model.is_none() {
+                    let err_msg = "You are trying to register an image server. However, the server does not support `image`. Please check the server kind.";
+                    error!(
+                        target: "stdout",
+                        request_id = %request_id,
+                        message = %err_msg,
+                    );
+                    return Err(ServerError::Operation(err_msg.to_string()));
+                }
+            }
+            if server_kind.contains(ServerKind::tts) {
+                if api_server.tts_model.is_none() {
+                    let err_msg = "You are trying to register a TTS server. However, the server does not support `tts`. Please check the server kind.";
+                    error!(
+                        target: "stdout",
+                        request_id = %request_id,
+                        message = %err_msg,
+                    );
+                    return Err(ServerError::Operation(err_msg.to_string()));
+                }
+            }
+            if server_kind.contains(ServerKind::translate) {
+                if api_server.translate_model.is_none() {
+                    let err_msg = "You are trying to register a translation server. However, the server does not support `translate`. Please check the server kind.";
+                    error!(
+                        target: "stdout",
+                        request_id = %request_id,
+                        message = %err_msg,
+                    );
+                    return Err(ServerError::Operation(err_msg.to_string()));
+                }
+            }
+            if server_kind.contains(ServerKind::transcribe) {
+                if api_server.transcribe_model.is_none() {
+                    let err_msg = "You are trying to register a transcription server. However, the server does not support `transcribe`. Please check the server kind.";
+                    error!(
+                        target: "stdout",
+                        request_id = %request_id,
+                        message = %err_msg,
+                    );
+                    return Err(ServerError::Operation(err_msg.to_string()));
+                }
+            }
+        }
 
         // update the server info
         let server = &mut state.server_info.write().await.server;
