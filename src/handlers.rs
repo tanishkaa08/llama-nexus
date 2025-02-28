@@ -1638,76 +1638,7 @@ pub(crate) mod admin {
         let server_id = server.id.clone();
 
         // verify the server
-        {
-            let client = reqwest::Client::new();
-
-            let server_info_url = format!("{}/v1/info", server_url);
-            let response = client.get(&server_info_url).send().await.map_err(|e| {
-                let err_msg = format!("Failed to verify the downstream server: {}", e);
-                error!(
-                    target: "stdout",
-                    request_id = %request_id,
-                    message = %err_msg,
-                );
-                ServerError::Operation(err_msg)
-            })?;
-
-            if !response.status().is_success() {
-                let err_msg = format!(
-                    "Failed to verify the downstream server: {}",
-                    response.status()
-                );
-                error!(
-                    target: "stdout",
-                    request_id = %request_id,
-                    message = %err_msg,
-                );
-                return Err(ServerError::Operation(err_msg));
-            }
-
-            let api_server = response.json::<ApiServer>().await.map_err(|e| {
-                let err_msg = format!("Failed to parse the server info: {}", e);
-                error!(
-                    target: "stdout",
-                    request_id = %request_id,
-                    message = %err_msg,
-                );
-                ServerError::Operation(err_msg)
-            })?;
-
-            // update the server info
-            let server = &mut state.server_info.write().await.server;
-            server.push(api_server);
-
-            // get the models from the downstream server
-            let list_models_url = format!("{}/v1/models", server_url);
-            let list_models_response = client.get(&list_models_url).send().await.map_err(|e| {
-                let err_msg = format!("Failed to get the models from the downstream server: {}", e);
-                error!(
-                    target: "stdout",
-                    request_id = %request_id,
-                    message = %err_msg,
-                );
-                ServerError::Operation(err_msg)
-            })?;
-
-            let models = list_models_response
-                .json::<ListModelsResponse>()
-                .await
-                .map_err(|e| {
-                    let err_msg = format!("Failed to parse the models: {}", e);
-                    error!(
-                        target: "stdout",
-                        request_id = %request_id,
-                        message = %err_msg,
-                    );
-                    ServerError::Operation(err_msg)
-                })?;
-
-            // update the models
-            let mut model_list = state.models.write().await;
-            model_list.extend(models.data);
-        }
+        verify_server(State(state.clone()), &request_id, &server_url).await?;
 
         state.register_downstream_server(server).await?;
         info!(
@@ -1738,6 +1669,86 @@ pub(crate) mod admin {
             })?;
 
         Ok(response)
+    }
+
+    async fn verify_server(
+        State(state): State<Arc<AppState>>,
+        request_id: impl AsRef<str>,
+        server_url: impl AsRef<str>,
+    ) -> ServerResult<()> {
+        let request_id = request_id.as_ref();
+        let server_url = server_url.as_ref();
+
+        let client = reqwest::Client::new();
+
+        let server_info_url = format!("{}/v1/info", server_url);
+        let response = client.get(&server_info_url).send().await.map_err(|e| {
+            let err_msg = format!("Failed to verify the downstream server: {}", e);
+            error!(
+                target: "stdout",
+                request_id = %request_id,
+                message = %err_msg,
+            );
+            ServerError::Operation(err_msg)
+        })?;
+
+        if !response.status().is_success() {
+            let err_msg = format!(
+                "Failed to verify the downstream server: {}",
+                response.status()
+            );
+            error!(
+                target: "stdout",
+                request_id = %request_id,
+                message = %err_msg,
+            );
+            return Err(ServerError::Operation(err_msg));
+        }
+
+        let api_server = response.json::<ApiServer>().await.map_err(|e| {
+            let err_msg = format!("Failed to parse the server info: {}", e);
+            error!(
+                target: "stdout",
+                request_id = %request_id,
+                message = %err_msg,
+            );
+            ServerError::Operation(err_msg)
+        })?;
+
+        // update the server info
+        let server = &mut state.server_info.write().await.server;
+        server.push(api_server);
+
+        // get the models from the downstream server
+        let list_models_url = format!("{}/v1/models", server_url);
+        let list_models_response = client.get(&list_models_url).send().await.map_err(|e| {
+            let err_msg = format!("Failed to get the models from the downstream server: {}", e);
+            error!(
+                target: "stdout",
+                request_id = %request_id,
+                message = %err_msg,
+            );
+            ServerError::Operation(err_msg)
+        })?;
+
+        let models = list_models_response
+            .json::<ListModelsResponse>()
+            .await
+            .map_err(|e| {
+                let err_msg = format!("Failed to parse the models: {}", e);
+                error!(
+                    target: "stdout",
+                    request_id = %request_id,
+                    message = %err_msg,
+                );
+                ServerError::Operation(err_msg)
+            })?;
+
+        // update the models
+        let mut model_list = state.models.write().await;
+        model_list.extend(models.data);
+
+        Ok(())
     }
 
     pub(crate) async fn remove_downstream_server_handler(
