@@ -5,7 +5,7 @@ use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use tokio::sync::RwLock;
-use tracing::warn;
+use tracing::{error, warn};
 
 pub(crate) type ServerId = String;
 
@@ -282,16 +282,17 @@ impl ServerGroup {
 
     pub(crate) async fn register(&mut self, server: &Server) -> ServerResult<()> {
         // check if the server is already registered
-        let servers = self.servers.read().await;
-        for server_lock in servers.iter() {
-            let s = server_lock.read().await;
-            if s.url == server.url {
-                let err_msg = format!("Server already registered: {}", server.url);
-                warn!(target: "stdout", "{}", &err_msg);
-                return Err(ServerError::Operation(err_msg));
+        {
+            let servers = self.servers.read().await;
+            for server_lock in servers.iter() {
+                let s = server_lock.read().await;
+                if s.url == server.url {
+                    let err_msg = format!("Server already registered: {}", server.url);
+                    warn!(target: "stdout", "{}", &err_msg);
+                    return Err(ServerError::Operation(err_msg));
+                }
             }
         }
-        drop(servers);
 
         self.servers.write().await.push(RwLock::new(server.clone()));
 
@@ -299,21 +300,27 @@ impl ServerGroup {
     }
 
     pub(crate) async fn unregister(&mut self, server_id: impl AsRef<str>) -> ServerResult<()> {
-        let mut servers = self.servers.write().await;
         let id_to_remove = server_id.as_ref();
 
-        // Find the index of the server to remove
-        let mut idx_to_remove = None;
-        for (idx, server_lock) in servers.iter().enumerate() {
-            let server = server_lock.read().await;
-            if server.id == id_to_remove {
-                idx_to_remove = Some(idx);
-                break;
+        let idx_to_remove = {
+            let servers = self.servers.read().await;
+
+            // Find the index of the server to remove
+            let mut idx_to_remove = None;
+            for (idx, server_lock) in servers.iter().enumerate() {
+                let server = server_lock.read().await;
+                if server.id == id_to_remove {
+                    idx_to_remove = Some(idx);
+                    break;
+                }
             }
-        }
+
+            idx_to_remove
+        };
 
         // Remove the server if found
         if let Some(idx) = idx_to_remove {
+            let mut servers = self.servers.write().await;
             servers.swap_remove(idx);
         }
 
@@ -329,6 +336,8 @@ impl RoutingPolicy for ServerGroup {
     async fn next(&self) -> Result<Uri, ServerError> {
         let servers = self.servers.read().await;
         if servers.is_empty() {
+            let err_msg = format!("No {} server found", self.ty);
+            error!(target: "stdout", "{}", &err_msg);
             return Err(ServerError::NotFoundServer(self.ty.to_string()));
         }
 
@@ -351,9 +360,11 @@ impl RoutingPolicy for ServerGroup {
         };
 
         // Access the chosen server
-        let server = server_lock.write().await;
-        server.connections.fetch_add(1, Ordering::Relaxed);
-        let url = server.url.parse().unwrap();
+        let url = {
+            let server = server_lock.write().await;
+            server.connections.fetch_add(1, Ordering::Relaxed);
+            server.url.parse().unwrap()
+        };
 
         Ok(url)
     }
