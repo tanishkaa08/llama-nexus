@@ -1,3 +1,4 @@
+use chat_prompts::PromptTemplateType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
@@ -6,7 +7,7 @@ pub(crate) struct ServerInfo {
     #[serde(rename = "node_version", skip_serializing_if = "Option::is_none")]
     pub(crate) node: Option<String>,
     #[serde(rename = "servers", skip_serializing_if = "Vec::is_empty")]
-    pub(crate) server: Vec<ApiServer>,
+    pub(crate) servers: Vec<ApiServer>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -43,7 +44,7 @@ pub(crate) struct ModelConfig {
     pub batch_size: u64,
     pub ubatch_size: u64,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompt_template: Option<String>,
+    pub prompt_template: Option<PromptTemplateType>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub n_predict: Option<i32>,
     #[serde(skip_serializing_if = "Option::is_none")]

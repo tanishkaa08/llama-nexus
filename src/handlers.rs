@@ -1737,7 +1737,7 @@ pub(crate) mod admin {
         }
 
         // update the server info
-        let server = &mut state.server_info.write().await.server;
+        let server = &mut state.server_info.write().await.servers;
         server.push(api_server);
 
         // get the models from the downstream server
