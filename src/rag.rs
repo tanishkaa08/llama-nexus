@@ -1,6 +1,5 @@
 use crate::{
     error::{ServerError, ServerResult},
-    server::{RoutingPolicy, ServerKind},
     AppState, CONTEXT_WINDOW, GLOBAL_RAG_PROMPT,
 };
 use axum::{
@@ -45,34 +44,6 @@ pub(crate) async fn chat(
         request_id = %request_id,
         message = "Received a new chat request"
     );
-
-    // get the chat server
-    let servers = state.servers.read().await;
-    let chat_servers = match servers.get(&ServerKind::chat) {
-        Some(servers) => servers,
-        None => {
-            let err_msg = "No chat server available";
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = %err_msg,
-            );
-            return Err(ServerError::Operation(err_msg.to_string()));
-        }
-    };
-
-    let chat_server_base_url = match chat_servers.next().await {
-        Ok(url) => url,
-        Err(e) => {
-            let err_msg = format!("Failed to get the chat server: {}", e);
-            error!(
-                target: "stdout",
-                request_id = %request_id,
-                message = %err_msg,
-            );
-            return Err(ServerError::Operation(err_msg));
-        }
-    };
 
     // qdrant config
     let qdrant_config_vec =
@@ -138,33 +109,22 @@ pub(crate) async fn chat(
             return Err(ServerError::BadRequest(err_msg.to_string()));
         }
 
-        let chat_service_url = format!("{}v1/info", chat_server_base_url);
-        info!(
-            target: "stdout",
-            request_id = %request_id,
-            message = format!("Forward the chat request to {}", chat_service_url),
-        );
-
-        // get prompt template
-        let response = reqwest::Client::new()
-            .get(chat_service_url)
-            .send()
-            .await
-            .map_err(|e| {
-                let err_msg = format!("Failed to get the prompt template: {}", e);
+        let server_info = state.server_info.read().await;
+        let chat_server = server_info
+            .servers
+            .iter()
+            .find(|server| server.chat_model.is_some());
+        let prompt_template = match chat_server {
+            Some(chat_server) => {
+                let chat_model = chat_server.chat_model.as_ref().unwrap();
+                chat_model.prompt_template.as_ref().unwrap()
+            }
+            None => {
+                let err_msg = "No chat server available";
                 error!(target: "stdout", request_id = %request_id, message = %err_msg);
-                ServerError::Operation(err_msg)
-            })?;
-
-        // parse the reponse
-        let server_info: ServerInfo = response.json().await.map_err(|e| {
-            let err_msg = format!("Failed to parse server info: {}", e);
-            error!(target: "stdout", request_id = %request_id, message = %err_msg);
-            ServerError::Operation(err_msg)
-        })?;
-
-        // get the prompt template
-        let prompt_template = server_info.chat_model.unwrap().prompt_template.unwrap();
+                return Err(ServerError::Operation(err_msg.to_string()));
+            }
+        };
 
         // get the rag policy
         let rag_policy = state.config.read().await.rag.rag_policy.to_owned();
