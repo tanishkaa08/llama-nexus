@@ -239,9 +239,7 @@ impl AppState {
     }
 
     pub(crate) async fn register_downstream_server(&self, server: Server) -> ServerResult<()> {
-        let server_kind = &server.kind;
-
-        if server_kind.contains(ServerKind::chat) {
+        if server.kind.contains(ServerKind::chat) {
             self.servers
                 .write()
                 .await
@@ -250,7 +248,7 @@ impl AppState {
                 .register(&server)
                 .await?;
         }
-        if server_kind.contains(ServerKind::embeddings) {
+        if server.kind.contains(ServerKind::embeddings) {
             self.servers
                 .write()
                 .await
@@ -277,7 +275,7 @@ impl AppState {
                 .register(&server)
                 .await?;
         }
-        if server_kind.contains(ServerKind::translate) {
+        if server.kind.contains(ServerKind::translate) {
             self.servers
                 .write()
                 .await
@@ -286,7 +284,7 @@ impl AppState {
                 .register(&server)
                 .await?;
         }
-        if server_kind.contains(ServerKind::transcribe) {
+        if server.kind.contains(ServerKind::transcribe) {
             self.servers
                 .write()
                 .await
