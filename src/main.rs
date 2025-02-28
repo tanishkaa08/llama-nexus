@@ -17,6 +17,7 @@ use axum::{
 use clap::Parser;
 use config::Config;
 use error::{ServerError, ServerResult};
+use futures_util::stream::{self, StreamExt};
 use once_cell::sync::OnceCell;
 use std::{
     collections::HashMap,
@@ -341,7 +342,16 @@ impl AppState {
             if !group.is_empty().await {
                 let servers = group.servers.read().await;
 
-                server_groups.insert(*kind, servers.clone());
+                // Create a new Vec with cloned Server instances using async stream
+                let server_vec = stream::iter(servers.iter())
+                    .then(|server_lock| async move {
+                        let server = server_lock.read().await;
+                        server.clone()
+                    })
+                    .collect::<Vec<_>>()
+                    .await;
+
+                server_groups.insert(*kind, server_vec);
             }
         }
 

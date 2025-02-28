@@ -269,7 +269,7 @@ fn test_deserialize_server_kind() {
 
 #[derive(Debug)]
 pub(crate) struct ServerGroup {
-    pub(crate) servers: RwLock<Vec<Server>>,
+    pub(crate) servers: RwLock<Vec<RwLock<Server>>>,
     pub(crate) ty: ServerKind,
 }
 impl ServerGroup {
@@ -282,30 +282,40 @@ impl ServerGroup {
 
     pub(crate) async fn register(&mut self, server: &Server) -> ServerResult<()> {
         // check if the server is already registered
-        if self
-            .servers
-            .read()
-            .await
-            .iter()
-            .any(|s| s.url == server.url)
-        {
-            let err_msg = format!("Server already registered: {}", server.url);
-
-            warn!(target: "stdout", "{}", &err_msg);
-
-            return Err(ServerError::Operation(err_msg));
+        let servers = self.servers.read().await;
+        for server_lock in servers.iter() {
+            let s = server_lock.read().await;
+            if s.url == server.url {
+                let err_msg = format!("Server already registered: {}", server.url);
+                warn!(target: "stdout", "{}", &err_msg);
+                return Err(ServerError::Operation(err_msg));
+            }
         }
+        drop(servers);
 
-        self.servers.write().await.push(server.clone());
+        self.servers.write().await.push(RwLock::new(server.clone()));
 
         Ok(())
     }
 
     pub(crate) async fn unregister(&mut self, server_id: impl AsRef<str>) -> ServerResult<()> {
-        self.servers
-            .write()
-            .await
-            .retain(|s| s.id != server_id.as_ref());
+        let mut servers = self.servers.write().await;
+        let id_to_remove = server_id.as_ref();
+
+        // Find the index of the server to remove
+        let mut idx_to_remove = None;
+        for (idx, server_lock) in servers.iter().enumerate() {
+            let server = server_lock.read().await;
+            if server.id == id_to_remove {
+                idx_to_remove = Some(idx);
+                break;
+            }
+        }
+
+        // Remove the server if found
+        if let Some(idx) = idx_to_remove {
+            servers.swap_remove(idx);
+        }
 
         Ok(())
     }
@@ -317,27 +327,35 @@ impl ServerGroup {
 #[async_trait]
 impl RoutingPolicy for ServerGroup {
     async fn next(&self) -> Result<Uri, ServerError> {
-        if self.servers.read().await.is_empty() {
+        let servers = self.servers.read().await;
+        if servers.is_empty() {
             return Err(ServerError::NotFoundServer(self.ty.to_string()));
         }
 
-        let servers = self.servers.read().await;
-
-        let server = if servers.len() == 1 {
+        let server_lock = if servers.len() == 1 {
             servers.first().unwrap()
         } else {
-            servers
-                .iter()
-                .min_by(|s1, s2| {
-                    s1.connections
-                        .load(Ordering::Relaxed)
-                        .cmp(&s2.connections.load(Ordering::Relaxed))
-                })
-                .unwrap()
+            // Find server with minimum connections - need to read each server
+            let mut min_connections = usize::MAX;
+            let mut min_server = &servers[0];
+
+            for server in servers.iter() {
+                let guard = server.read().await;
+                let connections = guard.connections.load(Ordering::Relaxed);
+                if connections < min_connections {
+                    min_connections = connections;
+                    min_server = server;
+                }
+            }
+            min_server
         };
 
+        // Access the chosen server
+        let server = server_lock.write().await;
         server.connections.fetch_add(1, Ordering::Relaxed);
-        Ok(server.url.parse().unwrap())
+        let url = server.url.parse().unwrap();
+
+        Ok(url)
     }
 }
 
