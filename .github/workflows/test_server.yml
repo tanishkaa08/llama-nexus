@@ -82,8 +82,8 @@ jobs:
 
       - name: Start llama-api-server for testing chat completions
         run: |
-          curl -LO https://huggingface.co/second-state/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q2_K.gguf
-          nohup $HOME/.wasmedge/bin/wasmedge --dir .:. --nn-preload default:GGML:AUTO:Llama-3.2-1B-Instruct-Q2_K.gguf llama-api-server.wasm --model-name Llama-3.2-1B --prompt-template llama-3-chat --ctx-size 4096 --socket-addr 0.0.0.0:8080 > ./start-llamaedge.log 2>&1 &
+          curl -LO https://huggingface.co/second-state/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_0.gguf
+          nohup $HOME/.wasmedge/bin/wasmedge --dir .:. --nn-preload default:GGML:AUTO:Llama-3.2-1B-Instruct-Q4_0.gguf llama-api-server.wasm --model-name Llama-3.2-1B --prompt-template llama-3-chat --ctx-size 4096 --socket-addr 0.0.0.0:8080 > ./start-llamaedge.log 2>&1 &
           sleep 15
           cat start-llamaedge.log
 
