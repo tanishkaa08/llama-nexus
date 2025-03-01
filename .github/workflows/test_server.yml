@@ -90,7 +90,7 @@ jobs:
       - name: Start LlamaEdge-Q and register llama-api-server
         run: |
           nohup ./LlamaEdge-Q > ./start-Q.log 2>&1 &
-          curl --location 'http://localhost:9068/admin/servers/register' --header 'Content-Type: application/json' --data '{"url": "http://localhost:10086","kind": "chat"}
+          curl --location 'http://localhost:9068/admin/servers/register' --header 'Content-Type: application/json' --data '{"url": "http://localhost:10086","kind": "chat"}'
           sleep 5
           cat start-Q.log
 
