@@ -12,7 +12,7 @@ on:
       - fix-*
       - test-*
     paths:
-      - ".github/workflows/test_api_server.yml"
+      - ".github/workflows/test_server.yml"
       - "**/Cargo.toml"
       - "**/*.rs"
       - "**/*.sh"
