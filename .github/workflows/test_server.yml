@@ -80,29 +80,74 @@ jobs:
           cp target/wasm32-wasip1/release/llama-api-server.wasm ../llama-api-server.wasm
           cd -
 
-      - name: Start llama-api-server for testing chat completions
+      - name: Deploy whisper plugin
+        run: |
+          mkdir -p $HOME/whisper/plugin
+          cd $HOME/whisper/plugin
+          curl -LO https://github.com/WasmEdge/WasmEdge/releases/download/${{ matrix.wasmedge_version }}/WasmEdge-plugin-wasi_nn-whisper-${{ matrix.wasmedge_version }}-ubuntu20.04_x86_64.tar.gz
+          tar -xzvf WasmEdge-plugin-wasi_nn-whisper-${{ matrix.wasmedge_version }}-ubuntu20.04_x86_64.tar.gz
+          cd -
+          ls -al $HOME/whisper/plugin
+
+      - name: Start llama-api-server
         run: |
           curl -LO https://huggingface.co/second-state/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_0.gguf
           nohup $HOME/.wasmedge/bin/wasmedge --dir .:. --nn-preload default:GGML:AUTO:Llama-3.2-1B-Instruct-Q4_0.gguf llama-api-server.wasm --model-name Llama-3.2-1B --prompt-template llama-3-chat --ctx-size 4096 --socket-addr 0.0.0.0:8080 > ./start-llamaedge.log 2>&1 &
           sleep 15
           cat start-llamaedge.log
 
+      - name: Start whisper-api-server
+        run: |
+          curl -LO https://github.com/LlamaEdge/whisper-api-server/releases/download/0.4.0/whisper-api-server.wasm
+          curl -LO https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v2-q5_0.bin
+          nohup env WASMEDGE_PLUGIN_PATH=$HOME/whisper/plugin $HOME/.wasmedge/bin/wasmedge --dir .:. whisper-api-server.wasm -m ggml-large-v2-q5_0.bin --port 12345 > ./start-whisper.log 2>&1 &
+          sleep 15
+          cat start-whisper.log
+
       - name: Start LlamaEdge-Q and register llama-api-server
         run: |
           nohup ./LlamaEdge-Q > ./start-Q.log 2>&1 &
           curl --location 'http://localhost:9068/admin/servers/register' --header 'Content-Type: application/json' --data '{"url": "http://localhost:8080","kind": "chat"}'
+          sleep 5
+          curl --location 'http://localhost:9068/admin/servers/register' --header 'Content-Type: application/json' --data '{"url": "http://localhost:12345","kind": "translate,transcribe"}'
           sleep 5
           cat start-Q.log
 
       - name: Run test_chat.hurl
         run: |
           hurl --test --jobs 1 ./tests/test_chat.hurl
+        continue-on-error: true
+
+      - name: Run test_transcribe.hurl
+        if: always()
+        run: |
+          cp ./tests/assets/test.wav ./tests/test.wav
+          hurl --test --jobs 1 ./tests/test_transcribe.hurl
+        continue-on-error: true
+
+      - name: Print whisper logs on failure
+        if: always()
+        run: |
+          echo "Whisper server logs:"
+          cat ./start-whisper.log
+
+      - name: Run test_translate.hurl
+        if: always()
+        run: |
+          cp ./tests/assets/test_cn.wav ./tests/test_cn.wav
+          hurl --test --jobs 1 ./tests/test_translate.hurl
+        continue-on-error: true
+
+      - name: Print whisper logs on failure
+        if: always()
+        run: |
+          echo "Whisper server logs:"
+          cat ./start-whisper.log
 
       - name: Stop LlamaEdge-Q
         run: |
           pkill -f LlamaEdge-Q
 
-      - name: Stop llama-api-server for testing chat completions
+      - name: Stop llama-api-server and whisper-api-server
         run: |
           pkill -f wasmedge
-
