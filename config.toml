@@ -3,7 +3,6 @@ host = "0.0.0.0"    # The host to listen on.
 port = 9068         # The port to listen on.
 
 [rag]
-enable     = false  # Whether to enable RAG.
 prompt     = ""     # Custom rag prompt. Optional.
 rag_policy = "system-message" # Strategy for merging RAG context into chat messages. Possible values: "system-message", "last-user-message". Required if enable is true.
 

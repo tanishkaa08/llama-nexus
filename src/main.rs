@@ -46,6 +46,9 @@ struct Cli {
     /// Path to the config file
     #[arg(long, default_value = "config.toml", value_parser = clap::value_parser!(String))]
     config: String,
+    /// Enable RAG
+    #[arg(long, default_value = "false")]
+    rag: bool,
 }
 
 #[tokio::main]
@@ -73,7 +76,7 @@ async fn main() -> ServerResult<()> {
         .allow_origin(Any);
 
     // load the config
-    let config = Config::load(&cli.config).map_err(|e| {
+    let mut config = Config::load(&cli.config).map_err(|e| {
         let err_msg = format!("Failed to load config: {}", e);
 
         error!(target: "stdout", "{}", err_msg);
@@ -81,7 +84,8 @@ async fn main() -> ServerResult<()> {
         ServerError::FailedToLoadConfig(err_msg)
     })?;
 
-    if config.rag.enable {
+    if cli.rag {
+        config.rag.enable = true;
         info!(target: "stdout", "RAG is enabled");
     }
 

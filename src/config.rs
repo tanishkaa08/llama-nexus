@@ -39,7 +39,6 @@ impl<'de> Deserialize<'de> for RagConfig {
     {
         #[derive(Deserialize)]
         struct RagConfigHelper {
-            enable: bool,
             prompt: String,
             rag_policy: String,
             vector_db: VectorDbConfig,
@@ -58,7 +57,7 @@ impl<'de> Deserialize<'de> for RagConfig {
             .map_err(|e| serde::de::Error::custom(e.to_string()))?;
 
         Ok(RagConfig {
-            enable: helper.enable,
+            enable: false,
             prompt,
             rag_policy,
             vector_db: helper.vector_db,
