@@ -120,11 +120,7 @@ impl Server {
             Err(e) => {
                 // Consider server healthy if error is timeout
                 warn!(target: "stdout", "Health check: {} server {} is in use", self.kind, self.id);
-                if e.is_timeout() {
-                    true
-                } else {
-                    false
-                }
+                e.is_timeout()
             }
         };
 
