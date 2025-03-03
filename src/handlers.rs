@@ -1745,8 +1745,8 @@ pub(crate) mod admin {
         }
 
         // update the server info
-        let server = &mut state.server_info.write().await.servers;
-        server.push(api_server);
+        let servers = &mut state.server_info.write().await.servers;
+        servers.push(api_server);
 
         // get the models from the downstream server
         let list_models_url = format!("{}/v1/models", server_url);
@@ -1760,7 +1760,7 @@ pub(crate) mod admin {
             ServerError::Operation(err_msg)
         })?;
 
-        let models = list_models_response
+        let list_models_response = list_models_response
             .json::<ListModelsResponse>()
             .await
             .map_err(|e| {
@@ -1774,8 +1774,8 @@ pub(crate) mod admin {
             })?;
 
         // update the models
-        let mut model_list = state.models.write().await;
-        model_list.extend(models.data);
+        let mut models = state.models.write().await;
+        models.extend(list_models_response.data);
 
         Ok(())
     }
