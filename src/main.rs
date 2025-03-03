@@ -76,18 +76,23 @@ async fn main() -> ServerResult<()> {
         .allow_origin(Any);
 
     // load the config
-    let mut config = Config::load(&cli.config).map_err(|e| {
-        let err_msg = format!("Failed to load config: {}", e);
+    let config = match Config::load(&cli.config) {
+        Ok(mut config) => {
+            if cli.rag {
+                config.rag.enable = true;
+                info!(target: "stdout", "RAG is enabled");
+            }
 
-        error!(target: "stdout", "{}", err_msg);
+            config
+        }
+        Err(e) => {
+            let err_msg = format!("Failed to load config: {}", e);
 
-        ServerError::FailedToLoadConfig(err_msg)
-    })?;
+            error!(target: "stdout", "{}", err_msg);
 
-    if cli.rag {
-        config.rag.enable = true;
-        info!(target: "stdout", "RAG is enabled");
-    }
+            return Err(ServerError::FailedToLoadConfig(err_msg));
+        }
+    };
 
     // socket address
     let addr = SocketAddr::from((
