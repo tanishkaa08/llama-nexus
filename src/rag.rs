@@ -97,6 +97,7 @@ pub(crate) async fn chat(
             }
         }
     }
+    debug!(target: "stdout", request_id = %request_id, message = format!("context:\n{}", context));
 
     // merge context into chat request
     if !context.is_empty() {
@@ -437,47 +438,11 @@ async fn retrieve_context_with_single_qdrant_config(
         .clone()
         .or_else(|| std::env::var("VDB_API_KEY").ok());
 
-    // let servers = state.servers.read().await;
-    // let vdb_servers = match servers.get(&ServerKind::vdb) {
-    //     Some(servers) => servers,
-    //     None => {
-    //         let err_msg = "No VectorDB server available";
-    //         error!(
-    //             target: "stdout",
-    //             request_id = %request_id,
-    //             message = %err_msg,
-    //         );
-    //         return Err(ServerError::Operation(err_msg.to_string()));
-    //     }
-    // };
-
-    // let vdb_server_base_url = match vdb_servers.next().await {
-    //     Ok(url) => url.to_string(),
-    //     Err(e) => {
-    //         let err_msg = format!("Failed to get the VectorDB server: {}", e);
-    //         error!(
-    //             target: "stdout",
-    //             request_id = %request_id,
-    //             message = %err_msg,
-    //         );
-    //         return Err(ServerError::Operation(err_msg));
-    //     }
-    // };
-
-    // get the VectorDB server URL from the config file
-    let config = state.config.read().await;
-    let vdb_server_base_url = config.rag.vector_db.url.clone();
-    if vdb_server_base_url.is_empty() {
-        let err_msg = "No VectorDB server URL provided in the config file";
-        error!(target: "stdout", request_id = %request_id, message = %err_msg);
-        return Err(ServerError::Operation(err_msg.to_string()));
-    }
-
     // perform the context retrieval
     let mut retrieve_object: RetrieveObject = match retrieve_context(
         query_embedding.as_slice(),
-        vdb_server_base_url,
-        qdrant_config.collection_name.as_str(),
+        &qdrant_config.url,
+        &qdrant_config.collection_name,
         qdrant_config.limit as usize,
         Some(qdrant_config.score_threshold),
         vdb_api_key,
