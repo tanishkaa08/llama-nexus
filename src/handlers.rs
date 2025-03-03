@@ -16,7 +16,7 @@ use endpoints::{
     embeddings::{EmbeddingRequest, EmbeddingsResponse},
     models::ListModelsResponse,
 };
-use std::sync::Arc;
+use std::{sync::Arc, time::SystemTime};
 use tokio::select;
 use tokio_util::sync::CancellationToken;
 use tracing::{debug, error, info, warn};
@@ -1581,7 +1581,7 @@ pub(crate) mod admin {
     pub(crate) async fn register_downstream_server_handler(
         State(state): State<Arc<AppState>>,
         headers: HeaderMap,
-        Json(server): Json<Server>,
+        Json(mut server): Json<Server>,
     ) -> ServerResult<axum::response::Response> {
         // Get request ID from headers
         let request_id = headers
@@ -1595,10 +1595,18 @@ pub(crate) mod admin {
         let server_id = server.id.clone();
 
         // verify the server
-        if server_kind.contains(ServerKind::chat) || server_kind.contains(ServerKind::embeddings) {
+        if server_kind.contains(ServerKind::chat)
+            || server_kind.contains(ServerKind::embeddings)
+            || server_kind.contains(ServerKind::image)
+        {
             verify_server(State(state.clone()), &request_id, &server_url, &server_kind).await?;
         }
 
+        // update health status of the server
+        server.health_status.is_healthy = true;
+        server.health_status.last_check = SystemTime::now();
+
+        // register the server
         state.register_downstream_server(server).await?;
         info!(
             target: "stdout",

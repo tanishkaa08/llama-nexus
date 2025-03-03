@@ -4,14 +4,36 @@ use axum::http::Uri;
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::{Duration, SystemTime};
 use tokio::sync::RwLock;
 use tracing::{error, warn};
+
+use crate::HEALTH_CHECK_INTERVAL;
+
+/// Timeout duration for health checks (in seconds)
+const TIMEOUT: u64 = 10;
 
 pub(crate) type ServerId = String;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ServerIdToRemove {
     pub id: ServerId,
+}
+
+/// Represents the health status of a server
+#[derive(Debug, Clone)]
+pub struct HealthStatus {
+    pub is_healthy: bool,
+    pub last_check: SystemTime,
+}
+
+impl Default for HealthStatus {
+    fn default() -> Self {
+        Self {
+            is_healthy: true,
+            last_check: SystemTime::now(),
+        }
+    }
 }
 
 /// Represents a LlamaEdge API server
@@ -22,6 +44,8 @@ pub struct Server {
     pub kind: ServerKind,
     #[serde(skip)]
     connections: AtomicUsize,
+    #[serde(skip)]
+    pub health_status: HealthStatus,
 }
 impl<'de> Deserialize<'de> for Server {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
@@ -47,6 +71,7 @@ impl<'de> Deserialize<'de> for Server {
             url: helper.url,
             kind: helper.kind,
             connections: AtomicUsize::new(0),
+            health_status: HealthStatus::default(),
         })
     }
 }
@@ -57,7 +82,58 @@ impl Clone for Server {
             url: self.url.clone(),
             kind: self.kind,
             connections: AtomicUsize::new(self.connections.load(Ordering::Relaxed)),
+            health_status: self.health_status.clone(),
         }
+    }
+}
+impl Server {
+    pub(crate) async fn check_health(&mut self) -> bool {
+        // If the server is currently healthy, check if a new health check is needed
+        if self.health_status.is_healthy {
+            let now = SystemTime::now();
+            if let Ok(duration) = now.duration_since(self.health_status.last_check) {
+                let check_interval =
+                    Duration::from_secs(*HEALTH_CHECK_INTERVAL.get().unwrap_or(&60));
+                if duration < check_interval {
+                    // If the time since last check is less than the interval, return current status
+                    return true;
+                }
+            }
+        }
+
+        // Perform new health check
+        let client = reqwest::Client::new();
+        let health_url = format!("{}/v1/info", self.url);
+
+        // Use configured timeout duration
+        let timeout = Duration::from_secs(TIMEOUT);
+        let is_healthy = match client.get(&health_url).timeout(timeout).send().await {
+            Ok(response) => {
+                // Consider server healthy if response is timeout (408)
+                if response.status() == reqwest::StatusCode::REQUEST_TIMEOUT {
+                    warn!(target: "stdout", "Health check: {} server {} is in use", self.kind, self.id);
+                    true
+                } else {
+                    response.status().is_success()
+                }
+            }
+            Err(e) => {
+                // Consider server healthy if error is timeout
+                warn!(target: "stdout", "Health check: {} server {} is in use", self.kind, self.id);
+                if e.is_timeout() {
+                    true
+                } else {
+                    false
+                }
+            }
+        };
+
+        self.health_status = HealthStatus {
+            is_healthy,
+            last_check: SystemTime::now(),
+        };
+
+        is_healthy
     }
 }
 
@@ -84,6 +160,7 @@ fn test_serialize_server() {
         url: "http://localhost:8000".to_string(),
         kind: ServerKind::chat | ServerKind::tts,
         connections: AtomicUsize::new(0),
+        health_status: HealthStatus::default(),
     };
     let serialized = serde_json::to_string(&server).unwrap();
     assert_eq!(
@@ -97,6 +174,7 @@ fn test_serialize_server() {
         url: "http://localhost:8000".to_string(),
         kind: ServerKind::chat,
         connections: AtomicUsize::new(0),
+        health_status: HealthStatus::default(),
     };
     let serialized = serde_json::to_string(&server).unwrap();
     assert_eq!(

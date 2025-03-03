@@ -20,7 +20,7 @@ use error::{ServerError, ServerResult};
 use futures_util::stream::{self, StreamExt};
 use once_cell::sync::OnceCell;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
     str::FromStr,
     sync::Arc,
@@ -32,7 +32,7 @@ use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
 };
-use tracing::{error, info, Level};
+use tracing::{error, info, warn, Level};
 use uuid::Uuid;
 
 // global system prompt
@@ -40,6 +40,9 @@ pub(crate) static GLOBAL_RAG_PROMPT: OnceCell<String> = OnceCell::new();
 
 // Global context window used for setting the max number of user messages for the retrieval
 pub(crate) static CONTEXT_WINDOW: OnceCell<u64> = OnceCell::new();
+
+// Global health check interval for downstream servers in seconds
+pub(crate) static HEALTH_CHECK_INTERVAL: OnceCell<u64> = OnceCell::new();
 
 #[derive(Debug, Parser)]
 struct Cli {
@@ -49,6 +52,12 @@ struct Cli {
     /// Enable RAG
     #[arg(long, default_value = "false")]
     rag: bool,
+    /// Enable health check for downstream servers
+    #[arg(long, default_value = "false")]
+    check_health: bool,
+    /// Health check interval for downstream servers in seconds
+    #[arg(long, default_value = "60")]
+    check_health_interval: u64,
 }
 
 #[tokio::main]
@@ -94,6 +103,15 @@ async fn main() -> ServerResult<()> {
         }
     };
 
+    // set the health check interval
+    HEALTH_CHECK_INTERVAL
+        .set(cli.check_health_interval)
+        .map_err(|e| {
+            let err_msg = format!("Failed to set health check interval: {}", e);
+            error!(target: "stdout", "{}", err_msg);
+            ServerError::Operation(err_msg)
+        })?;
+
     // socket address
     let addr = SocketAddr::from((
         config.server.host.parse::<IpAddr>().unwrap(),
@@ -114,6 +132,12 @@ async fn main() -> ServerResult<()> {
     }
 
     let state = Arc::new(AppState::new(config, server_info));
+
+    // Start the health check task if enabled
+    if cli.check_health {
+        info!(target: "stdout", "Health check is enabled");
+        Arc::clone(&state).start_health_check_task().await;
+    }
 
     // Set up the router
     let app = Router::new()
@@ -363,6 +387,63 @@ impl AppState {
         }
 
         Ok(server_groups)
+    }
+
+    pub(crate) async fn check_server_health(&self) -> ServerResult<()> {
+        let mut unhealthy_servers = Vec::new();
+
+        {
+            let servers = self.servers.read().await;
+            // check health of unique servers
+            let mut unique_server_ids = HashSet::new();
+            for (kind, group) in servers.iter() {
+                if !group.is_empty().await {
+                    let servers = group.servers.read().await;
+                    for server_lock in servers.iter() {
+                        let mut server = server_lock.write().await;
+
+                        if !unique_server_ids.contains(&server.id) {
+                            info!(target: "stdout", "Checking health of {}", &server.id);
+
+                            unique_server_ids.insert(server.id.clone());
+
+                            let is_healthy = server.check_health().await;
+                            if !is_healthy {
+                                warn!(
+                                    target: "stdout",
+                                    message = format!("{} server {} is unhealthy", kind, &server.id)
+                                );
+                                unhealthy_servers.push(server.id.clone());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Unregister unhealthy servers
+        for server_id in unhealthy_servers {
+            self.unregister_downstream_server(&server_id).await?;
+        }
+
+        Ok(())
+    }
+
+    pub(crate) async fn start_health_check_task(self: Arc<Self>) {
+        let check_interval = HEALTH_CHECK_INTERVAL.get().unwrap_or(&60);
+        let check_interval = tokio::time::Duration::from_secs(*check_interval);
+
+        tokio::spawn(async move {
+            loop {
+                if let Err(e) = self.check_server_health().await {
+                    error!(
+                        target: "stdout",
+                        message = format!("Health check error: {}", e)
+                    );
+                }
+                tokio::time::sleep(check_interval).await;
+            }
+        });
     }
 }
 
