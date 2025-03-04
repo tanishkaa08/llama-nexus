@@ -110,20 +110,23 @@ pub(crate) async fn chat(
             return Err(ServerError::BadRequest(err_msg.to_string()));
         }
 
-        let server_info = state.server_info.read().await;
-        let chat_server = server_info
-            .servers
-            .iter()
-            .find(|server| server.chat_model.is_some());
-        let prompt_template = match chat_server {
-            Some(chat_server) => {
-                let chat_model = chat_server.chat_model.as_ref().unwrap();
-                chat_model.prompt_template.as_ref().unwrap()
-            }
-            None => {
-                let err_msg = "No chat server available";
-                error!(target: "stdout", request_id = %request_id, message = %err_msg);
-                return Err(ServerError::Operation(err_msg.to_string()));
+        // get the prompt template from the chat server
+        let prompt_template = {
+            let server_info = state.server_info.read().await;
+            let chat_server = server_info
+                .servers
+                .iter()
+                .find(|(_server_id, server)| server.chat_model.is_some());
+            match chat_server {
+                Some((_server_id, chat_server)) => {
+                    let chat_model = chat_server.chat_model.as_ref().unwrap();
+                    chat_model.prompt_template.clone().unwrap()
+                }
+                None => {
+                    let err_msg = "No chat server available";
+                    error!(target: "stdout", request_id = %request_id, message = %err_msg);
+                    return Err(ServerError::Operation(err_msg.to_string()));
+                }
             }
         };
 

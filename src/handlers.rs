@@ -1519,7 +1519,7 @@ pub(crate) async fn models_handler(
     let models = state.models.read().await;
     let list_response = ListModelsResponse {
         object: String::from("list"),
-        data: models.clone(),
+        data: models.values().cloned().flatten().collect(),
     };
 
     let json_body = serde_json::to_string(&list_response).map_err(|e| {
@@ -1599,7 +1599,14 @@ pub(crate) mod admin {
             || server_kind.contains(ServerKind::embeddings)
             || server_kind.contains(ServerKind::image)
         {
-            verify_server(State(state.clone()), &request_id, &server_url, &server_kind).await?;
+            verify_server(
+                State(state.clone()),
+                &request_id,
+                &server_id,
+                &server_url,
+                &server_kind,
+            )
+            .await?;
         }
 
         // update health status of the server
@@ -1642,6 +1649,7 @@ pub(crate) mod admin {
     async fn verify_server(
         State(state): State<Arc<AppState>>,
         request_id: impl AsRef<str>,
+        server_id: impl AsRef<str>,
         server_url: impl AsRef<str>,
         server_kind: &ServerKind,
     ) -> ServerResult<()> {
@@ -1745,8 +1753,10 @@ pub(crate) mod admin {
         }
 
         // update the server info
-        let servers = &mut state.server_info.write().await.servers;
-        servers.push(api_server);
+        let server_info = &mut state.server_info.write().await;
+        server_info
+            .servers
+            .insert(server_id.as_ref().to_string(), api_server);
 
         // get the models from the downstream server
         let list_models_url = format!("{}/v1/models", server_url);
@@ -1775,7 +1785,7 @@ pub(crate) mod admin {
 
         // update the models
         let mut models = state.models.write().await;
-        models.extend(list_models_response.data);
+        models.insert(server_id.as_ref().to_string(), list_models_response.data);
 
         Ok(())
     }

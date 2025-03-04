@@ -1,3 +1,4 @@
+use crate::server::ServerId;
 use chat_prompts::PromptTemplateType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -6,8 +7,8 @@ use std::collections::HashMap;
 pub(crate) struct ServerInfo {
     #[serde(rename = "node_version", skip_serializing_if = "Option::is_none")]
     pub(crate) node: Option<String>,
-    #[serde(rename = "servers", skip_serializing_if = "Vec::is_empty")]
-    pub(crate) servers: Vec<ApiServer>,
+    #[serde(rename = "servers", skip_serializing_if = "HashMap::is_empty")]
+    pub(crate) servers: HashMap<ServerId, ApiServer>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -7,7 +7,7 @@ mod server;
 
 use crate::{
     info::ServerInfo,
-    server::{Server, ServerGroup, ServerKind},
+    server::{Server, ServerGroup, ServerId, ServerKind},
 };
 use axum::{
     body::Body,
@@ -259,7 +259,7 @@ pub(crate) struct AppState {
     servers: Arc<RwLock<HashMap<ServerKind, ServerGroup>>>,
     config: Arc<RwLock<Config>>,
     server_info: Arc<RwLock<ServerInfo>>,
-    models: Arc<RwLock<Vec<endpoints::models::Model>>>,
+    models: Arc<RwLock<HashMap<ServerId, Vec<endpoints::models::Model>>>>,
 }
 impl AppState {
     pub(crate) fn new(config: Config, server_info: ServerInfo) -> Self {
@@ -267,7 +267,7 @@ impl AppState {
             servers: Arc::new(RwLock::new(HashMap::new())),
             config: Arc::new(RwLock::new(config)),
             server_info: Arc::new(RwLock::new(server_info)),
-            models: Arc::new(RwLock::new(Vec::new())),
+            models: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -334,23 +334,38 @@ impl AppState {
         &self,
         server_id: impl AsRef<str>,
     ) -> ServerResult<()> {
-        let mut servers = self.servers.write().await;
         let mut found = false;
 
-        let server_kind_s = server_id.as_ref().split("-server-").next().unwrap();
-        for kind in server_kind_s.split("-") {
-            let kind = ServerKind::from_str(kind).unwrap();
-            if let Some(servers) = servers.get_mut(&kind) {
-                servers.unregister(server_id.as_ref()).await?;
-                info!(
-                    target: "stdout",
-                    message = format!("Unregistered {} server: {}", &kind, server_id.as_ref())
-                );
+        // unregister the server from the servers
+        {
+            let mut servers = self.servers.write().await;
+            let server_kind_s = server_id.as_ref().split("-server-").next().unwrap();
+            for kind in server_kind_s.split("-") {
+                let kind = ServerKind::from_str(kind).unwrap();
+                if let Some(servers) = servers.get_mut(&kind) {
+                    servers.unregister(server_id.as_ref()).await?;
+                    info!(
+                        target: "stdout",
+                        message = format!("Unregistered {} server: {}", &kind, server_id.as_ref())
+                    );
 
-                if !found {
-                    found = true;
+                    if !found {
+                        found = true;
+                    }
                 }
             }
+        }
+
+        // remove the server info from the server_info
+        {
+            let mut server_info = self.server_info.write().await;
+            server_info.servers.remove(server_id.as_ref());
+        }
+
+        // remove the server from the models
+        {
+            let mut models = self.models.write().await;
+            models.remove(server_id.as_ref());
         }
 
         if !found {
