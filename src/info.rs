@@ -16,8 +16,8 @@ pub(crate) struct ApiServer {
     #[serde(rename = "type")]
     pub(crate) ty: String,
     pub(crate) version: String,
-    #[serde(rename = "ggml_plugin_version")]
-    pub(crate) plugin_version: String,
+    #[serde(rename = "plugin_version", skip_serializing_if = "Option::is_none")]
+    pub(crate) plugin_version: Option<String>,
     pub(crate) port: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) chat_model: Option<ModelConfig>,
@@ -41,9 +41,12 @@ pub(crate) struct ModelConfig {
     // type: chat or embedding
     #[serde(rename = "type")]
     ty: String,
-    pub ctx_size: u64,
-    pub batch_size: u64,
-    pub ubatch_size: u64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ctx_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub batch_size: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ubatch_size: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt_template: Option<PromptTemplateType>,
     #[serde(skip_serializing_if = "Option::is_none")]
