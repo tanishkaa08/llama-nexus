@@ -77,11 +77,11 @@ pub(crate) struct ModelConfig {
 
 #[test]
 fn test_deserialize_api_server() {
-    let s = r#"{"type":"sd","version":"0.2.4","ggml_plugin_version":"Unknown","port":"12345","image_model":{"name":"sd-v1.5","type":"image","ctx_size":0,"batch_size":0,"ubatch_size":0},"extras":{}}"#;
+    let s = r#"{"type":"sd","version":"0.2.4","plugin_version":"Unknown","port":"12345","image_model":{"name":"sd-v1.5","type":"image","ctx_size":0,"batch_size":0,"ubatch_size":0},"extras":{}}"#;
     let server: ApiServer = serde_json::from_str(s).unwrap();
     assert_eq!(server.ty, "sd");
     assert_eq!(server.version, "0.2.4");
-    assert_eq!(server.plugin_version, "Unknown");
+    assert_eq!(server.plugin_version, Some("Unknown".to_string()));
     assert_eq!(server.port, "12345");
     let image_model = server.image_model.unwrap();
     assert_eq!(image_model.name, "sd-v1.5");
