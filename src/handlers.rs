@@ -1598,6 +1598,9 @@ pub(crate) mod admin {
         if server_kind.contains(ServerKind::chat)
             || server_kind.contains(ServerKind::embeddings)
             || server_kind.contains(ServerKind::image)
+            || server_kind.contains(ServerKind::transcribe)
+            || server_kind.contains(ServerKind::translate)
+            || server_kind.contains(ServerKind::tts)
         {
             verify_server(
                 State(state.clone()),
