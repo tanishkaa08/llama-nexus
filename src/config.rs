@@ -6,6 +6,8 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub server: ServerConfig,
     pub rag: RagConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub server_info_push_url: Option<String>,
 }
 impl Config {
     pub fn load(path: &str) -> Result<Self, Box<dyn std::error::Error>> {

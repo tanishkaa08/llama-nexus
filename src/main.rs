@@ -58,6 +58,12 @@ struct Cli {
     /// Health check interval for downstream servers in seconds
     #[arg(long, default_value = "60")]
     check_health_interval: u64,
+    /// Gaia domain
+    #[arg(long, value_parser = clap::value_parser!(String))]
+    gaia_domain: Option<String>,
+    /// Gaia device ID
+    #[arg(long, value_parser = clap::value_parser!(String))]
+    gaia_device_id: Option<String>,
 }
 
 #[tokio::main]
@@ -90,6 +96,13 @@ async fn main() -> ServerResult<()> {
             if cli.rag {
                 config.rag.enable = true;
                 info!(target: "stdout", "RAG is enabled");
+            }
+
+            // Set Gaia domain and device ID from command line if provided
+            if let (Some(domain), Some(device_id)) = (&cli.gaia_domain, &cli.gaia_device_id) {
+                let server_info_url =
+                    format!("https://hub.domain.{}/device-info/{}", domain, device_id);
+                config.server_info_push_url = Some(server_info_url);
             }
 
             config
@@ -325,6 +338,19 @@ impl AppState {
                 .or_insert(ServerGroup::new(ServerKind::transcribe))
                 .register(&server)
                 .await?;
+        }
+
+        // Push server info to external service if configured
+        if let Some(push_url) = &self.config.read().await.server_info_push_url {
+            let server_info = self.server_info.read().await;
+            let client = reqwest::Client::new();
+
+            if let Err(e) = client.post(push_url).json(&*server_info).send().await {
+                error!(
+                    target: "stdout",
+                    message = format!("Failed to push server info: {}", e)
+                );
+            }
         }
 
         Ok(())
