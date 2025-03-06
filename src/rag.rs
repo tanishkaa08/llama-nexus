@@ -120,7 +120,7 @@ pub(crate) async fn chat(
             match chat_server {
                 Some((_server_id, chat_server)) => {
                     let chat_model = chat_server.chat_model.as_ref().unwrap();
-                    chat_model.prompt_template.clone().unwrap()
+                    chat_model.prompt_template.unwrap()
                 }
                 None => {
                     let err_msg = "No chat server available";

@@ -1519,7 +1519,7 @@ pub(crate) async fn models_handler(
     let models = state.models.read().await;
     let list_response = ListModelsResponse {
         object: String::from("list"),
-        data: models.values().cloned().flatten().collect(),
+        data: models.values().flatten().cloned().collect(),
     };
 
     let json_body = serde_json::to_string(&list_response).map_err(|e| {
