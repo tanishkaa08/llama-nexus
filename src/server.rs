@@ -3,8 +3,11 @@ use async_trait::async_trait;
 use axum::http::Uri;
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{Duration, SystemTime};
+use std::{
+    collections::HashSet,
+    sync::atomic::{AtomicUsize, Ordering},
+    time::{Duration, SystemTime},
+};
 use tokio::sync::RwLock;
 use tracing::{error, warn};
 
@@ -344,31 +347,28 @@ fn test_deserialize_server_kind() {
 #[derive(Debug)]
 pub(crate) struct ServerGroup {
     pub(crate) servers: RwLock<Vec<RwLock<Server>>>,
+    pub(crate) healthy_servers: RwLock<HashSet<ServerId>>,
     pub(crate) ty: ServerKind,
 }
 impl ServerGroup {
     pub(crate) fn new(ty: ServerKind) -> Self {
         Self {
             servers: RwLock::new(Vec::new()),
+            healthy_servers: RwLock::new(HashSet::new()),
             ty,
         }
     }
 
-    pub(crate) async fn register(&mut self, server: &Server) -> ServerResult<()> {
+    pub(crate) async fn register(&mut self, server: Server) -> ServerResult<()> {
         // check if the server is already registered
-        {
-            let servers = self.servers.read().await;
-            for server_lock in servers.iter() {
-                let s = server_lock.read().await;
-                if s.url == server.url {
-                    let err_msg = format!("Server already registered: {}", server.url);
-                    warn!(target: "stdout", "{}", &err_msg);
-                    return Err(ServerError::Operation(err_msg));
-                }
-            }
+        if self.healthy_servers.read().await.contains(&server.id) {
+            let err_msg = format!("Server already registered: {}", server.url);
+            warn!(target: "stdout", "{}", &err_msg);
+            return Err(ServerError::Operation(err_msg));
         }
 
-        self.servers.write().await.push(RwLock::new(server.clone()));
+        self.healthy_servers.write().await.insert(server.id.clone());
+        self.servers.write().await.push(RwLock::new(server));
 
         Ok(())
     }
@@ -398,11 +398,17 @@ impl ServerGroup {
             servers.swap_remove(idx);
         }
 
+        if !self.healthy_servers.write().await.remove(id_to_remove) {
+            let err_msg = format!("Server not found: {}", id_to_remove);
+            warn!(target: "stdout", "{}", &err_msg);
+            return Err(ServerError::Operation(err_msg));
+        }
+
         Ok(())
     }
 
     pub(crate) async fn is_empty(&self) -> bool {
-        self.servers.read().await.is_empty()
+        self.healthy_servers.read().await.is_empty()
     }
 }
 #[async_trait]

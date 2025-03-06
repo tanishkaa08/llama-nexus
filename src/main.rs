@@ -32,7 +32,7 @@ use tower_http::{
     cors::{Any, CorsLayer},
     trace::TraceLayer,
 };
-use tracing::{error, info, warn, Level};
+use tracing::{debug, error, info, warn, Level};
 use uuid::Uuid;
 
 // global system prompt
@@ -100,9 +100,15 @@ async fn main() -> ServerResult<()> {
 
             // Set Gaia domain and device ID from command line if provided
             if let (Some(domain), Some(device_id)) = (&cli.gaia_domain, &cli.gaia_device_id) {
+                // set the server info push url
                 let server_info_url =
                     format!("https://hub.domain.{}/device-info/{}", domain, device_id);
                 config.server_info_push_url = Some(server_info_url);
+
+                // set the server health push url
+                let server_health_url =
+                    format!("https://hub.domain.{}/device-health/{}", domain, device_id);
+                config.server_health_push_url = Some(server_health_url);
             }
 
             config
@@ -291,7 +297,7 @@ impl AppState {
                 .await
                 .entry(ServerKind::chat)
                 .or_insert(ServerGroup::new(ServerKind::chat))
-                .register(&server)
+                .register(server.clone())
                 .await?;
         }
         if server.kind.contains(ServerKind::embeddings) {
@@ -300,7 +306,7 @@ impl AppState {
                 .await
                 .entry(ServerKind::embeddings)
                 .or_insert(ServerGroup::new(ServerKind::embeddings))
-                .register(&server)
+                .register(server.clone())
                 .await?;
         }
         if server.kind.contains(ServerKind::image) {
@@ -309,7 +315,7 @@ impl AppState {
                 .await
                 .entry(ServerKind::image)
                 .or_insert(ServerGroup::new(ServerKind::image))
-                .register(&server)
+                .register(server.clone())
                 .await?;
         }
         if server.kind.contains(ServerKind::tts) {
@@ -318,7 +324,7 @@ impl AppState {
                 .await
                 .entry(ServerKind::tts)
                 .or_insert(ServerGroup::new(ServerKind::tts))
-                .register(&server)
+                .register(server.clone())
                 .await?;
         }
         if server.kind.contains(ServerKind::translate) {
@@ -327,7 +333,7 @@ impl AppState {
                 .await
                 .entry(ServerKind::translate)
                 .or_insert(ServerGroup::new(ServerKind::translate))
-                .register(&server)
+                .register(server.clone())
                 .await?;
         }
         if server.kind.contains(ServerKind::transcribe) {
@@ -336,7 +342,7 @@ impl AppState {
                 .await
                 .entry(ServerKind::transcribe)
                 .or_insert(ServerGroup::new(ServerKind::transcribe))
-                .register(&server)
+                .register(server.clone())
                 .await?;
         }
 
@@ -431,40 +437,90 @@ impl AppState {
     }
 
     pub(crate) async fn check_server_health(&self) -> ServerResult<()> {
-        let mut unhealthy_servers = Vec::new();
+        if !self.servers.read().await.is_empty() {
+            let mut unhealthy_servers = Vec::new();
 
-        {
-            let servers = self.servers.read().await;
-            // check health of unique servers
-            let mut unique_server_ids = HashSet::new();
-            for (kind, group) in servers.iter() {
-                if !group.is_empty().await {
-                    let servers = group.servers.read().await;
-                    for server_lock in servers.iter() {
-                        let mut server = server_lock.write().await;
+            // Check health status of downstream servers
+            // 1. Get all registered downstream servers
+            // 2. Check health status of downstream servers
+            //   2.1 If a downstream server has multiple types, only perform one health check
+            //   2.2 If there are multiple downstream servers of the same type, health checks are needed for all
+            //   2.3 If two or more downstream servers have different types but the same URL, only perform one health check
+            // 3. Remove unhealthy downstream servers
+            {
+                let servers = self.servers.read().await;
 
-                        if !unique_server_ids.contains(&server.id) {
-                            info!(target: "stdout", "Checking health of {}", &server.id);
+                // check health of unique servers
+                let mut unique_server_ids = HashSet::new();
+                for (kind, group) in servers.iter() {
+                    if !group.is_empty().await {
+                        let servers = group.servers.read().await;
+                        for server_lock in servers.iter() {
+                            let mut server = server_lock.write().await;
 
-                            unique_server_ids.insert(server.id.clone());
+                            if !unique_server_ids.contains(&server.id)
+                                && unique_server_ids.contains(&server.url)
+                            {
+                                info!(target: "stdout", "Checking health of {}", &server.id);
 
-                            let is_healthy = server.check_health().await;
-                            if !is_healthy {
-                                warn!(
-                                    target: "stdout",
-                                    message = format!("{} server {} is unhealthy", kind, &server.id)
-                                );
-                                unhealthy_servers.push(server.id.clone());
+                                unique_server_ids.insert(server.id.clone());
+                                unique_server_ids.insert(server.url.clone());
+
+                                let is_healthy = server.check_health().await;
+                                if !is_healthy {
+                                    warn!(
+                                        target: "stdout",
+                                        message = format!("{} server {} is unhealthy", kind, &server.id)
+                                    );
+                                    unhealthy_servers.push(server.id.clone());
+                                }
                             }
                         }
                     }
                 }
             }
-        }
 
-        // Unregister unhealthy servers
-        for server_id in unhealthy_servers {
-            self.unregister_downstream_server(&server_id).await?;
+            // Unregister unhealthy servers
+            if !unhealthy_servers.is_empty() {
+                for server_id in unhealthy_servers {
+                    self.unregister_downstream_server(&server_id).await?;
+                }
+            }
+
+            // collect the healthy servers by kind
+            let mut healthy_servers: HashMap<ServerKind, Vec<String>> = HashMap::new();
+            {
+                let servers = self.servers.read().await;
+                for (kind, group) in servers.iter() {
+                    healthy_servers.insert(
+                        *kind,
+                        group.healthy_servers.read().await.iter().cloned().collect(),
+                    );
+                }
+            }
+
+            // Send the healthy servers to the external service
+            reqwest::Client::new()
+                .post(
+                    self.config
+                        .read()
+                        .await
+                        .server_health_push_url
+                        .as_deref()
+                        .unwrap(),
+                )
+                .json(&healthy_servers)
+                .send()
+                .await
+                .map_err(|e| {
+                    let err_msg = format!("Failed to send health check result: {}", e);
+
+                    error!(target: "stdout", "{}", err_msg);
+
+                    ServerError::Operation(err_msg)
+                })?;
+        } else {
+            warn!(target: "stdout", "No servers registered, skipping health check");
         }
 
         Ok(())
@@ -476,12 +532,15 @@ impl AppState {
 
         tokio::spawn(async move {
             loop {
+                debug!(target: "stdout", "Starting health check");
+
                 if let Err(e) = self.check_server_health().await {
                     error!(
                         target: "stdout",
                         message = format!("Health check error: {}", e)
                     );
                 }
+
                 tokio::time::sleep(check_interval).await;
             }
         });
