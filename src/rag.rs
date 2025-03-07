@@ -1,6 +1,6 @@
 use crate::{
     error::{ServerError, ServerResult},
-    AppState, CONTEXT_WINDOW, GLOBAL_RAG_PROMPT,
+    AppState,
 };
 use axum::{
     extract::{Extension, State},
@@ -131,7 +131,13 @@ pub(crate) async fn chat(
         };
 
         // get the rag policy
-        let rag_policy = state.config.read().await.rag.rag_policy.to_owned();
+        let (rag_policy, rag_prompt) = {
+            let config = state.config.read().await;
+            (
+                config.rag.rag_policy.to_owned(),
+                config.rag.prompt.to_owned(),
+            )
+        };
 
         // insert rag context into chat request
         if let Err(e) = RagPromptBuilder::build(
@@ -139,6 +145,7 @@ pub(crate) async fn chat(
             &[context],
             prompt_template.has_system_prompt(),
             rag_policy,
+            rag_prompt,
         ) {
             let err_msg = e.to_string();
 
@@ -322,10 +329,13 @@ async fn retrieve_context_with_single_qdrant_config(
 
     info!(target: "stdout", request_id = %request_id, message = "Compute embeddings for user query.");
 
+    // get the context window from config
+    let config_ctx_window = state.config.read().await.rag.context_window;
+
     // get context_window: chat_request.context_window prioritized CONTEXT_WINDOW
     let context_window = chat_request
         .context_window
-        .or_else(|| CONTEXT_WINDOW.get().copied())
+        .or(Some(config_ctx_window))
         .unwrap_or(1);
     info!(target: "stdout", request_id = %request_id, message = format!("Context window: {}", context_window));
 
@@ -580,6 +590,7 @@ impl MergeRagContext for RagPromptBuilder {
         context: &[String],
         has_system_prompt: bool,
         policy: MergeRagContextPolicy,
+        rag_prompt: Option<String>,
     ) -> ChatPromptsError::Result<()> {
         if messages.is_empty() {
             error!(target: "stdout", message = "Found empty messages in the chat request.");
@@ -614,7 +625,7 @@ impl MergeRagContext for RagPromptBuilder {
                 match &messages[0] {
                     ChatCompletionRequestMessage::System(message) => {
                         let system_message = {
-                            match GLOBAL_RAG_PROMPT.get() {
+                            match rag_prompt {
                                 Some(global_rag_prompt) => {
                                     // compose new system message content
                                     let content = format!(
@@ -651,7 +662,7 @@ impl MergeRagContext for RagPromptBuilder {
                         messages[0] = system_message;
                     }
                     _ => {
-                        let system_message = match GLOBAL_RAG_PROMPT.get() {
+                        let system_message = match rag_prompt {
                             Some(global_rag_prompt) => {
                                 // compose new system message content
                                 let content = format!(

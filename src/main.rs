@@ -38,12 +38,6 @@ use tower_http::{
 use tracing::{debug, error, info, warn, Level};
 use uuid::Uuid;
 
-// global system prompt
-pub(crate) static GLOBAL_RAG_PROMPT: OnceCell<String> = OnceCell::new();
-
-// Global context window used for setting the max number of user messages for the retrieval
-pub(crate) static CONTEXT_WINDOW: OnceCell<u64> = OnceCell::new();
-
 // Global health check interval for downstream servers in seconds
 pub(crate) static HEALTH_CHECK_INTERVAL: OnceCell<u64> = OnceCell::new();
 

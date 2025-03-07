@@ -450,8 +450,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 [[package]]
 name = "chat-prompts"
 version = "0.21.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8091dc8b5063ebfeda589faa09c609e66d4422b5d9075c1f6a56f9a9b31edd1"
+source = "git+https://github.com/LlamaEdge/LlamaEdge.git?branch=refactor-update-serverinfo#1d36ab5a2b4c89ff614febe05c0da2d59db60e73"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -747,8 +746,7 @@ dependencies = [
 [[package]]
 name = "endpoints"
 version = "0.25.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "59c201f86491381c29364a8cd4a29d58e3842755cf85a3d9c3986f5d1223d51d"
+source = "git+https://github.com/LlamaEdge/LlamaEdge.git?branch=refactor-update-serverinfo#1d36ab5a2b4c89ff614febe05c0da2d59db60e73"
 dependencies = [
  "indexmap",
  "serde",
