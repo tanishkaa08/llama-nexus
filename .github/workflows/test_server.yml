@@ -104,13 +104,18 @@ jobs:
           sleep 15
           cat start-whisper.log
 
-      - name: Start LlamaEdge-Q and register llama-api-server
+      - name: Start LlamaEdge-Q in config mode and register llama-api-server
         run: |
-          nohup ./LlamaEdge-Q > ./start-Q.log 2>&1 &
+          nohup ./LlamaEdge-Q config > ./start-Q.log 2>&1 &
           curl --location 'http://localhost:9068/admin/servers/register' --header 'Content-Type: application/json' --data '{"url": "http://localhost:8080","kind": "chat"}'
           sleep 5
           curl --location 'http://localhost:9068/admin/servers/register' --header 'Content-Type: application/json' --data '{"url": "http://localhost:12345","kind": "translate,transcribe"}'
           sleep 5
+
+      - name: Print LlamaEdge-Q logs on failure
+        if: failure()
+        run: |
+          echo "LlamaEdge-Q logs:"
           cat start-Q.log
 
       - name: Run test_chat.hurl
@@ -126,7 +131,7 @@ jobs:
         continue-on-error: true
 
       - name: Print whisper logs on failure
-        if: always()
+        if: failure()
         run: |
           echo "Whisper server logs:"
           cat ./start-whisper.log
@@ -139,7 +144,7 @@ jobs:
         continue-on-error: true
 
       - name: Print whisper logs on failure
-        if: always()
+        if: failure()
         run: |
           echo "Whisper server logs:"
           cat ./start-whisper.log
