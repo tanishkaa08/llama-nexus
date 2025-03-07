@@ -70,7 +70,7 @@ pub(crate) async fn chat(
 
     // get the chat server
     let chat_server_base_url = {
-        let servers = state.group_map.read().await;
+        let servers = state.server_group.read().await;
         let chat_servers = match servers.get(&ServerKind::chat) {
             Some(servers) => servers,
             None => {
@@ -240,7 +240,7 @@ pub(crate) async fn embeddings_handler(
     );
 
     // get the embeddings server
-    let servers = state.group_map.read().await;
+    let servers = state.server_group.read().await;
     let embeddings_servers = match servers.get(&ServerKind::embeddings) {
         Some(servers) => servers,
         None => {
@@ -399,7 +399,7 @@ pub(crate) async fn audio_transcriptions_handler(
 
     // get the transcribe server
     let transcribe_server_base_url = {
-        let servers = state.group_map.read().await;
+        let servers = state.server_group.read().await;
         let transcribe_servers = match servers.get(&ServerKind::transcribe) {
             Some(servers) => servers,
             None => {
@@ -554,7 +554,7 @@ pub(crate) async fn audio_translations_handler(
 
     // get the transcribe server
     let translate_server_base_url = {
-        let servers = state.group_map.read().await;
+        let servers = state.server_group.read().await;
         let translate_servers = match servers.get(&ServerKind::translate) {
             Some(servers) => servers,
             None => {
@@ -708,7 +708,7 @@ pub(crate) async fn audio_tts_handler(
 
     // get the tts server
     let tts_server_base_url = {
-        let servers = state.group_map.read().await;
+        let servers = state.server_group.read().await;
         let tts_servers = match servers.get(&ServerKind::tts) {
             Some(servers) => servers,
             None => {
@@ -861,7 +861,7 @@ pub(crate) async fn image_handler(
 
     // get the image server
     let image_server_base_url = {
-        let servers = state.group_map.read().await;
+        let servers = state.server_group.read().await;
         let image_servers = match servers.get(&ServerKind::image) {
             Some(servers) => servers,
             None => {
@@ -1361,7 +1361,7 @@ pub(crate) async fn create_rag_handler(
         };
 
         // get the embeddings server
-        let servers = state.group_map.read().await;
+        let servers = state.server_group.read().await;
         let embeddings_servers = match servers.get(&ServerKind::embeddings) {
             Some(servers) => servers,
             None => {

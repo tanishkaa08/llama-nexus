@@ -22,6 +22,7 @@ use once_cell::sync::OnceCell;
 use std::{
     collections::{HashMap, HashSet},
     net::{IpAddr, SocketAddr},
+    path::PathBuf,
     str::FromStr,
     sync::Arc,
 };
@@ -30,6 +31,7 @@ use tokio::sync::RwLock;
 use tokio_util::sync::CancellationToken;
 use tower_http::{
     cors::{Any, CorsLayer},
+    services::ServeDir,
     trace::TraceLayer,
 };
 use tracing::{debug, error, info, warn, Level};
@@ -55,6 +57,9 @@ struct Cli {
     /// Health check interval for downstream servers in seconds
     #[arg(long, default_value = "60")]
     check_health_interval: u64,
+    /// Root path for the Web UI files
+    #[arg(long, default_value = "chatbot-ui")]
+    web_ui: PathBuf,
     /// Subcommands
     #[command(subcommand)]
     command: Command,
@@ -255,6 +260,12 @@ async fn main() -> ServerResult<()> {
             "/admin/servers",
             get(handlers::admin::list_downstream_servers_handler),
         )
+        .nest_service(
+            "/",
+            ServeDir::new(&cli.web_ui).not_found_service(
+                ServeDir::new(&cli.web_ui).append_index_html_on_directories(true),
+            ),
+        )
         .layer(cors)
         .layer(TraceLayer::new_for_http())
         .layer(axum::middleware::from_fn(
@@ -341,7 +352,7 @@ async fn shutdown_signal() {
 
 /// Application state
 pub(crate) struct AppState {
-    group_map: Arc<RwLock<HashMap<ServerKind, ServerGroup>>>,
+    server_group: Arc<RwLock<HashMap<ServerKind, ServerGroup>>>,
     config: Arc<RwLock<Config>>,
     server_info: Arc<RwLock<ServerInfo>>,
     models: Arc<RwLock<HashMap<ServerId, Vec<endpoints::models::Model>>>>,
@@ -349,7 +360,7 @@ pub(crate) struct AppState {
 impl AppState {
     pub(crate) fn new(config: Config, server_info: ServerInfo) -> Self {
         Self {
-            group_map: Arc::new(RwLock::new(HashMap::new())),
+            server_group: Arc::new(RwLock::new(HashMap::new())),
             config: Arc::new(RwLock::new(config)),
             server_info: Arc::new(RwLock::new(server_info)),
             models: Arc::new(RwLock::new(HashMap::new())),
@@ -358,7 +369,7 @@ impl AppState {
 
     pub(crate) async fn register_downstream_server(&self, server: Server) -> ServerResult<()> {
         if server.kind.contains(ServerKind::chat) {
-            self.group_map
+            self.server_group
                 .write()
                 .await
                 .entry(ServerKind::chat)
@@ -367,7 +378,7 @@ impl AppState {
                 .await?;
         }
         if server.kind.contains(ServerKind::embeddings) {
-            self.group_map
+            self.server_group
                 .write()
                 .await
                 .entry(ServerKind::embeddings)
@@ -376,7 +387,7 @@ impl AppState {
                 .await?;
         }
         if server.kind.contains(ServerKind::image) {
-            self.group_map
+            self.server_group
                 .write()
                 .await
                 .entry(ServerKind::image)
@@ -385,7 +396,7 @@ impl AppState {
                 .await?;
         }
         if server.kind.contains(ServerKind::tts) {
-            self.group_map
+            self.server_group
                 .write()
                 .await
                 .entry(ServerKind::tts)
@@ -394,7 +405,7 @@ impl AppState {
                 .await?;
         }
         if server.kind.contains(ServerKind::translate) {
-            self.group_map
+            self.server_group
                 .write()
                 .await
                 .entry(ServerKind::translate)
@@ -403,7 +414,7 @@ impl AppState {
                 .await?;
         }
         if server.kind.contains(ServerKind::transcribe) {
-            self.group_map
+            self.server_group
                 .write()
                 .await
                 .entry(ServerKind::transcribe)
@@ -472,7 +483,7 @@ impl AppState {
                 .split("-")
                 .collect::<Vec<&str>>();
 
-            let group_map = self.group_map.read().await;
+            let group_map = self.server_group.read().await;
 
             for kind in kinds {
                 let kind = ServerKind::from_str(kind).unwrap();
@@ -513,7 +524,7 @@ impl AppState {
     pub(crate) async fn list_downstream_servers(
         &self,
     ) -> ServerResult<HashMap<ServerKind, Vec<Server>>> {
-        let servers = self.group_map.read().await;
+        let servers = self.server_group.read().await;
 
         let mut server_groups = HashMap::new();
         for (kind, group) in servers.iter() {
@@ -537,7 +548,7 @@ impl AppState {
     }
 
     pub(crate) async fn check_server_health(&self) -> ServerResult<()> {
-        if !self.group_map.read().await.is_empty() {
+        if !self.server_group.read().await.is_empty() {
             let mut unhealthy_servers = Vec::new();
 
             // Check health status of downstream servers
@@ -548,7 +559,7 @@ impl AppState {
             //   2.3 If two or more downstream servers have different types but the same URL, only perform one health check
             // 3. Remove unhealthy downstream servers
             {
-                let group_map = self.group_map.read().await;
+                let group_map = self.server_group.read().await;
 
                 // check health of unique servers
                 let mut unique_server_ids = HashSet::new();
@@ -592,7 +603,7 @@ impl AppState {
                 // collect the healthy servers by kind
                 let mut healthy_servers: HashMap<ServerKind, Vec<String>> = HashMap::new();
                 {
-                    let group_map = self.group_map.read().await;
+                    let group_map = self.server_group.read().await;
                     for (kind, group) in group_map.iter() {
                         if group.is_empty().await {
                             warn!(target: "stdout", "No {} servers available after health check", kind);
