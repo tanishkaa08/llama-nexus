@@ -14,6 +14,7 @@ use axum::{
     http::{self, HeaderValue, Request},
     routing::{get, post, Router},
 };
+use chat_prompts::MergeRagContextPolicy;
 use clap::{Parser, Subcommand};
 use config::Config;
 use error::{ServerError, ServerResult};
@@ -93,6 +94,15 @@ enum Command {
         /// Vector database score threshold
         #[arg(long, default_value = "0.5")]
         vdb_score_threshold: f32,
+        /// Custom RAG prompt
+        #[arg(long)]
+        rag_prompt: Option<String>,
+        /// Number of user messages to use in RAG retrieval process
+        #[arg(long, default_value = "1")]
+        rag_context_window: u64,
+        /// Policy for merging RAG context
+        #[arg(long, value_enum, default_value_t = MergeRagContextPolicy::SystemMessage)]
+        rag_policy: chat_prompts::MergeRagContextPolicy,
         /// Host address to bind to
         #[arg(long, default_value = "127.0.0.1")]
         host: String,
@@ -154,6 +164,9 @@ async fn main() -> ServerResult<()> {
             vdb_collection_name,
             vdb_limit,
             vdb_score_threshold,
+            rag_prompt,
+            rag_context_window,
+            rag_policy,
         } => {
             // Use default config for gaia command
             info!(target: "stdout", "Using default configuration for gaia command");
@@ -173,6 +186,16 @@ async fn main() -> ServerResult<()> {
                 config.rag.enable = true;
                 info!(target: "stdout", "RAG is enabled");
             }
+
+            // Set the RAG configuration
+            if rag_prompt.is_some() {
+                config.rag.prompt = rag_prompt.clone();
+                info!(target: "stdout", "RAG Prompt: {}", rag_prompt.as_ref().unwrap());
+            }
+            info!(target: "stdout", "RAG Context Window: {}", rag_context_window);
+            config.rag.context_window = *rag_context_window;
+            info!(target: "stdout", "RAG Policy: {}", rag_policy.to_string());
+            config.rag.rag_policy = rag_policy.clone();
 
             // Set the VDB configuration
             info!(target: "stdout", "VDB URL: {}", vdb_url);
