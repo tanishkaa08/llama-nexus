@@ -20,6 +20,32 @@ impl Config {
     }
 }
 
+// Add Default implementation for Config
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            server: ServerConfig {
+                host: "127.0.0.1".to_string(),
+                port: 8080,
+            },
+            rag: RagConfig {
+                enable: false,
+                prompt: None,
+                rag_policy: MergeRagContextPolicy::SystemMessage,
+                vector_db: VectorDbConfig {
+                    url: "http://localhost:6333".to_string(),
+                    collection_name: vec!["default".to_string()],
+                    limit: 1,
+                    score_threshold: 0.5,
+                },
+                kw_search: KwSearchConfig::default(),
+            },
+            server_info_push_url: None,
+            server_health_push_url: None,
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct ServerConfig {
     pub host: String,
