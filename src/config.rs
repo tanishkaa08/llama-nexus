@@ -32,6 +32,7 @@ impl Default for Config {
                 enable: false,
                 prompt: None,
                 rag_policy: MergeRagContextPolicy::SystemMessage,
+                context_window: 1,
                 vector_db: VectorDbConfig {
                     url: "http://localhost:6333".to_string(),
                     collection_name: vec!["default".to_string()],
@@ -58,6 +59,7 @@ pub struct RagConfig {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
     pub rag_policy: MergeRagContextPolicy,
+    pub context_window: u64,
     pub vector_db: VectorDbConfig,
     pub kw_search: KwSearchConfig,
 }
@@ -71,6 +73,7 @@ impl<'de> Deserialize<'de> for RagConfig {
         struct RagConfigHelper {
             prompt: String,
             rag_policy: String,
+            context_window: u64,
             vector_db: VectorDbConfig,
             kw_search: KwSearchConfig,
         }
@@ -90,6 +93,7 @@ impl<'de> Deserialize<'de> for RagConfig {
             enable: false,
             prompt,
             rag_policy,
+            context_window: helper.context_window,
             vector_db: helper.vector_db,
             kw_search: helper.kw_search,
         })

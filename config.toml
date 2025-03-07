@@ -5,6 +5,7 @@ port = 9068         # The port to listen on.
 [rag]
 prompt     = ""     # Custom rag prompt. Optional.
 rag_policy = "system-message" # Strategy for merging RAG context into chat messages. Possible values: "system-message", "last-user-message". Required if enable is true.
+context_window = 1 # Maximum number of user messages used in the retrieval.
 
 [rag.vector_db]                             # Vector database configuration.
 url             = "http://localhost:6333"   # The URL of the vector database.
