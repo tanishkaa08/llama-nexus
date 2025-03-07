@@ -195,7 +195,7 @@ async fn main() -> ServerResult<()> {
             info!(target: "stdout", "RAG Context Window: {}", rag_context_window);
             config.rag.context_window = *rag_context_window;
             info!(target: "stdout", "RAG Policy: {}", rag_policy.to_string());
-            config.rag.rag_policy = rag_policy.clone();
+            config.rag.rag_policy = *rag_policy;
 
             // Set the VDB configuration
             info!(target: "stdout", "VDB URL: {}", vdb_url);
@@ -253,69 +253,67 @@ async fn main() -> ServerResult<()> {
     }
 
     // Set up the router
-    let app = Router::new()
-        .route("/v1/chat/completions", post(handlers::chat_handler))
-        .route("/v1/embeddings", post(handlers::embeddings_handler))
-        .route(
-            "/v1/audio/transcriptions",
-            post(handlers::audio_transcriptions_handler),
-        )
-        .route(
-            "/v1/audio/translations",
-            post(handlers::audio_translations_handler),
-        )
-        .route("/v1/audio/speech", post(handlers::audio_tts_handler))
-        .route("/v1/images/generations", post(handlers::image_handler))
-        .route("/v1/images/edits", post(handlers::image_handler))
-        .route("/v1/create/rag", post(handlers::create_rag_handler))
-        .route("/v1/chunks", post(handlers::chunks_handler))
-        .route("/v1/models", get(handlers::models_handler))
-        .route("/v1/info", get(handlers::info_handler))
-        .route(
-            "/admin/servers/register",
-            post(handlers::admin::register_downstream_server_handler),
-        )
-        .route(
-            "/admin/servers/unregister",
-            post(handlers::admin::remove_downstream_server_handler),
-        )
-        .route(
-            "/admin/servers",
-            get(handlers::admin::list_downstream_servers_handler),
-        )
-        .nest_service(
-            "/",
-            ServeDir::new(&cli.web_ui).not_found_service(
+    let app =
+        Router::new()
+            .route("/v1/chat/completions", post(handlers::chat_handler))
+            .route("/v1/embeddings", post(handlers::embeddings_handler))
+            .route(
+                "/v1/audio/transcriptions",
+                post(handlers::audio_transcriptions_handler),
+            )
+            .route(
+                "/v1/audio/translations",
+                post(handlers::audio_translations_handler),
+            )
+            .route("/v1/audio/speech", post(handlers::audio_tts_handler))
+            .route("/v1/images/generations", post(handlers::image_handler))
+            .route("/v1/images/edits", post(handlers::image_handler))
+            .route("/v1/create/rag", post(handlers::create_rag_handler))
+            .route("/v1/chunks", post(handlers::chunks_handler))
+            .route("/v1/models", get(handlers::models_handler))
+            .route("/v1/info", get(handlers::info_handler))
+            .route(
+                "/admin/servers/register",
+                post(handlers::admin::register_downstream_server_handler),
+            )
+            .route(
+                "/admin/servers/unregister",
+                post(handlers::admin::remove_downstream_server_handler),
+            )
+            .route(
+                "/admin/servers",
+                get(handlers::admin::list_downstream_servers_handler),
+            )
+            .fallback_service(ServeDir::new(&cli.web_ui).not_found_service(
                 ServeDir::new(&cli.web_ui).append_index_html_on_directories(true),
-            ),
-        )
-        .layer(cors)
-        .layer(TraceLayer::new_for_http())
-        .layer(axum::middleware::from_fn(
-            |mut req: Request<Body>, next: axum::middleware::Next| async move {
-                // Generate request ID
-                let request_id = Uuid::new_v4().to_string();
+            ))
+            .layer(cors)
+            .layer(TraceLayer::new_for_http())
+            .layer(axum::middleware::from_fn(
+                |mut req: Request<Body>, next: axum::middleware::Next| async move {
+                    // Generate request ID
+                    let request_id = Uuid::new_v4().to_string();
 
-                // Add request ID to headers
-                req.headers_mut()
-                    .insert("x-request-id", HeaderValue::from_str(&request_id).unwrap());
+                    // Add request ID to headers
+                    req.headers_mut()
+                        .insert("x-request-id", HeaderValue::from_str(&request_id).unwrap());
 
-                // Add cancellation token
-                let cancel_token = CancellationToken::new();
-                req.extensions_mut().insert(cancel_token);
+                    // Add cancellation token
+                    let cancel_token = CancellationToken::new();
+                    req.extensions_mut().insert(cancel_token);
 
-                // Log request start
-                info!(target: "stdout", "Request started - ID: {}", request_id);
+                    // Log request start
+                    info!(target: "stdout", "Request started - ID: {}", request_id);
 
-                let response = next.run(req).await;
+                    let response = next.run(req).await;
 
-                // Log request completion
-                info!(target: "stdout", "Request completed - ID: {}", request_id);
+                    // Log request completion
+                    info!(target: "stdout", "Request completed - ID: {}", request_id);
 
-                response
-            },
-        ))
-        .with_state(state.clone());
+                    response
+                },
+            ))
+            .with_state(state.clone());
 
     // Create the listener
     let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| {
