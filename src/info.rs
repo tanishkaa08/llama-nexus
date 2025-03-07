@@ -3,7 +3,7 @@ use chat_prompts::PromptTemplateType;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct ServerInfo {
     #[serde(rename = "node_version", skip_serializing_if = "Option::is_none")]
     pub(crate) node: Option<String>,
@@ -11,7 +11,7 @@ pub(crate) struct ServerInfo {
     pub(crate) servers: HashMap<ServerId, ApiServer>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ApiServer {
     #[serde(rename = "type")]
     pub(crate) ty: String,
@@ -34,7 +34,7 @@ pub(crate) struct ApiServer {
     pub(crate) extras: HashMap<String, String>,
 }
 
-#[derive(Debug, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct ModelConfig {
     // model name
     name: String,

@@ -275,7 +275,7 @@ async fn shutdown_signal() {
 
 /// Application state
 pub(crate) struct AppState {
-    servers: Arc<RwLock<HashMap<ServerKind, ServerGroup>>>,
+    group_map: Arc<RwLock<HashMap<ServerKind, ServerGroup>>>,
     config: Arc<RwLock<Config>>,
     server_info: Arc<RwLock<ServerInfo>>,
     models: Arc<RwLock<HashMap<ServerId, Vec<endpoints::models::Model>>>>,
@@ -283,7 +283,7 @@ pub(crate) struct AppState {
 impl AppState {
     pub(crate) fn new(config: Config, server_info: ServerInfo) -> Self {
         Self {
-            servers: Arc::new(RwLock::new(HashMap::new())),
+            group_map: Arc::new(RwLock::new(HashMap::new())),
             config: Arc::new(RwLock::new(config)),
             server_info: Arc::new(RwLock::new(server_info)),
             models: Arc::new(RwLock::new(HashMap::new())),
@@ -292,7 +292,7 @@ impl AppState {
 
     pub(crate) async fn register_downstream_server(&self, server: Server) -> ServerResult<()> {
         if server.kind.contains(ServerKind::chat) {
-            self.servers
+            self.group_map
                 .write()
                 .await
                 .entry(ServerKind::chat)
@@ -301,7 +301,7 @@ impl AppState {
                 .await?;
         }
         if server.kind.contains(ServerKind::embeddings) {
-            self.servers
+            self.group_map
                 .write()
                 .await
                 .entry(ServerKind::embeddings)
@@ -310,7 +310,7 @@ impl AppState {
                 .await?;
         }
         if server.kind.contains(ServerKind::image) {
-            self.servers
+            self.group_map
                 .write()
                 .await
                 .entry(ServerKind::image)
@@ -319,7 +319,7 @@ impl AppState {
                 .await?;
         }
         if server.kind.contains(ServerKind::tts) {
-            self.servers
+            self.group_map
                 .write()
                 .await
                 .entry(ServerKind::tts)
@@ -328,7 +328,7 @@ impl AppState {
                 .await?;
         }
         if server.kind.contains(ServerKind::translate) {
-            self.servers
+            self.group_map
                 .write()
                 .await
                 .entry(ServerKind::translate)
@@ -337,7 +337,7 @@ impl AppState {
                 .await?;
         }
         if server.kind.contains(ServerKind::transcribe) {
-            self.servers
+            self.group_map
                 .write()
                 .await
                 .entry(ServerKind::transcribe)
@@ -348,14 +348,41 @@ impl AppState {
 
         // Push server info to external service if configured
         if let Some(push_url) = &self.config.read().await.server_info_push_url {
-            let server_info = self.server_info.read().await;
-            let client = reqwest::Client::new();
+            let server_info = self.server_info.read().await.clone();
 
-            if let Err(e) = client.post(push_url).json(&*server_info).send().await {
-                error!(
-                    target: "stdout",
-                    message = format!("Failed to push server info: {}", e)
-                );
+            // Retry up to 3 times to push the server info to the external service
+            let mut retry_count = 0;
+            let max_retries = 3;
+            let mut last_error = None;
+
+            info!(target: "stdout", "Push server info");
+
+            while retry_count < max_retries {
+                match reqwest::Client::new()
+                    .post(push_url)
+                    .json(&server_info)
+                    .send()
+                    .await
+                {
+                    Ok(_) => break,
+                    Err(e) => {
+                        retry_count += 1;
+                        last_error = Some(e);
+                        if retry_count < max_retries {
+                            // Wait a moment before retrying
+                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                        }
+                    }
+                }
+            }
+
+            if let Some(e) = last_error {
+                if retry_count >= max_retries {
+                    error!(
+                        target: "stdout",
+                        message = format!("Failed to push server info after {} attempts: {}", max_retries, e)
+                    );
+                }
             }
         }
 
@@ -370,12 +397,21 @@ impl AppState {
 
         // unregister the server from the servers
         {
-            let mut servers = self.servers.write().await;
-            let server_kind_s = server_id.as_ref().split("-server-").next().unwrap();
-            for kind in server_kind_s.split("-") {
+            // parse server kind from server id
+            let kinds = server_id
+                .as_ref()
+                .split("-server-")
+                .next()
+                .unwrap()
+                .split("-")
+                .collect::<Vec<&str>>();
+
+            let group_map = self.group_map.read().await;
+
+            for kind in kinds {
                 let kind = ServerKind::from_str(kind).unwrap();
-                if let Some(servers) = servers.get_mut(&kind) {
-                    servers.unregister(server_id.as_ref()).await?;
+                if let Some(group) = group_map.get(&kind) {
+                    group.unregister(server_id.as_ref()).await?;
                     info!(
                         target: "stdout",
                         message = format!("Unregistered {} server: {}", &kind, server_id.as_ref())
@@ -388,14 +424,12 @@ impl AppState {
             }
         }
 
-        // remove the server info from the server_info
-        {
+        if found {
+            // remove the server info from the server_info
             let mut server_info = self.server_info.write().await;
             server_info.servers.remove(server_id.as_ref());
-        }
 
-        // remove the server from the models
-        {
+            // remove the server from the models
             let mut models = self.models.write().await;
             models.remove(server_id.as_ref());
         }
@@ -413,7 +447,7 @@ impl AppState {
     pub(crate) async fn list_downstream_servers(
         &self,
     ) -> ServerResult<HashMap<ServerKind, Vec<Server>>> {
-        let servers = self.servers.read().await;
+        let servers = self.group_map.read().await;
 
         let mut server_groups = HashMap::new();
         for (kind, group) in servers.iter() {
@@ -437,7 +471,7 @@ impl AppState {
     }
 
     pub(crate) async fn check_server_health(&self) -> ServerResult<()> {
-        if !self.servers.read().await.is_empty() {
+        if !self.group_map.read().await.is_empty() {
             let mut unhealthy_servers = Vec::new();
 
             // Check health status of downstream servers
@@ -448,11 +482,11 @@ impl AppState {
             //   2.3 If two or more downstream servers have different types but the same URL, only perform one health check
             // 3. Remove unhealthy downstream servers
             {
-                let servers = self.servers.read().await;
+                let group_map = self.group_map.read().await;
 
                 // check health of unique servers
                 let mut unique_server_ids = HashSet::new();
-                for (kind, group) in servers.iter() {
+                for (kind, group) in group_map.iter() {
                     if !group.is_empty().await {
                         let servers = group.servers.read().await;
                         for server_lock in servers.iter() {
@@ -487,42 +521,38 @@ impl AppState {
                 }
             }
 
-            // collect the healthy servers by kind
-            let mut healthy_servers: HashMap<ServerKind, Vec<String>> = HashMap::new();
-            {
-                let servers = self.servers.read().await;
-                for (kind, group) in servers.iter() {
-                    if group.is_empty().await {
-                        warn!(target: "stdout", "No {} servers available after health check", kind);
+            // Push the healthy servers to the external service if configured
+            if let Some(push_url) = &self.config.read().await.server_health_push_url {
+                // collect the healthy servers by kind
+                let mut healthy_servers: HashMap<ServerKind, Vec<String>> = HashMap::new();
+                {
+                    let group_map = self.group_map.read().await;
+                    for (kind, group) in group_map.iter() {
+                        if group.is_empty().await {
+                            warn!(target: "stdout", "No {} servers available after health check", kind);
+                        }
+
+                        healthy_servers.insert(
+                            *kind,
+                            group.healthy_servers.read().await.iter().cloned().collect(),
+                        );
                     }
-
-                    healthy_servers.insert(
-                        *kind,
-                        group.healthy_servers.read().await.iter().cloned().collect(),
-                    );
                 }
+
+                // Send the healthy servers to the external service
+                reqwest::Client::new()
+                    .post(push_url)
+                    .json(&healthy_servers)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        let err_msg = format!("Failed to send health check result: {}", e);
+
+                        error!(target: "stdout", "{}", err_msg);
+
+                        ServerError::Operation(err_msg)
+                    })?;
             }
-
-            // Send the healthy servers to the external service
-            reqwest::Client::new()
-                .post(
-                    self.config
-                        .read()
-                        .await
-                        .server_health_push_url
-                        .as_deref()
-                        .unwrap(),
-                )
-                .json(&healthy_servers)
-                .send()
-                .await
-                .map_err(|e| {
-                    let err_msg = format!("Failed to send health check result: {}", e);
-
-                    error!(target: "stdout", "{}", err_msg);
-
-                    ServerError::Operation(err_msg)
-                })?;
         } else {
             warn!(target: "stdout", "No servers registered, skipping health check");
         }

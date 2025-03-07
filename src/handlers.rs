@@ -70,7 +70,7 @@ pub(crate) async fn chat(
 
     // get the chat server
     let chat_server_base_url = {
-        let servers = state.servers.read().await;
+        let servers = state.group_map.read().await;
         let chat_servers = match servers.get(&ServerKind::chat) {
             Some(servers) => servers,
             None => {
@@ -240,7 +240,7 @@ pub(crate) async fn embeddings_handler(
     );
 
     // get the embeddings server
-    let servers = state.servers.read().await;
+    let servers = state.group_map.read().await;
     let embeddings_servers = match servers.get(&ServerKind::embeddings) {
         Some(servers) => servers,
         None => {
@@ -399,7 +399,7 @@ pub(crate) async fn audio_transcriptions_handler(
 
     // get the transcribe server
     let transcribe_server_base_url = {
-        let servers = state.servers.read().await;
+        let servers = state.group_map.read().await;
         let transcribe_servers = match servers.get(&ServerKind::transcribe) {
             Some(servers) => servers,
             None => {
@@ -554,7 +554,7 @@ pub(crate) async fn audio_translations_handler(
 
     // get the transcribe server
     let translate_server_base_url = {
-        let servers = state.servers.read().await;
+        let servers = state.group_map.read().await;
         let translate_servers = match servers.get(&ServerKind::translate) {
             Some(servers) => servers,
             None => {
@@ -708,7 +708,7 @@ pub(crate) async fn audio_tts_handler(
 
     // get the tts server
     let tts_server_base_url = {
-        let servers = state.servers.read().await;
+        let servers = state.group_map.read().await;
         let tts_servers = match servers.get(&ServerKind::tts) {
             Some(servers) => servers,
             None => {
@@ -861,7 +861,7 @@ pub(crate) async fn image_handler(
 
     // get the image server
     let image_server_base_url = {
-        let servers = state.servers.read().await;
+        let servers = state.group_map.read().await;
         let image_servers = match servers.get(&ServerKind::image) {
             Some(servers) => servers,
             None => {
@@ -1361,7 +1361,7 @@ pub(crate) async fn create_rag_handler(
         };
 
         // get the embeddings server
-        let servers = state.servers.read().await;
+        let servers = state.group_map.read().await;
         let embeddings_servers = match servers.get(&ServerKind::embeddings) {
             Some(servers) => servers,
             None => {
@@ -1805,12 +1805,14 @@ pub(crate) mod admin {
             .unwrap_or("unknown")
             .to_string();
 
-        state.unregister_downstream_server(&server_id.id).await?;
+        state
+            .unregister_downstream_server(&server_id.server_id)
+            .await?;
 
         // create a response with status code 200. Content-Type is JSON
         let json_body = serde_json::json!({
             "message": "Server unregistered successfully.",
-            "id": server_id.id,
+            "id": server_id.server_id,
         });
 
         let response = Response::builder()

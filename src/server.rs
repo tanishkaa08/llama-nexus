@@ -20,7 +20,7 @@ pub(crate) type ServerId = String;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct ServerIdToRemove {
-    pub id: ServerId,
+    pub server_id: ServerId,
 }
 
 /// Represents the health status of a server
@@ -348,7 +348,7 @@ fn test_deserialize_server_kind() {
 pub(crate) struct ServerGroup {
     pub(crate) servers: RwLock<Vec<RwLock<Server>>>,
     pub(crate) healthy_servers: RwLock<HashSet<ServerId>>,
-    pub(crate) ty: ServerKind,
+    ty: ServerKind,
 }
 impl ServerGroup {
     pub(crate) fn new(ty: ServerKind) -> Self {
@@ -359,7 +359,7 @@ impl ServerGroup {
         }
     }
 
-    pub(crate) async fn register(&mut self, server: Server) -> ServerResult<()> {
+    pub(crate) async fn register(&self, server: Server) -> ServerResult<()> {
         // check if the server is already registered
         if self.healthy_servers.read().await.contains(&server.id) {
             let err_msg = format!("Server already registered: {}", server.url);
@@ -373,9 +373,10 @@ impl ServerGroup {
         Ok(())
     }
 
-    pub(crate) async fn unregister(&mut self, server_id: impl AsRef<str>) -> ServerResult<()> {
+    pub(crate) async fn unregister(&self, server_id: impl AsRef<str>) -> ServerResult<()> {
         let id_to_remove = server_id.as_ref();
 
+        // locate the server to remove
         let idx_to_remove = {
             let servers = self.servers.read().await;
 
@@ -392,12 +393,13 @@ impl ServerGroup {
             idx_to_remove
         };
 
-        // Remove the server if found
+        // Remove the server from server list if found
         if let Some(idx) = idx_to_remove {
             let mut servers = self.servers.write().await;
             servers.swap_remove(idx);
         }
 
+        // Remove the server from the healthy server set if found
         if !self.healthy_servers.write().await.remove(id_to_remove) {
             let err_msg = format!("Server not found: {}", id_to_remove);
             warn!(target: "stdout", "{}", &err_msg);
@@ -405,6 +407,11 @@ impl ServerGroup {
         }
 
         Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub(crate) async fn ty(&self) -> ServerKind {
+        self.ty
     }
 
     pub(crate) async fn is_empty(&self) -> bool {
