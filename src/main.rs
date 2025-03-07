@@ -492,6 +492,10 @@ impl AppState {
             {
                 let servers = self.servers.read().await;
                 for (kind, group) in servers.iter() {
+                    if group.is_empty().await {
+                        warn!(target: "stdout", "No {} servers available after health check", kind);
+                    }
+
                     healthy_servers.insert(
                         *kind,
                         group.healthy_servers.read().await.iter().cloned().collect(),
