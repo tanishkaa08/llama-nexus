@@ -14,7 +14,7 @@ use axum::{
     http::{self, HeaderValue, Request},
     routing::{get, post, Router},
 };
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use config::Config;
 use error::{ServerError, ServerResult};
 use futures_util::stream::{self, StreamExt};
@@ -46,9 +46,6 @@ pub(crate) static HEALTH_CHECK_INTERVAL: OnceCell<u64> = OnceCell::new();
 
 #[derive(Debug, Parser)]
 struct Cli {
-    /// Path to the config file
-    #[arg(long, default_value = "config.toml", value_parser = clap::value_parser!(String))]
-    config: String,
     /// Enable RAG
     #[arg(long, default_value = "false")]
     rag: bool,
@@ -58,12 +55,46 @@ struct Cli {
     /// Health check interval for downstream servers in seconds
     #[arg(long, default_value = "60")]
     check_health_interval: u64,
-    /// Gaia domain
-    #[arg(long, value_parser = clap::value_parser!(String))]
-    gaia_domain: Option<String>,
-    /// Gaia device ID
-    #[arg(long, value_parser = clap::value_parser!(String))]
-    gaia_device_id: Option<String>,
+    /// Subcommands
+    #[command(subcommand)]
+    command: Command,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Configuration mode - use configuration file
+    Config {
+        /// Path to the config file
+        #[arg(long, default_value = "config.toml", value_parser = clap::value_parser!(String))]
+        file: String,
+    },
+    /// Gaia mode - use Gaia settings
+    Gaia {
+        /// Gaia domain
+        #[arg(long, value_parser = clap::value_parser!(String), required = true)]
+        domain: String,
+        /// Gaia device ID
+        #[arg(long, value_parser = clap::value_parser!(String), required = true)]
+        device_id: String,
+        /// Vector database URL
+        #[arg(long, default_value = "http://localhost:6333")]
+        vdb_url: String,
+        /// Vector database collection names
+        #[arg(long, default_value = "default", value_delimiter = ',')]
+        vdb_collection_name: Vec<String>,
+        /// Vector database result limit
+        #[arg(long, default_value = "1")]
+        vdb_limit: u64,
+        /// Vector database score threshold
+        #[arg(long, default_value = "0.5")]
+        vdb_score_threshold: f32,
+        /// Host address to bind to
+        #[arg(long, default_value = "127.0.0.1")]
+        host: String,
+        /// Port to listen on
+        #[arg(long, default_value = "9068")]
+        port: u16,
+    },
 }
 
 #[tokio::main]
@@ -90,35 +121,70 @@ async fn main() -> ServerResult<()> {
         .allow_headers(Any)
         .allow_origin(Any);
 
-    // load the config
-    let config = match Config::load(&cli.config) {
-        Ok(mut config) => {
+    // Load the config based on the command
+    let config = match &cli.command {
+        Command::Config { file } => {
+            // Load config from file
+            match Config::load(file) {
+                Ok(mut config) => {
+                    if cli.rag {
+                        config.rag.enable = true;
+                        info!(target: "stdout", "RAG is enabled");
+                    }
+                    config
+                }
+                Err(e) => {
+                    let err_msg = format!("Failed to load config: {}", e);
+                    error!(target: "stdout", "{}", err_msg);
+                    return Err(ServerError::FailedToLoadConfig(err_msg));
+                }
+            }
+        }
+        Command::Gaia {
+            domain,
+            device_id,
+            host,
+            port,
+            vdb_url,
+            vdb_collection_name,
+            vdb_limit,
+            vdb_score_threshold,
+        } => {
+            // Use default config for gaia command
+            info!(target: "stdout", "Using default configuration for gaia command");
+            let mut config = Config::default();
+
+            // set the server info push url
+            let server_info_url =
+                format!("https://hub.domain.{}/device-info/{}", domain, device_id);
+            config.server_info_push_url = Some(server_info_url);
+
+            // set the server health push url
+            let server_health_url =
+                format!("https://hub.domain.{}/device-health/{}", domain, device_id);
+            config.server_health_push_url = Some(server_health_url);
+
             if cli.rag {
                 config.rag.enable = true;
                 info!(target: "stdout", "RAG is enabled");
             }
 
-            // Set Gaia domain and device ID from command line if provided
-            if let (Some(domain), Some(device_id)) = (&cli.gaia_domain, &cli.gaia_device_id) {
-                // set the server info push url
-                let server_info_url =
-                    format!("https://hub.domain.{}/device-info/{}", domain, device_id);
-                config.server_info_push_url = Some(server_info_url);
+            // Set the VDB configuration
+            info!(target: "stdout", "VDB URL: {}", vdb_url);
+            config.rag.vector_db.url = vdb_url.clone();
+            info!(target: "stdout", "VDB Collections: {:?}", vdb_collection_name);
+            config.rag.vector_db.collection_name = vdb_collection_name.clone();
+            info!(target: "stdout", "VDB Limit: {}", vdb_limit);
+            config.rag.vector_db.limit = *vdb_limit;
+            info!(target: "stdout", "VDB Score Threshold: {}", vdb_score_threshold);
+            config.rag.vector_db.score_threshold = *vdb_score_threshold;
 
-                // set the server health push url
-                let server_health_url =
-                    format!("https://hub.domain.{}/device-health/{}", domain, device_id);
-                config.server_health_push_url = Some(server_health_url);
-            }
+            // Set the host and port
+            config.server.host = host.clone();
+            config.server.port = *port;
+            info!(target: "stdout", "Server will listen on {}:{}", host, port);
 
             config
-        }
-        Err(e) => {
-            let err_msg = format!("Failed to load config: {}", e);
-
-            error!(target: "stdout", "{}", err_msg);
-
-            return Err(ServerError::FailedToLoadConfig(err_msg));
         }
     };
 
