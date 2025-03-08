@@ -1362,14 +1362,18 @@ pub(crate) mod admin {
 
         let server_info_url = format!("{}/v1/info", server_url);
         let response = client.get(&server_info_url).send().await.map_err(|e| {
-            let err_msg = format!("Failed to verify the downstream server: {}", e);
+            let err_msg = format!(
+                "Failed to verify the {} downstream server: {}",
+                server_kind, e
+            );
             dual_error!("{} - request_id: {}", err_msg, request_id);
             ServerError::Operation(err_msg)
         })?;
 
         if !response.status().is_success() {
             let err_msg = format!(
-                "Failed to verify the downstream server: {}",
+                "Failed to verify the {} downstream server: {}",
+                server_kind,
                 response.status()
             );
             dual_error!("{} - request_id: {}", err_msg, request_id);
