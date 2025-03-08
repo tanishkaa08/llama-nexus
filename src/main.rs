@@ -35,11 +35,52 @@ use tower_http::{
     services::ServeDir,
     trace::TraceLayer,
 };
-use tracing::{debug, error, info, warn, Level};
+use tracing::Level;
 use uuid::Uuid;
 
 // Global health check interval for downstream servers in seconds
 pub(crate) static HEALTH_CHECK_INTERVAL: OnceCell<u64> = OnceCell::new();
+// Global log configuration
+static LOG_DESTINATION: OnceCell<String> = OnceCell::new();
+
+// Helper macro for dual logging (to both stdout and log file)
+#[macro_export]
+macro_rules! dual_log {
+    ($level:expr, $($arg:tt)+) => {{
+        let msg = format!($($arg)+);
+        if $crate::LOG_DESTINATION.get().map_or(false, |d| d == "both") {
+            println!("{}: {}", $level, msg);
+        }
+        match $level {
+            "INFO" => tracing::info!("{}", msg),
+            "WARN" => tracing::warn!("{}", msg),
+            "ERROR" => tracing::error!("{}", msg),
+            "DEBUG" => tracing::debug!("{}", msg),
+            _ => tracing::trace!("{}", msg),
+        }
+    }};
+}
+
+// Convenience macros for each log level
+#[macro_export]
+macro_rules! dual_info {
+    ($($arg:tt)+) => { $crate::dual_log!("INFO", $($arg)+) };
+}
+
+#[macro_export]
+macro_rules! dual_warn {
+    ($($arg:tt)+) => { $crate::dual_log!("WARN", $($arg)+) };
+}
+
+#[macro_export]
+macro_rules! dual_error {
+    ($($arg:tt)+) => { $crate::dual_log!("ERROR", $($arg)+) };
+}
+
+#[macro_export]
+macro_rules! dual_debug {
+    ($($arg:tt)+) => { $crate::dual_log!("DEBUG", $($arg)+) };
+}
 
 #[derive(Debug, Parser)]
 struct Cli {
@@ -55,6 +96,12 @@ struct Cli {
     /// Root path for the Web UI files
     #[arg(long, default_value = "chatbot-ui")]
     web_ui: PathBuf,
+    /// Log destination: "stdout", "file", or "both"
+    #[arg(long, default_value = "stdout")]
+    log_destination: String,
+    /// Log file path (required when log_destination is "file" or "both")
+    #[arg(long)]
+    log_file: Option<String>,
     /// Subcommands
     #[command(subcommand)]
     command: Command,
@@ -108,21 +155,20 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> ServerResult<()> {
-    // Initialize logging
-    tracing_subscriber::fmt()
-        .with_target(false)
-        .with_level(true)
-        .with_file(true)
-        .with_line_number(true)
-        .with_thread_ids(true)
-        .with_max_level(get_log_level_from_env())
-        .init();
-
     // parse the command line arguments
     let cli = Cli::parse();
 
+    // Validate log configuration
+    if (cli.log_destination == "file" || cli.log_destination == "both") && cli.log_file.is_none() {
+        eprintln!("Error: --log-file is required when --log-destination is 'file' or 'both'");
+        return Err(ServerError::Operation("Missing log file path".to_string()));
+    }
+
+    // Initialize logging based on destination
+    init_logging(&cli.log_destination, cli.log_file.as_deref())?;
+
     // log the version of the server
-    info!(target: "stdout", "Version: {}", env!("CARGO_PKG_VERSION"));
+    dual_info!("Version: {}", env!("CARGO_PKG_VERSION"));
 
     // Set up CORS
     let cors = CorsLayer::new()
@@ -138,13 +184,18 @@ async fn main() -> ServerResult<()> {
                 Ok(mut config) => {
                     if cli.rag {
                         config.rag.enable = true;
-                        info!(target: "stdout", "RAG is enabled");
+                        dual_info!("RAG is enabled");
                     }
+
+                    // // Apply CLI log configuration to config
+                    // config.logging.destination = cli.log_destination.clone();
+                    // config.logging.file_path = cli.log_file.clone();
+
                     config
                 }
                 Err(e) => {
                     let err_msg = format!("Failed to load config: {}", e);
-                    error!(target: "stdout", "{}", err_msg);
+                    dual_error!("{}", err_msg);
                     return Err(ServerError::FailedToLoadConfig(err_msg));
                 }
             }
@@ -163,8 +214,12 @@ async fn main() -> ServerResult<()> {
             rag_policy,
         } => {
             // Use default config for gaia command
-            info!(target: "stdout", "Using default configuration for gaia command");
+            dual_info!("Using default configuration for gaia command");
             let mut config = Config::default();
+
+            // // Apply CLI log configuration to config
+            // config.logging.destination = cli.log_destination.clone();
+            // config.logging.file_path = cli.log_file.clone();
 
             // set the server info push url
             let server_info_url =
@@ -178,33 +233,33 @@ async fn main() -> ServerResult<()> {
 
             if cli.rag {
                 config.rag.enable = true;
-                info!(target: "stdout", "RAG is enabled");
+                dual_info!("RAG is enabled");
             }
 
             // Set the RAG configuration
             if rag_prompt.is_some() {
                 config.rag.prompt = rag_prompt.clone();
-                info!(target: "stdout", "RAG Prompt: {}", rag_prompt.as_ref().unwrap());
+                dual_info!("RAG Prompt: {}", rag_prompt.as_ref().unwrap());
             }
-            info!(target: "stdout", "RAG Context Window: {}", rag_context_window);
+            dual_info!("RAG Context Window: {}", rag_context_window);
             config.rag.context_window = *rag_context_window;
-            info!(target: "stdout", "RAG Policy: {}", rag_policy.to_string());
+            dual_info!("RAG Policy: {}", rag_policy.to_string());
             config.rag.rag_policy = *rag_policy;
 
             // Set the VDB configuration
-            info!(target: "stdout", "VDB URL: {}", vdb_url);
+            dual_info!("VDB URL: {}", vdb_url);
             config.rag.vector_db.url = vdb_url.clone();
-            info!(target: "stdout", "VDB Collections: {:?}", vdb_collection_name);
+            dual_info!("VDB Collections: {:?}", vdb_collection_name);
             config.rag.vector_db.collection_name = vdb_collection_name.clone();
-            info!(target: "stdout", "VDB Limit: {}", vdb_limit);
+            dual_info!("VDB Limit: {}", vdb_limit);
             config.rag.vector_db.limit = *vdb_limit;
-            info!(target: "stdout", "VDB Score Threshold: {}", vdb_score_threshold);
+            dual_info!("VDB Score Threshold: {}", vdb_score_threshold);
             config.rag.vector_db.score_threshold = *vdb_score_threshold;
 
             // Set the host and port
             config.server.host = host.clone();
             config.server.port = *port;
-            info!(target: "stdout", "Server will listen on {}:{}", host, port);
+            dual_info!("Server will listen on {}:{}", host, port);
 
             config
         }
@@ -215,7 +270,7 @@ async fn main() -> ServerResult<()> {
         .set(cli.check_health_interval)
         .map_err(|e| {
             let err_msg = format!("Failed to set health check interval: {}", e);
-            error!(target: "stdout", "{}", err_msg);
+            dual_error!("{}", err_msg);
             ServerError::Operation(err_msg)
         })?;
 
@@ -232,7 +287,7 @@ async fn main() -> ServerResult<()> {
         let node = std::env::var("NODE_VERSION").ok();
         if node.is_some() {
             // log node version
-            info!(target: "stdout", "gaianet_node_version: {}", node.as_ref().unwrap());
+            dual_info!("gaianet_node_version: {}", node.as_ref().unwrap());
         }
 
         server_info.node = node;
@@ -242,7 +297,7 @@ async fn main() -> ServerResult<()> {
 
     // Start the health check task if enabled
     if cli.check_health {
-        info!(target: "stdout", "Health check is enabled");
+        dual_info!("Health check is enabled");
         Arc::clone(&state).start_health_check_task().await;
     }
 
@@ -297,12 +352,12 @@ async fn main() -> ServerResult<()> {
                     req.extensions_mut().insert(cancel_token);
 
                     // Log request start
-                    info!(target: "stdout", "Request started - ID: {}", request_id);
+                    dual_info!("Request started - ID: {}", request_id);
 
                     let response = next.run(req).await;
 
                     // Log request completion
-                    info!(target: "stdout", "Request completed - ID: {}", request_id);
+                    dual_info!("Request completed - ID: {}", request_id);
 
                     response
                 },
@@ -313,11 +368,11 @@ async fn main() -> ServerResult<()> {
     let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| {
         let err_msg = format!("Failed to bind to address: {}", e);
 
-        error!(target: "stdout", "{}", err_msg);
+        dual_error!("{}", err_msg);
 
         ServerError::Operation(err_msg)
     })?;
-    info!(target: "stdout", "Listening on {}", addr);
+    dual_info!("Listening on {}", addr);
 
     // Set up graceful shutdown
     let server =
@@ -326,12 +381,12 @@ async fn main() -> ServerResult<()> {
     // Start the server
     match server.await {
         Ok(_) => {
-            info!(target: "stdout", "Server shutdown completed");
+            dual_info!("Server shutdown completed");
             Ok(())
         }
         Err(e) => {
             let err_msg = format!("Server failed: {}", e);
-            error!(target: "stdout", "{}", err_msg);
+            dual_error!("{}", err_msg);
             Err(ServerError::Operation(err_msg))
         }
     }
@@ -341,13 +396,13 @@ async fn shutdown_signal() {
     let ctrl_c = async {
         signal::ctrl_c()
             .await
-            .expect("failed to install Ctrl+C handler");
+            .expect("Failed to install Ctrl+C handler");
     };
 
     #[cfg(unix)]
     let terminate = async {
         signal::unix::signal(signal::unix::SignalKind::terminate())
-            .expect("failed to install signal handler")
+            .expect("Failed to install signal handler")
             .recv()
             .await;
     };
@@ -357,10 +412,10 @@ async fn shutdown_signal() {
 
     tokio::select! {
         _ = ctrl_c => {
-            info!(target: "stdout", "Received Ctrl+C, starting graceful shutdown");
+            dual_info!("Received Ctrl+C, starting graceful shutdown");
         },
         _ = terminate => {
-            info!(target: "stdout", "Received SIGTERM, starting graceful shutdown");
+            dual_info!("Received SIGTERM, starting graceful shutdown");
         },
     }
 }
@@ -447,7 +502,7 @@ impl AppState {
             let max_retries = 3;
             let mut last_error = None;
 
-            info!(target: "stdout", "Push server info");
+            dual_info!("Push server info");
 
             while retry_count < max_retries {
                 match reqwest::Client::new()
@@ -470,9 +525,10 @@ impl AppState {
 
             if let Some(e) = last_error {
                 if retry_count >= max_retries {
-                    error!(
-                        target: "stdout",
-                        message = format!("Failed to push server info after {} attempts: {}", max_retries, e)
+                    dual_error!(
+                        "Failed to push server info after {} attempts: {}",
+                        max_retries,
+                        e
                     );
                 }
             }
@@ -504,10 +560,7 @@ impl AppState {
                 let kind = ServerKind::from_str(kind).unwrap();
                 if let Some(group) = group_map.get(&kind) {
                     group.unregister(server_id.as_ref()).await?;
-                    info!(
-                        target: "stdout",
-                        message = format!("Unregistered {} server: {}", &kind, server_id.as_ref())
-                    );
+                    dual_info!("Unregistered {} server: {}", &kind, server_id.as_ref());
 
                     if !found {
                         found = true;
@@ -587,17 +640,14 @@ impl AppState {
                             if !unique_server_ids.contains(&server.id)
                                 && unique_server_ids.contains(&server.url)
                             {
-                                info!(target: "stdout", "Checking health of {}", &server.id);
+                                dual_info!("Checking health of {}", &server.id);
 
                                 unique_server_ids.insert(server.id.clone());
                                 unique_server_ids.insert(server.url.clone());
 
                                 let is_healthy = server.check_health().await;
                                 if !is_healthy {
-                                    warn!(
-                                        target: "stdout",
-                                        message = format!("{} server {} is unhealthy", kind, &server.id)
-                                    );
+                                    dual_warn!("{} server {} is unhealthy", kind, &server.id);
                                     unhealthy_servers.push(server.id.clone());
                                 }
                             }
@@ -621,7 +671,7 @@ impl AppState {
                     let group_map = self.server_group.read().await;
                     for (kind, group) in group_map.iter() {
                         if group.is_empty().await {
-                            warn!(target: "stdout", "No {} servers available after health check", kind);
+                            dual_warn!("No {} servers available after health check", kind);
                         }
 
                         healthy_servers.insert(
@@ -640,13 +690,13 @@ impl AppState {
                     .map_err(|e| {
                         let err_msg = format!("Failed to send health check result: {}", e);
 
-                        error!(target: "stdout", "{}", err_msg);
+                        dual_error!("{}", err_msg);
 
                         ServerError::Operation(err_msg)
                     })?;
             }
         } else {
-            warn!(target: "stdout", "No servers registered, skipping health check");
+            dual_warn!("No servers registered, skipping health check");
         }
 
         Ok(())
@@ -658,18 +708,115 @@ impl AppState {
 
         tokio::spawn(async move {
             loop {
-                debug!(target: "stdout", "Starting health check");
+                dual_debug!("Starting health check");
 
                 if let Err(e) = self.check_server_health().await {
-                    error!(
-                        target: "stdout",
-                        message = format!("Health check error: {}", e)
-                    );
+                    dual_error!("Health check error: {}", e);
                 }
 
                 tokio::time::sleep(check_interval).await;
             }
         });
+    }
+}
+
+/// Initialize logging based on the specified destination
+fn init_logging(destination: &str, file_path: Option<&str>) -> ServerResult<()> {
+    // Store the log destination for later use
+    LOG_DESTINATION.set(destination.to_string()).map_err(|_| {
+        let err_msg = "Failed to set log destination".to_string();
+        eprintln!("{}", err_msg);
+        ServerError::Operation(err_msg)
+    })?;
+
+    let log_level = get_log_level_from_env();
+
+    match destination {
+        "stdout" => {
+            // Terminal output preserves colors
+            tracing_subscriber::fmt()
+                .with_target(false)
+                .with_level(true)
+                .with_file(true)
+                .with_line_number(true)
+                .with_thread_ids(true)
+                .with_max_level(log_level)
+                .init();
+            Ok(())
+        }
+        "file" => {
+            if let Some(path) = file_path {
+                let file = std::fs::File::create(path).map_err(|e| {
+                    let err_msg = format!("Failed to create log file: {}", e);
+                    eprintln!("{}", err_msg);
+                    ServerError::Operation(err_msg)
+                })?;
+
+                // File output disables ANSI colors
+                tracing_subscriber::fmt()
+                    .with_target(false)
+                    .with_level(true)
+                    .with_file(true)
+                    .with_line_number(true)
+                    .with_thread_ids(true)
+                    .with_max_level(log_level)
+                    .with_writer(file)
+                    .with_ansi(false) // Disable ANSI colors
+                    .init();
+                Ok(())
+            } else {
+                Err(ServerError::Operation("Missing log file path".to_string()))
+            }
+        }
+        "both" => {
+            if let Some(path) = file_path {
+                // Create directory if it doesn't exist
+                if let Some(parent) = std::path::Path::new(path).parent() {
+                    if !parent.exists() {
+                        std::fs::create_dir_all(parent).map_err(|e| {
+                            let err_msg = format!("Failed to create directory for log file: {}", e);
+                            eprintln!("{}", err_msg);
+                            ServerError::Operation(err_msg)
+                        })?;
+                    }
+                }
+
+                // Create file appender and disable colors
+                let file_appender = tracing_appender::rolling::never(
+                    std::path::Path::new(path)
+                        .parent()
+                        .unwrap_or_else(|| std::path::Path::new(".")),
+                    std::path::Path::new(path).file_name().unwrap_or_default(),
+                );
+                let (non_blocking, _guard) = tracing_appender::non_blocking(file_appender);
+
+                // Configure subscriber, disable ANSI colors
+                tracing_subscriber::fmt()
+                    .with_target(false)
+                    .with_level(true)
+                    .with_file(true)
+                    .with_line_number(true)
+                    .with_thread_ids(true)
+                    .with_max_level(log_level)
+                    .with_writer(non_blocking)
+                    .with_ansi(false) // Disable ANSI colors
+                    .init();
+
+                println!("Logging to both stdout and file: {}", path);
+
+                Ok(())
+            } else {
+                Err(ServerError::Operation("Missing log file path".to_string()))
+            }
+        }
+        _ => {
+            let err_msg = format!(
+                "Invalid log destination: {}. Valid values are 'stdout', 'file', or 'both'",
+                destination
+            );
+            eprintln!("{}", err_msg);
+            Err(ServerError::Operation(err_msg))
+        }
     }
 }
 

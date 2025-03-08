@@ -1,4 +1,8 @@
-use crate::error::{ServerError, ServerResult};
+use crate::{
+    dual_error, dual_warn,
+    error::{ServerError, ServerResult},
+    HEALTH_CHECK_INTERVAL,
+};
 use async_trait::async_trait;
 use axum::http::Uri;
 use bitflags::bitflags;
@@ -9,9 +13,6 @@ use std::{
     time::{Duration, SystemTime},
 };
 use tokio::sync::RwLock;
-use tracing::{error, warn};
-
-use crate::HEALTH_CHECK_INTERVAL;
 
 /// Timeout duration for health checks (in seconds)
 const TIMEOUT: u64 = 10;
@@ -114,7 +115,7 @@ impl Server {
             Ok(response) => {
                 // Consider server healthy if response is timeout (408)
                 if response.status() == reqwest::StatusCode::REQUEST_TIMEOUT {
-                    warn!(target: "stdout", "Health check: {} server {} is in use", self.kind, self.id);
+                    dual_warn!("Health check: {} server {} is in use", self.kind, self.id);
                     true
                 } else {
                     response.status().is_success()
@@ -122,7 +123,7 @@ impl Server {
             }
             Err(e) => {
                 // Consider server healthy if error is timeout
-                warn!(target: "stdout", "Health check: {} server {} is in use", self.kind, self.id);
+                dual_warn!("Health check: {} server {} is in use", self.kind, self.id);
                 e.is_timeout()
             }
         };
@@ -363,7 +364,7 @@ impl ServerGroup {
         // check if the server is already registered
         if self.healthy_servers.read().await.contains(&server.id) {
             let err_msg = format!("Server already registered: {}", server.url);
-            warn!(target: "stdout", "{}", &err_msg);
+            dual_warn!("{}", &err_msg);
             return Err(ServerError::Operation(err_msg));
         }
 
@@ -402,7 +403,7 @@ impl ServerGroup {
         // Remove the server from the healthy server set if found
         if !self.healthy_servers.write().await.remove(id_to_remove) {
             let err_msg = format!("Server not found: {}", id_to_remove);
-            warn!(target: "stdout", "{}", &err_msg);
+            dual_warn!("{}", &err_msg);
             return Err(ServerError::Operation(err_msg));
         }
 
@@ -424,7 +425,7 @@ impl RoutingPolicy for ServerGroup {
         let servers = self.servers.read().await;
         if servers.is_empty() {
             let err_msg = format!("No {} server found", self.ty);
-            error!(target: "stdout", "{}", &err_msg);
+            dual_error!("{}", &err_msg);
             return Err(ServerError::NotFoundServer(self.ty.to_string()));
         }
 

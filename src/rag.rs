@@ -1,4 +1,5 @@
 use crate::{
+    dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
     AppState,
 };
@@ -25,7 +26,6 @@ use std::{
 };
 use text_splitter::{MarkdownSplitter, TextSplitter};
 use tokio_util::sync::CancellationToken;
-use tracing::{debug, error, info, warn};
 
 pub(crate) async fn chat(
     State(state): State<Arc<AppState>>,
@@ -39,11 +39,7 @@ pub(crate) async fn chat(
         .unwrap_or("unknown")
         .to_string();
 
-    info!(
-        target: "stdout",
-        request_id = %request_id,
-        message = "Received a new chat request"
-    );
+    dual_info!("Received a new chat request - request_id: {}", request_id);
 
     // qdrant config
     let qdrant_config_vec =
@@ -51,7 +47,11 @@ pub(crate) async fn chat(
             Ok(qdrant_config_vec) => qdrant_config_vec,
             Err(e) => {
                 let err_msg = format!("Failed to get the VectorDB config: {}", e);
-                error!(target: "stdout", request_id = %request_id, message = %err_msg);
+                dual_error!(
+                    "Failed to get the VectorDB config: {} - request_id: {}",
+                    e,
+                    request_id
+                );
                 return Err(ServerError::Operation(err_msg));
             }
         };
@@ -68,7 +68,11 @@ pub(crate) async fn chat(
     .await?;
 
     // log retrieve object
-    debug!(target: "stdout", request_id = %request_id, message = format!("retrieve_object_vec:\n{}", serde_json::to_string_pretty(&retrieve_object_vec).unwrap()));
+    dual_debug!(
+        "request_id: {} - retrieve_object_vec:\n{}",
+        request_id,
+        serde_json::to_string_pretty(&retrieve_object_vec).unwrap()
+    );
 
     // extract the context from retrieved objects
     let mut context = String::new();
@@ -79,7 +83,13 @@ pub(crate) async fn chat(
                     false => {
                         for (idx, point) in scored_points.iter().enumerate() {
                             // log
-                            debug!(target: "stdout", request_id = %request_id, message = format!("Point-{}, score: {}, source: {}", idx, point.score, &point.source));
+                            dual_debug!(
+                                "request_id: {} - Point-{}, score: {}, source: {}",
+                                request_id,
+                                idx,
+                                point.score,
+                                &point.source
+                            );
 
                             context.push_str(&point.source);
                             context.push_str("\n\n");
@@ -87,17 +97,17 @@ pub(crate) async fn chat(
                     }
                     true => {
                         // log
-                        warn!(target: "stdout", request_id = %request_id, message = format!("No point retrieved from the collection `{}` (score < threshold {})", qdrant_config_vec[idx].collection_name, qdrant_config_vec[idx].score_threshold));
+                        dual_warn!("No point retrieved from the collection `{}` (score < threshold {}) - request_id: {}", qdrant_config_vec[idx].collection_name, qdrant_config_vec[idx].score_threshold, request_id);
                     }
                 }
             }
             None => {
                 // log
-                warn!(target: "stdout", request_id = %request_id, message = format!("No point retrieved from the collection `{}` (score < threshold {})", qdrant_config_vec[idx].collection_name, qdrant_config_vec[idx].score_threshold));
+                dual_warn!("No point retrieved from the collection `{}` (score < threshold {}) - request_id: {}", qdrant_config_vec[idx].collection_name, qdrant_config_vec[idx].score_threshold, request_id);
             }
         }
     }
-    debug!(target: "stdout", request_id = %request_id, message = format!("context:\n{}", context));
+    dual_debug!("request_id: {} - context:\n{}", request_id, context);
 
     // merge context into chat request
     if !context.is_empty() {
@@ -105,7 +115,7 @@ pub(crate) async fn chat(
             let err_msg = "Found empty chat messages";
 
             // log
-            error!(target: "stdout", request_id = %request_id, message = %err_msg);
+            dual_error!("{} - request_id: {}", err_msg, request_id);
 
             return Err(ServerError::BadRequest(err_msg.to_string()));
         }
@@ -124,7 +134,7 @@ pub(crate) async fn chat(
                 }
                 None => {
                     let err_msg = "No chat server available";
-                    error!(target: "stdout", request_id = %request_id, message = %err_msg);
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
                     return Err(ServerError::Operation(err_msg.to_string()));
                 }
             }
@@ -150,7 +160,7 @@ pub(crate) async fn chat(
             let err_msg = e.to_string();
 
             // log
-            error!(target: "stdout", request_id = %request_id, message = %err_msg);
+            dual_error!("{} - request_id: {}", err_msg, request_id);
 
             return Err(ServerError::Operation(err_msg));
         }
@@ -188,25 +198,28 @@ async fn get_qdrant_configs(
                     "The number of elements of `collection name`, `limit`, `score_threshold` in the request should be same.";
 
                 // log
-                error!(target: "stdout", request_id = %request_id, message = %err_msg);
+                dual_error!("{} - request_id: {}", err_msg, request_id);
 
                 return Err(ServerError::Operation(err_msg.into()));
             }
 
-            info!(target: "stdout", request_id = %request_id, message = "Use the VectorDB settings from the request.");
+            dual_info!(
+                "Use the VectorDB settings from the request - request_id: {}",
+                request_id
+            );
 
             let collection_name_str = collection_name.join(",");
             let limit_str = limit
                 .iter()
-                .map(|n| n.to_string())
+                .map(|l| l.to_string())
                 .collect::<Vec<String>>()
                 .join(",");
             let score_threshold_str = score_threshold
                 .iter()
-                .map(|n| n.to_string())
+                .map(|s| s.to_string())
                 .collect::<Vec<String>>()
                 .join(",");
-            info!(target: "stdout", request_id = %request_id, message = format!("qdrant url: {}, collection name: {}, limit: {}, score threshold: {}", url, collection_name_str, limit_str, score_threshold_str));
+            dual_info!("qdrant url: {}, collection name: {}, limit: {}, score threshold: {} - request_id: {}", url, collection_name_str, limit_str, score_threshold_str, request_id);
 
             let mut qdrant_config_vec = vec![];
             for (idx, col_name) in collection_name.iter().enumerate() {
@@ -221,7 +234,10 @@ async fn get_qdrant_configs(
             Ok(qdrant_config_vec)
         }
         (None, None, None, None) => {
-            info!(target: "stdout", request_id = %request_id, message = "Use the default VectorDB settings.");
+            dual_info!(
+                "Use the default VectorDB settings - request_id: {}",
+                request_id
+            );
 
             let vdb_config = &state.config.read().await.rag.vector_db;
             let mut qdrant_config_vec = vec![];
@@ -239,7 +255,7 @@ async fn get_qdrant_configs(
         _ => {
             let err_msg = "The VectorDB settings in the request are not correct. The `url_vdb_server`, `collection_name`, `limit`, `score_threshold` fields in the request should be provided. The number of elements of `collection name`, `limit`, `score_threshold` should be same.";
 
-            error!(target: "stdout", request_id = %request_id, message = %err_msg);
+            dual_error!("{} - request_id: {}", err_msg, request_id);
 
             Err(ServerError::Operation(err_msg.into()))
         }
@@ -278,7 +294,7 @@ async fn retrieve_context_with_multiple_qdrant_configs(
             State(state.clone()),
             Extension(cancel_token.clone()),
             headers.clone(),
-            &request_id,
+            request_id.as_ref(),
             chat_request,
             qdrant_config,
         )
@@ -304,7 +320,12 @@ async fn retrieve_context_with_multiple_qdrant_configs(
                         points.remove(*idx);
                     }
 
-                    info!(target: "stdout", "removed duplicated {} point(s) retrieved from the collection `{}`", num, qdrant_config.collection_name);
+                    dual_info!(
+                        "removed duplicated {} point(s) retrieved from the collection `{}` - request_id: {}",
+                        num,
+                        qdrant_config.collection_name,
+                        request_id.as_ref()
+                    );
                 }
 
                 if !points.is_empty() {
@@ -327,7 +348,10 @@ async fn retrieve_context_with_single_qdrant_config(
 ) -> Result<RetrieveObject, ServerError> {
     let request_id = request_id.as_ref();
 
-    info!(target: "stdout", request_id = %request_id, message = "Compute embeddings for user query.");
+    dual_info!(
+        "Computing embeddings for user query - request_id: {}",
+        request_id
+    );
 
     // get the context window from config
     let config_ctx_window = state.config.read().await.rag.context_window;
@@ -337,7 +361,11 @@ async fn retrieve_context_with_single_qdrant_config(
         .context_window
         .or(Some(config_ctx_window))
         .unwrap_or(1);
-    info!(target: "stdout", request_id = %request_id, message = format!("Context window: {}", context_window));
+    dual_info!(
+        "Context window: {} - request_id: {}",
+        context_window,
+        request_id
+    );
 
     // compute embeddings for user query
     let embedding_response = match chat_request.messages.is_empty() {
@@ -345,7 +373,7 @@ async fn retrieve_context_with_single_qdrant_config(
             let err_msg = "Found empty chat messages";
 
             // log
-            error!(target: "stdout", request_id = %request_id, message = %err_msg);
+            dual_error!("{} - request_id: {}", err_msg, request_id);
 
             return Err(ServerError::BadRequest(err_msg.to_string()));
         }
@@ -373,7 +401,11 @@ async fn retrieve_context_with_single_qdrant_config(
 
             // join the user messages in the context window into a single string
             let query_text = if !last_n_user_messages.is_empty() {
-                info!(target: "stdout", request_id = %request_id, message = format!("Found the latest {} user message(s)", last_n_user_messages.len()));
+                dual_info!(
+                    "Found the latest {} user message(s) - request_id: {}",
+                    last_n_user_messages.len(),
+                    request_id
+                );
 
                 last_n_user_messages.reverse();
                 last_n_user_messages.join("\n")
@@ -381,13 +413,17 @@ async fn retrieve_context_with_single_qdrant_config(
                 let error_msg = "No user messages found.";
 
                 // log
-                error!(target: "stdout", request_id = %request_id, message = %error_msg);
+                dual_error!("{} - request_id: {}", error_msg, request_id);
 
                 return Err(ServerError::BadRequest(error_msg.to_string()));
             };
 
             // log
-            info!(target: "stdout", request_id = %request_id, message = format!("Query text for the context retrieval: {}", query_text));
+            dual_info!(
+                "Query text for the context retrieval: {} - request_id: {}",
+                query_text,
+                request_id
+            );
 
             // create a embedding request
             let embedding_request = EmbeddingRequest {
@@ -416,7 +452,7 @@ async fn retrieve_context_with_single_qdrant_config(
                     let err_msg = format!("Failed to parse embeddings response: {}", e);
 
                     // log
-                    error!(target: "stdout", request_id = %request_id, message = %err_msg);
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
 
                     ServerError::Operation(err_msg)
                 })?;
@@ -426,7 +462,7 @@ async fn retrieve_context_with_single_qdrant_config(
                 let err_msg = format!("Failed to parse embeddings response: {}", e);
 
                 // log
-                error!(target: "stdout", request_id = %request_id, message = %err_msg);
+                dual_error!("{} - request_id: {}", err_msg, request_id);
 
                 ServerError::Operation(err_msg)
             })?
@@ -439,7 +475,7 @@ async fn retrieve_context_with_single_qdrant_config(
             let err_msg = "No embeddings returned";
 
             // log
-            error!(target: "stdout", request_id = %request_id, message = %err_msg);
+            dual_error!("{} - request_id: {}", err_msg, request_id);
 
             return Err(ServerError::Operation(err_msg.to_string()));
         }
@@ -468,7 +504,7 @@ async fn retrieve_context_with_single_qdrant_config(
             let err_msg = format!("No point retrieved. {}", e);
 
             // log
-            error!(target: "stdout", "{}", &err_msg);
+            dual_error!("{} - request_id: {}", err_msg, request_id);
 
             return Err(ServerError::Operation(err_msg));
         }
@@ -477,7 +513,12 @@ async fn retrieve_context_with_single_qdrant_config(
         retrieve_object.points = Some(Vec::new());
     }
 
-    info!(target: "stdout", request_id = %request_id, message = format!("Retrieved {} point(s) from the collection `{}`", retrieve_object.points.as_ref().unwrap().len(), qdrant_config.collection_name));
+    dual_info!(
+        "Retrieved {} point(s) from the collection `{}` - request_id: {}",
+        retrieve_object.points.as_ref().unwrap().len(),
+        qdrant_config.collection_name,
+        request_id
+    );
 
     Ok(retrieve_object)
 }
@@ -493,7 +534,14 @@ async fn retrieve_context(
 ) -> Result<RetrieveObject, ServerError> {
     let request_id = request_id.as_ref();
 
-    info!(target: "stdout", request_id = %request_id, message = format!("Retrieve context from {}/collections/{}, max number of result to return: {}, score threshold: {}", vdb_server_url.as_ref(), vdb_collection_name.as_ref(), limit, score_threshold.unwrap_or_default()));
+    dual_info!(
+        "Retrieve context from {}/collections/{}, max number of result to return: {}, score threshold: {} - request_id: {}",
+        vdb_server_url.as_ref(),
+        vdb_collection_name.as_ref(),
+        limit,
+        score_threshold.unwrap_or_default(),
+        request_id
+    );
 
     // create a Qdrant client
     let mut qdrant_client = qdrant::Qdrant::new_with_url(vdb_server_url.as_ref().to_string());
@@ -501,12 +549,18 @@ async fn retrieve_context(
     // set the API key if provided
     if let Some(key) = vdb_api_key.as_deref() {
         if !key.is_empty() {
-            debug!(target: "stdout", request_id = %request_id, message = "Set the API key for the VectorDB server.");
+            dual_debug!(
+                "Set the API key for the VectorDB server - request_id: {}",
+                request_id
+            );
             qdrant_client.set_api_key(key);
         }
     }
 
-    info!(target: "stdout", request_id = %request_id, message = "Search similar points from the qdrant instance");
+    dual_info!(
+        "Search similar points from the qdrant instance - request_id: {}",
+        request_id
+    );
 
     // search for similar points
     let scored_points = qdrant_client
@@ -522,11 +576,14 @@ async fn retrieve_context(
                 "Failed to search similar points from the qdrant instance: {}",
                 e
             );
-            error!(target: "stdout", request_id = %request_id, message = %err_msg);
+            dual_error!("{} - request_id: {}", err_msg, request_id);
             ServerError::Operation(err_msg)
         })?;
 
-    info!(target: "stdout", request_id = %request_id, message = "Try to remove duplicated points");
+    dual_info!(
+        "Try to remove duplicated points - request_id: {}",
+        request_id
+    );
 
     // remove duplicates, which have the same source
     let mut seen = HashSet::new();
@@ -545,7 +602,11 @@ async fn retrieve_context(
         })
         .collect();
 
-    debug!(target: "stdout", request_id = %request_id, message = format!("Found {} unique scored points", unique_scored_points.len()));
+    dual_debug!(
+        "Found {} unique scored points - request_id: {}",
+        unique_scored_points.len(),
+        request_id
+    );
 
     let ro = match unique_scored_points.is_empty() {
         true => RetrieveObject {
@@ -566,7 +627,7 @@ async fn retrieve_context(
 
                     // For debugging purpose, log the optional search field if it exists
                     if let Some(search) = payload.get("search").and_then(Value::as_str) {
-                        info!(target: "stdout", request_id = %request_id, message = format!("search: {}", search));
+                        dual_info!("search: {} - request_id: {}", search, request_id);
                     }
                 }
             }
@@ -593,7 +654,7 @@ impl MergeRagContext for RagPromptBuilder {
         rag_prompt: Option<String>,
     ) -> ChatPromptsError::Result<()> {
         if messages.is_empty() {
-            error!(target: "stdout", message = "Found empty messages in the chat request.");
+            dual_error!("Found empty messages in the chat request.");
 
             return Err(ChatPromptsError::PromptError::NoMessages);
         }
@@ -602,23 +663,23 @@ impl MergeRagContext for RagPromptBuilder {
             let err_msg = "No context provided.";
 
             // log
-            error!(target: "stdout", "{}", &err_msg);
+            dual_error!("{}", &err_msg);
 
             return Err(ChatPromptsError::PromptError::Operation(err_msg.into()));
         }
 
-        info!(target: "stdout", "rag policy: {}", &policy);
+        dual_info!("rag policy: {}", &policy);
         if policy == MergeRagContextPolicy::SystemMessage && !has_system_prompt {
             let err_msg = "The chat model does not support system message";
 
             // log
-            error!(target: "stdout", "{}", &err_msg);
+            dual_error!("{}", &err_msg);
 
             return Err(ChatPromptsError::PromptError::Operation(err_msg.into()));
         }
 
         let context = context[0].trim_end();
-        info!(target: "stdout", "context:\n{}", context);
+        dual_info!("context:\n{}", context);
 
         match policy {
             MergeRagContextPolicy::SystemMessage => {
@@ -689,7 +750,7 @@ impl MergeRagContext for RagPromptBuilder {
                 }
             }
             MergeRagContextPolicy::LastUserMessage => {
-                info!(target: "stdout", "Merge RAG context into last user message.");
+                dual_info!("Merge RAG context into last user message.");
 
                 let len = messages.len();
                 match &messages.last() {
@@ -718,7 +779,7 @@ impl MergeRagContext for RagPromptBuilder {
                             "The last message in the chat request should be a user message.";
 
                         // log
-                        error!(target: "stdout", "{}", &err_msg);
+                        dual_error!("{}", &err_msg);
 
                         return Err(ChatPromptsError::PromptError::BadMessages(err_msg.into()));
                     }
@@ -806,14 +867,14 @@ pub(crate) fn chunk_text(
     if ty.as_ref().to_lowercase().as_str() != "txt" && ty.as_ref().to_lowercase().as_str() != "md" {
         let err_msg = "Failed to upload the target file. Only files with 'txt' and 'md' extensions are supported.";
 
-        error!(target: "stdout", request_id = %request_id, message = %err_msg);
+        dual_error!("{} - request_id: {}", err_msg, request_id);
 
         return Err(ServerError::Operation(err_msg.into()));
     }
 
     match ty.as_ref().to_lowercase().as_str() {
         "txt" => {
-            info!(target: "stdout", request_id = %request_id, message = "Chunk the plain text contents.");
+            dual_info!("Chunk the plain text contents - request_id: {}", request_id);
 
             // create a text splitter
             let splitter = TextSplitter::new(chunk_capacity);
@@ -823,12 +884,12 @@ pub(crate) fn chunk_text(
                 .map(|s| s.to_string())
                 .collect::<Vec<_>>();
 
-            info!(target: "stdout", request_id = %request_id, message = format!("{} chunks", chunks.len()));
+            dual_info!("{} chunks - request_id: {}", chunks.len(), request_id);
 
             Ok(chunks)
         }
         "md" => {
-            info!(target: "stdout", "Chunk the markdown contents.");
+            dual_info!("Chunk the markdown contents - request_id: {}", request_id);
 
             // create a markdown splitter
             let splitter = MarkdownSplitter::new(chunk_capacity);
@@ -838,7 +899,11 @@ pub(crate) fn chunk_text(
                 .map(|s| s.to_string())
                 .collect::<Vec<_>>();
 
-            info!(target: "stdout", "Number of chunks: {}", chunks.len());
+            dual_info!(
+                "Number of chunks: {} - request_id: {}",
+                chunks.len(),
+                request_id
+            );
 
             Ok(chunks)
         }
@@ -846,7 +911,7 @@ pub(crate) fn chunk_text(
             let err_msg =
                 "Failed to upload the target file. Only text and markdown files are supported.";
 
-            error!(target: "stdout", "{}", err_msg);
+            dual_error!("{}", err_msg);
 
             Err(ServerError::Operation(err_msg.into()))
         }
@@ -861,7 +926,12 @@ pub(crate) async fn qdrant_create_collection(
 ) -> Result<(), ServerError> {
     let request_id = request_id.as_ref();
 
-    info!(target: "stdout", request_id = %request_id, message = format!("Create a collection `{}` of {} dimensions.", collection_name.as_ref(), dim));
+    dual_info!(
+        "Create a collection `{}` of {} dimensions - request_id: {}",
+        collection_name.as_ref(),
+        dim,
+        request_id
+    );
 
     if let Err(e) = qdrant_client
         .create_collection(collection_name.as_ref(), dim as u32)
@@ -869,7 +939,7 @@ pub(crate) async fn qdrant_create_collection(
     {
         let err_msg = e.to_string();
 
-        error!(target: "stdout", request_id = %request_id, message = %err_msg);
+        dual_error!("{} - request_id: {}", err_msg, request_id);
 
         return Err(ServerError::Operation(err_msg));
     }
@@ -886,7 +956,10 @@ pub(crate) async fn qdrant_persist_embeddings(
 ) -> Result<(), ServerError> {
     let request_id = request_id.as_ref();
 
-    info!(target: "stdout", request_id = %request_id, message = "Persist embeddings to the Qdrant instance");
+    dual_info!(
+        "Persist embeddings to the Qdrant instance - request_id: {}",
+        request_id
+    );
 
     let mut points = Vec::<Point>::new();
     for embedding in embeddings {
@@ -908,7 +981,11 @@ pub(crate) async fn qdrant_persist_embeddings(
         points.push(p);
     }
 
-    info!(target: "stdout", request_id = %request_id, message = format!("{} points to be upserted", points.len()));
+    dual_info!(
+        "{} points to be upserted - request_id: {}",
+        points.len(),
+        request_id
+    );
 
     if let Err(e) = qdrant_client
         .upsert_points(collection_name.as_ref(), points)
@@ -916,7 +993,7 @@ pub(crate) async fn qdrant_persist_embeddings(
     {
         let err_msg = format!("{}", e);
 
-        error!(target: "stdout", request_id = %request_id, message = %err_msg);
+        dual_error!("{} - request_id: {}", err_msg, request_id);
 
         return Err(ServerError::Operation(err_msg));
     }

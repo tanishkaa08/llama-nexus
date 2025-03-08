@@ -30,5 +30,6 @@ tokio-util = "0.7.13"
 tower = { version = "^0.5", features = ["util"] }
 tower-http = { version = "^0.6", features = ["trace", "cors", "request-id", "fs"] }
 tracing = "0.1"
+tracing-appender = "0.2"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 uuid = { version = "1.7.0", features = ["v4"] }
