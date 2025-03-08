@@ -37,6 +37,7 @@ jobs:
       matrix:
         wasmedge_version: [0.14.1]
         ggml_version: [b4818]
+        whisper_api_server_version: [v0.4.1]
     steps:
       - name: Clone project
         id: checkout
@@ -98,7 +99,7 @@ jobs:
 
       - name: Start whisper-api-server
         run: |
-          curl -LO https://github.com/LlamaEdge/whisper-api-server/releases/download/0.4.0/whisper-api-server.wasm
+          curl -LO https://github.com/LlamaEdge/whisper-api-server/releases/download/${{ matrix.whisper_api_server_version }}/whisper-api-server.wasm
           curl -LO https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v2-q5_0.bin
           nohup env WASMEDGE_PLUGIN_PATH=$HOME/whisper/plugin $HOME/.wasmedge/bin/wasmedge --dir .:. whisper-api-server.wasm -m ggml-large-v2-q5_0.bin --port 12345 > ./start-whisper.log 2>&1 &
           sleep 15
