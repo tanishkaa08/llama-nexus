@@ -66,10 +66,10 @@ jobs:
           curl --location --remote-name https://github.com/Orange-OpenSource/hurl/releases/download/5.0.1/hurl_5.0.1_amd64.deb
           sudo apt update && sudo apt install ./hurl_5.0.1_amd64.deb
 
-      - name: Build LlamaEdge-Q
+      - name: Build LlamaEdge-Nexus
         run: |
           cargo build --release
-          cp target/release/LlamaEdge-Q ./LlamaEdge-Q
+          cp target/release/LlamaEdge-Nexus ./LlamaEdge-Nexus
 
       - name: Build llama-api-server.wasm
         env:
@@ -105,19 +105,19 @@ jobs:
           sleep 15
           cat start-whisper.log
 
-      - name: Start LlamaEdge-Q in config mode and register llama-api-server
+      - name: Start LlamaEdge-Nexus in config mode and register llama-api-server
         run: |
-          nohup ./LlamaEdge-Q config > ./start-Q.log 2>&1 &
+          nohup ./LlamaEdge-Nexus config > ./start-Q.log 2>&1 &
           sleep 5
           curl --location 'http://localhost:9068/admin/servers/register' --header 'Content-Type: application/json' --data '{"url": "http://localhost:8080","kind": "chat"}'
           sleep 5
           curl --location 'http://localhost:9068/admin/servers/register' --header 'Content-Type: application/json' --data '{"url": "http://localhost:12345","kind": "translate,transcribe"}'
           sleep 5
 
-      - name: Print LlamaEdge-Q logs on failure
+      - name: Print LlamaEdge-Nexus logs on failure
         if: always()
         run: |
-          echo "LlamaEdge-Q logs:"
+          echo "LlamaEdge-Nexus logs:"
           cat start-Q.log
 
       - name: Run test_chat.hurl
@@ -148,9 +148,9 @@ jobs:
           echo "Whisper server logs:"
           cat ./start-whisper.log
 
-      - name: Stop LlamaEdge-Q
+      - name: Stop LlamaEdge-Nexus
         run: |
-          pkill -f LlamaEdge-Q
+          pkill -f LlamaEdge-Nexus
 
       - name: Stop llama-api-server and whisper-api-server
         run: |
