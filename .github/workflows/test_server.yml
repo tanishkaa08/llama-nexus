@@ -69,7 +69,7 @@ jobs:
       - name: Build LlamaEdge-Nexus
         run: |
           cargo build --release
-          cp target/release/LlamaEdge-Nexus ./LlamaEdge-Nexus
+          cp target/release/llama-nexus ./llama-nexus
 
       - name: Build llama-api-server.wasm
         env:
@@ -107,7 +107,7 @@ jobs:
 
       - name: Start LlamaEdge-Nexus in config mode and register llama-api-server
         run: |
-          nohup ./LlamaEdge-Nexus config > ./start-Q.log 2>&1 &
+          nohup ./llama-nexus config > ./start-llama-nexus.log 2>&1 &
           sleep 5
           curl --location 'http://localhost:9068/admin/servers/register' --header 'Content-Type: application/json' --data '{"url": "http://localhost:8080","kind": "chat"}'
           sleep 5
@@ -118,7 +118,7 @@ jobs:
         if: always()
         run: |
           echo "LlamaEdge-Nexus logs:"
-          cat start-Q.log
+          cat start-llama-nexus.log
 
       - name: Run test_chat.hurl
         run: |
@@ -150,7 +150,7 @@ jobs:
 
       - name: Stop LlamaEdge-Nexus
         run: |
-          pkill -f LlamaEdge-Nexus
+          pkill -f llama-nexus
 
       - name: Stop llama-api-server and whisper-api-server
         run: |
