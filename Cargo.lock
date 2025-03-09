@@ -3,7 +3,7 @@
 version = 4
 
 [[package]]
-name = "LlamaEdge-Q"
+name = "LlamaEdge-Nexus"
 version = "0.1.0"
 dependencies = [
  "anyhow",
