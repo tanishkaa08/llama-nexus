@@ -24,25 +24,25 @@ jobs:
             os: ubuntu-20.04
             rust: nightly
             target: x86_64-unknown-linux-gnu
-            archive-name: llama-nexus-x86_64-unknown-linux-gnu.tar.gz
+            archive-name: llama-nexus-unknown-linux-gnu-x86_64.tar.gz
             bin-path: linux-x86_64-binary
           - build: linux-aarch64
             os: ubuntu-22.04-arm
             rust: nightly
             target: aarch64-unknown-linux-gnu
-            archive-name: llama-nexus-aarch64-unknown-linux-gnu.tar.gz
+            archive-name: llama-nexus-unknown-linux-gnu-aarch64.tar.gz
             bin-path: linux-aarch64-binary
           - build: macos-x86_64
             os: macos-latest
             rust: nightly
             target: x86_64-apple-darwin
-            archive-name: llama-nexus-x86_64-apple-darwin.tar.gz
+            archive-name: llama-nexus-apple-darwin-x86_64.tar.gz
             bin-path: macos-x86_64-binary
           - build: macos-arm64
             os: macos-latest
             rust: nightly
             target: aarch64-apple-darwin
-            archive-name: llama-nexus-aarch64-apple-darwin.tar.gz
+            archive-name: llama-nexus-apple-darwin-aarch64.tar.gz
             bin-path: macos-arm64-binary
       fail-fast: false
 
