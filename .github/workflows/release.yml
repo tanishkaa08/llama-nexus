@@ -91,18 +91,20 @@ jobs:
 
           if [ "${{ matrix.build }}" = "linux-x86_64" ] || [ "${{ matrix.build }}" = "linux-aarch64" ]; then
             cp "../target/${{ matrix.target }}/release/llama-nexus" ./
+            cp "../config.toml" ./
             sha256sum llama-nexus > SHA256SUM
             echo "Debug info(SHA256SUM):"
             cat SHA256SUM
-            tar -czf "${{ matrix.archive-name }}" SHA256SUM llama-nexus
+            tar -czf "${{ matrix.archive-name }}" SHA256SUM llama-nexus config.toml
           fi
 
           if [ "${{ matrix.build }}" = "macos-x86_64" ] || [ "${{ matrix.build }}" = "macos-arm64" ]; then
             cp "../target/${{ matrix.target }}/release/llama-nexus" ./
+            cp "../config.toml" ./
             shasum -a 256 llama-nexus > SHA256SUM
             echo "Debug info(SHA256SUM):"
             cat SHA256SUM
-            tar -czf "${{ matrix.archive-name }}" SHA256SUM llama-nexus
+            tar -czf "${{ matrix.archive-name }}" SHA256SUM llama-nexus config.toml
           fi
           ls -al
 
