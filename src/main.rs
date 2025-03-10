@@ -43,6 +43,7 @@ use uuid::Uuid;
 pub(crate) static HEALTH_CHECK_INTERVAL: OnceCell<u64> = OnceCell::new();
 
 #[derive(Debug, Parser)]
+#[command(version = env!("CARGO_PKG_VERSION"), about = "LlamaEdge Nexus - A gateway service for LLM backends")]
 struct Cli {
     /// Enable RAG
     #[arg(long, default_value = "false")]
