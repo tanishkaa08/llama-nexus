@@ -240,7 +240,7 @@ async fn main() -> ServerResult<()> {
         let node = std::env::var("NODE_VERSION").ok();
         if node.is_some() {
             // log node version
-            dual_info!("gaianet_node_version: {}", node.as_ref().unwrap());
+            dual_info!("gaia_node_version: {}", node.as_ref().unwrap());
         }
 
         server_info.node = node;
@@ -568,7 +568,10 @@ impl AppState {
             let max_retries = 3;
             let mut last_error = None;
 
-            dual_info!("Push server info");
+            dual_info!(
+                "Push server info:\n{}",
+                serde_json::to_string_pretty(&server_info).unwrap()
+            );
 
             while retry_count < max_retries {
                 match reqwest::Client::new()
@@ -747,10 +750,20 @@ impl AppState {
                     }
                 }
 
+                let health_status = serde_json::json!({
+                    "rag": self.config.read().await.rag.enable,
+                    "servers": healthy_servers,
+                });
+
+                dual_debug!(
+                    "Healthy servers:\n{}",
+                    serde_json::to_string_pretty(&health_status).unwrap()
+                );
+
                 // Send the healthy servers to the external service
                 reqwest::Client::new()
                     .post(push_url)
-                    .json(&healthy_servers)
+                    .json(&health_status)
                     .send()
                     .await
                     .map_err(|e| {
