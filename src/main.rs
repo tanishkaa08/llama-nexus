@@ -286,9 +286,6 @@ async fn main() -> ServerResult<()> {
                 "/admin/servers",
                 get(handlers::admin::list_downstream_servers_handler),
             )
-            .fallback_service(ServeDir::new(&cli.web_ui).not_found_service(
-                ServeDir::new(&cli.web_ui).append_index_html_on_directories(true),
-            ))
             .layer(cors)
             .layer(TraceLayer::new_for_http())
             .layer(axum::middleware::from_fn(
@@ -314,6 +311,9 @@ async fn main() -> ServerResult<()> {
 
                     response
                 },
+            ))
+            .fallback_service(ServeDir::new(&cli.web_ui).not_found_service(
+                ServeDir::new(&cli.web_ui).append_index_html_on_directories(true),
             ))
             .with_state(state.clone());
 
