@@ -1264,8 +1264,47 @@ pub(crate) async fn info_handler(
         .unwrap_or("unknown")
         .to_string();
 
-    let server_info = state.server_info.read().await;
-    let json_body = serde_json::json!(&*server_info);
+    let mut chat_models = vec![];
+    let mut embedding_models = vec![];
+    let mut image_models = vec![];
+    let mut tts_models = vec![];
+    let mut translate_models = vec![];
+    let mut transcribe_models = vec![];
+    let node_version = {
+        let server_info = state.server_info.read().await;
+        for server in server_info.servers.values() {
+            if let Some(ref model) = server.chat_model {
+                chat_models.push(model.clone());
+            }
+            if let Some(ref model) = server.embedding_model {
+                embedding_models.push(model.clone());
+            }
+            if let Some(ref model) = server.image_model {
+                image_models.push(model.clone());
+            }
+            if let Some(ref model) = server.tts_model {
+                tts_models.push(model.clone());
+            }
+            if let Some(ref model) = server.translate_model {
+                translate_models.push(model.clone());
+            }
+            if let Some(ref model) = server.transcribe_model {
+                transcribe_models.push(model.clone());
+            }
+        }
+        server_info.node.clone()
+    };
+    let json_body = serde_json::json!({
+        "node_version": node_version,
+        "models": {
+            "chat": chat_models,
+            "embedding": embedding_models,
+            "image": image_models,
+            "tts": tts_models,
+            "translate": translate_models,
+            "transcribe": transcribe_models,
+        },
+    });
 
     Response::builder()
         .status(StatusCode::OK)
