@@ -1396,6 +1396,7 @@ pub(crate) mod admin {
     ) -> ServerResult<()> {
         let request_id = request_id.as_ref();
         let server_url = server_url.as_ref();
+        let server_id = server_id.as_ref();
 
         let client = reqwest::Client::new();
 
@@ -1419,11 +1420,15 @@ pub(crate) mod admin {
             return Err(ServerError::Operation(err_msg));
         }
 
-        let api_server = response.json::<ApiServer>().await.map_err(|e| {
+        let mut api_server = response.json::<ApiServer>().await.map_err(|e| {
             let err_msg = format!("Failed to parse the server info: {}", e);
             dual_error!("{} - request_id: {}", err_msg, request_id);
             ServerError::Operation(err_msg)
         })?;
+        api_server.server_id = Some(server_id.to_string());
+
+        dual_debug!("server kind: {}", server_kind.to_string());
+        dual_debug!("api server: {:?}", api_server);
 
         // verify the server kind
         {
@@ -1465,7 +1470,7 @@ pub(crate) mod admin {
         let server_info = &mut state.server_info.write().await;
         server_info
             .servers
-            .insert(server_id.as_ref().to_string(), api_server);
+            .insert(server_id.to_string(), api_server);
 
         // get the models from the downstream server
         let list_models_url = format!("{}/v1/models", server_url);
@@ -1486,7 +1491,7 @@ pub(crate) mod admin {
 
         // update the models
         let mut models = state.models.write().await;
-        models.insert(server_id.as_ref().to_string(), list_models_response.data);
+        models.insert(server_id.to_string(), list_models_response.data);
 
         Ok(())
     }
@@ -1560,5 +1565,68 @@ pub(crate) mod admin {
             })?;
 
         Ok(response)
+    }
+
+    pub(crate) async fn info_handler(
+        State(state): State<Arc<AppState>>,
+        headers: HeaderMap,
+    ) -> ServerResult<axum::response::Response> {
+        let request_id = headers
+            .get("x-request-id")
+            .and_then(|h| h.to_str().ok())
+            .unwrap_or("unknown")
+            .to_string();
+
+        let mut chat_servers = vec![];
+        let mut embedding_servers = vec![];
+        let mut image_servers = vec![];
+        let mut tts_servers = vec![];
+        let mut translate_servers = vec![];
+        let mut transcribe_servers = vec![];
+        let node_version = {
+            let server_info = state.server_info.read().await;
+            for server in server_info.servers.values() {
+                if server.chat_model.is_some() {
+                    chat_servers.push(server.clone());
+                }
+                if server.embedding_model.is_some() {
+                    embedding_servers.push(server.clone());
+                }
+                if server.image_model.is_some() {
+                    image_servers.push(server.clone());
+                }
+                if server.tts_model.is_some() {
+                    tts_servers.push(server.clone());
+                }
+                if server.translate_model.is_some() {
+                    translate_servers.push(server.clone());
+                }
+                if server.transcribe_model.is_some() {
+                    transcribe_servers.push(server.clone());
+                }
+            }
+            server_info.node.clone()
+        };
+        let json_body = serde_json::json!({
+            "node_version": node_version,
+            "servers": {
+                "chat": chat_servers,
+                "embedding": embedding_servers,
+                "image": image_servers,
+                "tts": tts_servers,
+                "translate": translate_servers,
+                "transcribe": transcribe_servers,
+            },
+        });
+
+        Response::builder()
+            .status(StatusCode::OK)
+            .header("Content-Type", "application/json")
+            .body(Body::from(json_body.to_string()))
+            .map_err(|e| {
+                let err_msg = format!("Failed to create response: {}", e);
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                ServerError::Operation(err_msg)
+            })
     }
 }
