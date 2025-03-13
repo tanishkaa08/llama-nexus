@@ -32,6 +32,8 @@ pub(crate) struct ApiServer {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) transcribe_model: Option<ModelConfig>,
     pub(crate) extras: HashMap<String, String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) server_id: Option<ServerId>,
 }
 
 #[derive(Debug, Clone, Default, Deserialize)]
