@@ -191,7 +191,6 @@ async fn main() -> ServerResult<()> {
                 "/admin/servers",
                 get(handlers::admin::list_downstream_servers_handler),
             )
-            .route("/admin/info", get(handlers::admin::info_handler))
             .layer(cors)
             .layer(TraceLayer::new_for_http())
             .layer(axum::middleware::from_fn(
