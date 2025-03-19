@@ -76,42 +76,6 @@ enum Command {
         #[arg(long, default_value = "config.toml", value_parser = clap::value_parser!(String))]
         file: String,
     },
-    /// Gaia mode - use Gaia settings
-    Gaia {
-        /// Gaia domain
-        #[arg(long, value_parser = clap::value_parser!(String), required = true)]
-        domain: String,
-        /// Gaia device ID
-        #[arg(long, value_parser = clap::value_parser!(String), required = true)]
-        device_id: String,
-        /// Vector database URL
-        #[arg(long, default_value = "http://localhost:6333")]
-        vdb_url: String,
-        /// Vector database collection names
-        #[arg(long, default_value = "default", value_delimiter = ',')]
-        vdb_collection_name: Vec<String>,
-        /// Vector database result limit
-        #[arg(long, default_value = "1")]
-        vdb_limit: u64,
-        /// Vector database score threshold
-        #[arg(long, default_value = "0.5")]
-        vdb_score_threshold: f32,
-        /// Custom RAG prompt
-        #[arg(long)]
-        rag_prompt: Option<String>,
-        /// Number of user messages to use in RAG retrieval process
-        #[arg(long, default_value = "1")]
-        rag_context_window: u64,
-        /// Policy for merging RAG context
-        #[arg(long, value_enum, default_value_t = MergeRagContextPolicy::SystemMessage)]
-        rag_policy: chat_prompts::MergeRagContextPolicy,
-        /// Host address to bind to
-        #[arg(long, default_value = "127.0.0.1")]
-        host: String,
-        /// Port to listen on
-        #[arg(long, default_value = "9068")]
-        port: u16,
-    },
 }
 
 #[tokio::main]
@@ -156,65 +120,6 @@ async fn main() -> ServerResult<()> {
                     return Err(ServerError::FailedToLoadConfig(err_msg));
                 }
             }
-        }
-        Command::Gaia {
-            domain,
-            device_id,
-            host,
-            port,
-            vdb_url,
-            vdb_collection_name,
-            vdb_limit,
-            vdb_score_threshold,
-            rag_prompt,
-            rag_context_window,
-            rag_policy,
-        } => {
-            // Use default config for gaia command
-            dual_info!("Using default configuration for gaia command");
-            let mut config = Config::default();
-
-            // set the server info push url
-            let server_info_url =
-                format!("https://hub.domain.{}/device-info/{}", domain, device_id);
-            config.server_info_push_url = Some(server_info_url);
-
-            // set the server health push url
-            let server_health_url =
-                format!("https://hub.domain.{}/device-health/{}", domain, device_id);
-            config.server_health_push_url = Some(server_health_url);
-
-            if cli.rag {
-                config.rag.enable = true;
-                dual_info!("RAG is enabled");
-            }
-
-            // Set the RAG configuration
-            if rag_prompt.is_some() {
-                config.rag.prompt = rag_prompt.clone();
-                dual_info!("RAG Prompt: {}", rag_prompt.as_ref().unwrap());
-            }
-            dual_info!("RAG Context Window: {}", rag_context_window);
-            config.rag.context_window = *rag_context_window;
-            dual_info!("RAG Policy: {}", rag_policy.to_string());
-            config.rag.rag_policy = *rag_policy;
-
-            // Set the VDB configuration
-            dual_info!("VDB URL: {}", vdb_url);
-            config.rag.vector_db.url = vdb_url.clone();
-            dual_info!("VDB Collections: {:?}", vdb_collection_name);
-            config.rag.vector_db.collection_name = vdb_collection_name.clone();
-            dual_info!("VDB Limit: {}", vdb_limit);
-            config.rag.vector_db.limit = *vdb_limit;
-            dual_info!("VDB Score Threshold: {}", vdb_score_threshold);
-            config.rag.vector_db.score_threshold = *vdb_score_threshold;
-
-            // Set the host and port
-            config.server.host = host.clone();
-            config.server.port = *port;
-            dual_info!("Server will listen on {}:{}", host, port);
-
-            config
         }
     };
 
@@ -558,50 +463,6 @@ impl AppState {
                 .or_insert(ServerGroup::new(ServerKind::transcribe))
                 .register(server.clone())
                 .await?;
-        }
-
-        // Push server info to external service if configured
-        if let Some(push_url) = &self.config.read().await.server_info_push_url {
-            let server_info = self.server_info.read().await.clone();
-
-            // Retry up to 3 times to push the server info to the external service
-            let mut retry_count = 0;
-            let max_retries = 3;
-            let mut last_error = None;
-
-            dual_info!(
-                "Push server info:\n{}",
-                serde_json::to_string_pretty(&server_info).unwrap()
-            );
-
-            while retry_count < max_retries {
-                match reqwest::Client::new()
-                    .post(push_url)
-                    .json(&server_info)
-                    .send()
-                    .await
-                {
-                    Ok(_) => break,
-                    Err(e) => {
-                        retry_count += 1;
-                        last_error = Some(e);
-                        if retry_count < max_retries {
-                            // Wait a moment before retrying
-                            tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-                        }
-                    }
-                }
-            }
-
-            if let Some(e) = last_error {
-                if retry_count >= max_retries {
-                    dual_error!(
-                        "Failed to push server info after {} attempts: {}",
-                        max_retries,
-                        e
-                    );
-                }
-            }
         }
 
         Ok(())
