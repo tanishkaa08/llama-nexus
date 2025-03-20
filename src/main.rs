@@ -15,7 +15,6 @@ use axum::{
     http::{self, HeaderValue, Request},
     routing::{get, post, Router},
 };
-use chat_prompts::MergeRagContextPolicy;
 use clap::{Parser, Subcommand};
 use config::Config;
 use error::{ServerError, ServerResult};
