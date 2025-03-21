@@ -668,15 +668,15 @@ impl MergeRagContext for RagPromptBuilder {
             return Err(ChatPromptsError::PromptError::Operation(err_msg.into()));
         }
 
-        dual_info!("rag policy: {}", &policy);
+        // check rag policy
+        let mut policy = policy;
         if policy == MergeRagContextPolicy::SystemMessage && !has_system_prompt {
-            let err_msg = "The chat model does not support system message";
-
             // log
-            dual_error!("{}", &err_msg);
+            dual_info!("The chat model does not support system message. Switch the currect rag policy to `last-user-message`");
 
-            return Err(ChatPromptsError::PromptError::Operation(err_msg.into()));
+            policy = MergeRagContextPolicy::LastUserMessage;
         }
+        dual_info!("rag_policy: {}", &policy);
 
         let context = context[0].trim_end();
         dual_info!("context:\n{}", context);
