@@ -1270,32 +1270,29 @@ pub(crate) async fn info_handler(
     let mut tts_models = vec![];
     let mut translate_models = vec![];
     let mut transcribe_models = vec![];
-    let node_version = {
-        let server_info = state.server_info.read().await;
-        for server in server_info.servers.values() {
-            if let Some(ref model) = server.chat_model {
-                chat_models.push(model.clone());
-            }
-            if let Some(ref model) = server.embedding_model {
-                embedding_models.push(model.clone());
-            }
-            if let Some(ref model) = server.image_model {
-                image_models.push(model.clone());
-            }
-            if let Some(ref model) = server.tts_model {
-                tts_models.push(model.clone());
-            }
-            if let Some(ref model) = server.translate_model {
-                translate_models.push(model.clone());
-            }
-            if let Some(ref model) = server.transcribe_model {
-                transcribe_models.push(model.clone());
-            }
+    let server_info = state.server_info.read().await;
+    for server in server_info.servers.values() {
+        if let Some(ref model) = server.chat_model {
+            chat_models.push(model.clone());
         }
-        server_info.node.clone()
-    };
+        if let Some(ref model) = server.embedding_model {
+            embedding_models.push(model.clone());
+        }
+        if let Some(ref model) = server.image_model {
+            image_models.push(model.clone());
+        }
+        if let Some(ref model) = server.tts_model {
+            tts_models.push(model.clone());
+        }
+        if let Some(ref model) = server.translate_model {
+            translate_models.push(model.clone());
+        }
+        if let Some(ref model) = server.transcribe_model {
+            transcribe_models.push(model.clone());
+        }
+    }
+
     let json_body = serde_json::json!({
-        "node_version": node_version,
         "models": {
             "chat": chat_models,
             "embedding": embedding_models,

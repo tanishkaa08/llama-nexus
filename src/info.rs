@@ -5,8 +5,6 @@ use std::collections::HashMap;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct ServerInfo {
-    #[serde(rename = "node_version", skip_serializing_if = "Option::is_none")]
-    pub(crate) node: Option<String>,
     #[serde(rename = "servers", skip_serializing_if = "HashMap::is_empty")]
     pub(crate) servers: HashMap<ServerId, ApiServer>,
 }
