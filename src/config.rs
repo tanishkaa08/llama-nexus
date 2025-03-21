@@ -12,9 +12,9 @@ pub struct Config {
     pub server_health_push_url: Option<String>,
 }
 impl Config {
-    pub fn load(path: &str) -> Result<Self, Box<dyn std::error::Error>> {
+    pub fn load(path: impl AsRef<std::path::Path>) -> Result<Self, Box<dyn std::error::Error>> {
         let config = config::Config::builder()
-            .add_source(config::File::with_name(path))
+            .add_source(config::File::with_name(path.as_ref().to_str().unwrap()))
             .build()?;
         Ok(config.try_deserialize::<Self>()?)
     }
