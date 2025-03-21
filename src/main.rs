@@ -44,6 +44,9 @@ pub(crate) static HEALTH_CHECK_INTERVAL: OnceCell<u64> = OnceCell::new();
 #[derive(Debug, Parser)]
 #[command(version = env!("CARGO_PKG_VERSION"), about = "LlamaEdge Nexus - A gateway service for LLM backends")]
 struct Cli {
+    /// Path to the config file
+    #[arg(long, default_value = "config.toml", value_parser = clap::value_parser!(PathBuf))]
+    config: PathBuf,
     /// Enable RAG
     #[arg(long, default_value = "false")]
     rag: bool,
@@ -62,19 +65,6 @@ struct Cli {
     /// Log file path (required when log_destination is "file" or "both")
     #[arg(long)]
     log_file: Option<String>,
-    /// Subcommands
-    #[command(subcommand)]
-    command: Command,
-}
-
-#[derive(Debug, Subcommand)]
-enum Command {
-    /// Configuration mode - use configuration file
-    Config {
-        /// Path to the config file
-        #[arg(long, default_value = "config.toml", value_parser = clap::value_parser!(String))]
-        file: String,
-    },
 }
 
 #[tokio::main]
@@ -101,24 +91,19 @@ async fn main() -> ServerResult<()> {
         .allow_origin(Any);
 
     // Load the config based on the command
-    let config = match &cli.command {
-        Command::Config { file } => {
-            // Load config from file
-            match Config::load(file) {
-                Ok(mut config) => {
-                    if cli.rag {
-                        config.rag.enable = true;
-                        dual_info!("RAG is enabled");
-                    }
-
-                    config
-                }
-                Err(e) => {
-                    let err_msg = format!("Failed to load config: {}", e);
-                    dual_error!("{}", err_msg);
-                    return Err(ServerError::FailedToLoadConfig(err_msg));
-                }
+    let config = match Config::load(&cli.config) {
+        Ok(mut config) => {
+            if cli.rag {
+                config.rag.enable = true;
+                dual_info!("RAG is enabled");
             }
+
+            config
+        }
+        Err(e) => {
+            let err_msg = format!("Failed to load config: {}", e);
+            dual_error!("{}", err_msg);
+            return Err(ServerError::FailedToLoadConfig(err_msg));
         }
     };
 
@@ -137,20 +122,7 @@ async fn main() -> ServerResult<()> {
         config.server.port,
     ));
 
-    let mut server_info = ServerInfo::default();
-    {
-        // get the environment variable `NODE_VERSION`
-        // Note that this is for satisfying the requirement of `gaianet-node` project.
-        let node = std::env::var("NODE_VERSION").ok();
-        if node.is_some() {
-            // log node version
-            dual_info!("gaia_node_version: {}", node.as_ref().unwrap());
-        }
-
-        server_info.node = node;
-    }
-
-    let state = Arc::new(AppState::new(config, server_info));
+    let state = Arc::new(AppState::new(config, ServerInfo::default()));
 
     // Start the health check task if enabled
     if cli.check_health {
