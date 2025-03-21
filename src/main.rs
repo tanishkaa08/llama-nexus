@@ -15,7 +15,7 @@ use axum::{
     http::{self, HeaderValue, Request},
     routing::{get, post, Router},
 };
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use config::Config;
 use error::{ServerError, ServerResult};
 use futures_util::stream::{self, StreamExt};
