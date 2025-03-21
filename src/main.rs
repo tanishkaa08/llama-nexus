@@ -84,12 +84,6 @@ async fn main() -> ServerResult<()> {
     // log the version of the server
     dual_info!("Version: {}", env!("CARGO_PKG_VERSION"));
 
-    // Set up CORS
-    let cors = CorsLayer::new()
-        .allow_methods([http::Method::GET, http::Method::POST])
-        .allow_headers(Any)
-        .allow_origin(Any);
-
     // Load the config based on the command
     let config = match Config::load(&cli.config) {
         Ok(mut config) => {
@@ -129,6 +123,12 @@ async fn main() -> ServerResult<()> {
         dual_info!("Health check is enabled");
         Arc::clone(&state).start_health_check_task().await;
     }
+
+    // Set up CORS
+    let cors = CorsLayer::new()
+        .allow_methods([http::Method::GET, http::Method::POST])
+        .allow_headers(Any)
+        .allow_origin(Any);
 
     // Set up the router
     let app =
