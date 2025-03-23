@@ -6,109 +6,109 @@ LlamaEdge-Nexus is a gateway service for managing and orchestrating LlamaEdge AP
 
 - Download LlamaEdge-Nexus binary
 
-The LlamaEdge-Nexus binaries can be found at the [release page](https://github.com/llamaedge/llamaedge-nexus/releases). To download the binary, you can use the following command:
+  The LlamaEdge-Nexus binaries can be found at the [release page](https://github.com/llamaedge/llamaedge-nexus/releases). To download the binary, you can use the following command:
 
-```bash
-# Download the binary for Linux x86_64
-curl -L https://github.com/LlamaEdge/LlamaEdge-Nexus/releases/latest/download/llama-nexus-unknown-linux-gnu-aarch64.tar.gz -o llama-nexus.tar.gz
+  ```bash
+  # Download the binary for Linux x86_64
+  curl -L https://github.com/LlamaEdge/LlamaEdge-Nexus/releases/latest/download/llama-nexus-unknown-linux-gnu-aarch64.tar.gz -o llama-nexus.tar.gz
 
-# Download the binary for Linux ARM64
-curl -L https://github.com/LlamaEdge/LlamaEdge-Nexus/releases/latest/download/llama-nexus-unknown-linux-gnu-x86_64.tar.gz -o llama-nexus.tar.gz
+  # Download the binary for Linux ARM64
+  curl -L https://github.com/LlamaEdge/LlamaEdge-Nexus/releases/latest/download/llama-nexus-unknown-linux-gnu-x86_64.tar.gz -o llama-nexus.tar.gz
 
-# Download the binary for macOS x86_64
-curl -L https://github.com/LlamaEdge/LlamaEdge-Nexus/releases/latest/download/llama-nexus-apple-darwin-x86_64.tar.gz -o llama-nexus.tar.gz
+  # Download the binary for macOS x86_64
+  curl -L https://github.com/LlamaEdge/LlamaEdge-Nexus/releases/latest/download/llama-nexus-apple-darwin-x86_64.tar.gz -o llama-nexus.tar.gz
 
-# Download the binary for macOS ARM64
-curl -L https://github.com/LlamaEdge/LlamaEdge-Nexus/releases/latest/download/llama-nexus-apple-darwin-aarch64.tar.gz -o llama-nexus.tar.gz
+  # Download the binary for macOS ARM64
+  curl -L https://github.com/LlamaEdge/LlamaEdge-Nexus/releases/latest/download/llama-nexus-apple-darwin-aarch64.tar.gz -o llama-nexus.tar.gz
 
-# Extract the binary
-tar -xzf llama-nexus.tar.gz
-```
+  # Extract the binary
+  tar -xzf llama-nexus.tar.gz
+  ```
 
-After decompressing the file, you will see the following files in the current directory.
+  After decompressing the file, you will see the following files in the current directory.
 
-```bash
-llama-nexus
-config.toml
-SHA256SUMS
-```
+  ```bash
+  llama-nexus
+  config.toml
+  SHA256SUMS
+  ```
 
 - Download LlamaEdge API Servers
 
-LlamaEdge provides four types of API servers:
+  LlamaEdge provides four types of API servers:
 
-- `llama-api-server` provides chat and embedding APIs. [Release Page](https://github.com/LlamaEdge/LlamaEdge/releases)
-- `whisper-api-server` provides audio transcription and translation APIs. [Release Page](https://github.com/LlamaEdge/whisper-api-server/releases)
-- `sd-api-server` provides image generation and editing APIs. [Release Page](https://github.com/LlamaEdge/sd-api-server/releases)
-- `tts-api-server` provides text-to-speech APIs. [Release Page](https://github.com/LlamaEdge/tts-api-server/releases)
+  - `llama-api-server` provides chat and embedding APIs. [Release Page](https://github.com/LlamaEdge/LlamaEdge/releases)
+  - `whisper-api-server` provides audio transcription and translation APIs. [Release Page](https://github.com/LlamaEdge/whisper-api-server/releases)
+  - `sd-api-server` provides image generation and editing APIs. [Release Page](https://github.com/LlamaEdge/sd-api-server/releases)
+  - `tts-api-server` provides text-to-speech APIs. [Release Page](https://github.com/LlamaEdge/tts-api-server/releases)
 
-To download the `llama-api-server`, for example, use the following command:
+  To download the `llama-api-server`, for example, use the following command:
 
-```bash
-curl -L https://github.com/LlamaEdge/LlamaEdge/releases/latest/download/llama-api-server.wasm -o llama-api-server.wasm
-```
+  ```bash
+  curl -L https://github.com/LlamaEdge/LlamaEdge/releases/latest/download/llama-api-server.wasm -o llama-api-server.wasm
+  ```
 
 - Install WasmEdge Runtime
 
-```bash
-# To run models on CPU
-curl -sSf https://raw.githubusercontent.com/WasmEdge/WasmEdge/master/utils/install_v2.sh | bash -s -- -v 0.14.1
+  ```bash
+  # To run models on CPU
+  curl -sSf https://raw.githubusercontent.com/WasmEdge/WasmEdge/master/utils/install_v2.sh | bash -s -- -v 0.14.1
 
-# To run models on NVIDIA GPU with CUDA 12
-if curl -sSf https://raw.githubusercontent.com/WasmEdge/WasmEdge/master/utils/install_v2.sh | bash -s -- -v 0.14.1 --ggmlbn=12
+  # To run models on NVIDIA GPU with CUDA 12
+  curl -sSf https://raw.githubusercontent.com/WasmEdge/WasmEdge/master/utils/install_v2.sh | bash -s -- -v 0.14.1 --ggmlbn=12
 
-# To run models on NVIDIA GPU with CUDA 11
-if curl -sSf https://raw.githubusercontent.com/WasmEdge/WasmEdge/master/utils/install_v2.sh | bash -s -- -v 0.14.1 --ggmlbn=11
-```
+  # To run models on NVIDIA GPU with CUDA 11
+  curl -sSf https://raw.githubusercontent.com/WasmEdge/WasmEdge/master/utils/install_v2.sh | bash -s -- -v 0.14.1 --ggmlbn=11
+  ```
 
 - Start LlamaEdge-Nexus
 
-Run the following command to start LlamaEdge-Nexus:
+  Run the following command to start LlamaEdge-Nexus:
 
-```bash
-# Start LlamaEdge-Nexus with the default config file at default port 9069
-./llama-nexus --config config.toml
-```
+  ```bash
+  # Start LlamaEdge-Nexus with the default config file at default port 9069
+  llama-nexus --config config.toml
+  ```
 
-For the details about the CLI options, please refer to the [Command Line Usage](#command-line-usage) section.
+  For the details about the CLI options, please refer to the [Command Line Usage](#command-line-usage) section.
 
 - Register LlamaEdge API Servers to LlamaEdge-Nexus
 
-Run the following commands to start LlamaEdge API Servers first:
+  Run the following commands to start LlamaEdge API Servers first:
 
-```bash
-# Download a gguf model file, for example, Llama-3.2-3B-Instruct-Q5_K_M.gguf
-curl -LO https://huggingface.co/second-state/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q5_K_M.gguf
+  ```bash
+  # Download a gguf model file, for example, Llama-3.2-3B-Instruct-Q5_K_M.gguf
+  curl -LO https://huggingface.co/second-state/Llama-3.2-3B-Instruct-GGUF/resolve/main/Llama-3.2-3B-Instruct-Q5_K_M.gguf
 
-# Start LlamaEdge API Servers
-wasmedge --dir .:. --nn-preload default:GGML:AUTO:Llama-3.2-3B-Instruct-Q5_K_M.gguf \
+  # Start LlamaEdge API Servers
+  wasmedge --dir .:. --nn-preload default:GGML:AUTO:Llama-3.2-3B-Instruct-Q5_K_M.gguf \
     llama-api-server.wasm \
     --prompt-template llama-3-chat \
     --ctx-size 128000 \
     --model-name Llama-3.2-3b
     --port 10010
-```
+  ```
 
-Then, register the LlamaEdge API Servers to LlamaEdge-Nexus:
+  Then, register the LlamaEdge API Servers to LlamaEdge-Nexus:
 
-```bash
-curl --location 'http://localhost:9068/admin/servers/register' \
---header 'Content-Type: application/json' \
---data '{
-    "url": "http://localhost:10010",
-    "kind": "chat"
-}'
-```
+  ```bash
+  curl --location 'http://localhost:9068/admin/servers/register' \
+  --header 'Content-Type: application/json' \
+  --data '{
+      "url": "http://localhost:10010",
+      "kind": "chat"
+  }'
+  ```
 
-If register successfully, you will see a similar response like:
+  If register successfully, you will see a similar response like:
 
-```bash
-{
-    "id": "chat-server-36537062-9bea-4234-bc59-3166c43cf3f1",
-    "kind": "chat",
-    "url": "http://localhost:10010"
-}
-```
+  ```bash
+  {
+      "id": "chat-server-36537062-9bea-4234-bc59-3166c43cf3f1",
+      "kind": "chat",
+      "url": "http://localhost:10010"
+  }
+  ```
 
 ## Usage
 
