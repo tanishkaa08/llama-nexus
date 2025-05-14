@@ -50,11 +50,9 @@ impl Config {
             ServerError::Operation(err_msg)
         })?;
 
-        dual_debug!("MCP config loaded");
-
         if let Some(mcp_servers) = config.mcp.as_mut() {
             if !mcp_servers.is_empty() {
-                dual_debug!("Sync the mcp tools from mcp servers");
+                dual_info!("Retrieve the mcp tools from mcp servers");
 
                 for server_config in mcp_servers.iter_mut() {
                     server_config.sync_tools().await?;
@@ -77,7 +75,7 @@ impl Default for Config {
             rag: RagConfig {
                 enable: false,
                 prompt: None,
-                rag_policy: MergeRagContextPolicy::SystemMessage,
+                policy: MergeRagContextPolicy::SystemMessage,
                 context_window: 1,
                 vector_db: VectorDbConfig {
                     url: "http://localhost:6333".to_string(),
@@ -105,7 +103,7 @@ pub struct RagConfig {
     pub enable: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
-    pub rag_policy: MergeRagContextPolicy,
+    pub policy: MergeRagContextPolicy,
     pub context_window: u64,
     pub vector_db: VectorDbConfig,
     pub kw_search: KwSearchConfig,
@@ -119,7 +117,7 @@ impl<'de> Deserialize<'de> for RagConfig {
         #[derive(Deserialize)]
         struct RagConfigHelper {
             prompt: String,
-            rag_policy: String,
+            policy: String,
             context_window: u64,
             vector_db: VectorDbConfig,
             kw_search: KwSearchConfig,
@@ -133,13 +131,13 @@ impl<'de> Deserialize<'de> for RagConfig {
             Some(helper.prompt)
         };
 
-        let rag_policy = MergeRagContextPolicy::from_str(&helper.rag_policy, true)
+        let policy = MergeRagContextPolicy::from_str(&helper.policy, true)
             .map_err(|e| serde::de::Error::custom(e.to_string()))?;
 
         Ok(RagConfig {
             enable: false,
             prompt,
-            rag_policy,
+            policy,
             context_window: helper.context_window,
             vector_db: helper.vector_db,
             kw_search: helper.kw_search,
@@ -195,7 +193,7 @@ impl McpServerConfig {
                         dual_error!("{}", err_msg);
                         return Err(ServerError::Operation(err_msg.to_string()));
                     }
-                    dual_debug!("Retrieve mcp tools from MCP server: {}", url);
+                    dual_debug!("Retrieve mcp tools from mcp server: {}", url);
 
                     // create a sse transport
                     let transport = SseTransport::start(url).await.map_err(|e| {

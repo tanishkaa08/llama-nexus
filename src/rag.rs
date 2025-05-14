@@ -143,10 +143,7 @@ pub(crate) async fn chat(
         // get the rag policy
         let (rag_policy, rag_prompt) = {
             let config = state.config.read().await;
-            (
-                config.rag.rag_policy.to_owned(),
-                config.rag.prompt.to_owned(),
-            )
+            (config.rag.policy.to_owned(), config.rag.prompt.to_owned())
         };
 
         // insert rag context into chat request
