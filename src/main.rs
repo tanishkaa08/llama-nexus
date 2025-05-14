@@ -47,9 +47,6 @@ struct Cli {
     /// Path to the config file
     #[arg(long, default_value = "config.toml", value_parser = clap::value_parser!(PathBuf))]
     config: PathBuf,
-    /// Enable RAG
-    #[arg(long, default_value = "false")]
-    rag: bool,
     /// Enable health check for downstream servers
     #[arg(long, default_value = "false")]
     check_health: bool,
@@ -86,9 +83,8 @@ async fn main() -> ServerResult<()> {
 
     // Load the config based on the command
     let config = match Config::load(&cli.config).await {
-        Ok(mut config) => {
-            if cli.rag {
-                config.rag.enable = true;
+        Ok(config) => {
+            if config.rag.enable {
                 dual_info!("RAG is enabled");
             }
 
