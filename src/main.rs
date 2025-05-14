@@ -85,7 +85,7 @@ async fn main() -> ServerResult<()> {
     dual_info!("Version: {}", env!("CARGO_PKG_VERSION"));
 
     // Load the config based on the command
-    let config = match Config::load(&cli.config) {
+    let config = match Config::load(&cli.config).await {
         Ok(mut config) => {
             if cli.rag {
                 config.rag.enable = true;
@@ -100,6 +100,8 @@ async fn main() -> ServerResult<()> {
             return Err(ServerError::FailedToLoadConfig(err_msg));
         }
     };
+
+    dual_debug!("MCP servers: {:?}", config.mcp);
 
     // set the health check interval
     HEALTH_CHECK_INTERVAL

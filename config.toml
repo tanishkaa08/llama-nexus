@@ -2,6 +2,8 @@
 host = "0.0.0.0"    # The host to listen on.
 port = 9068         # The port to listen on.
 
+# The following items are the configuration for the RAG service.
+
 [rag]
 prompt     = ""     # Custom rag prompt. Optional.
 rag_policy = "system-message" # Strategy for merging RAG context into chat messages. Possible values: "system-message", "last-user-message". Required if enable is true.
@@ -17,3 +19,35 @@ score_threshold = 0.5                       # The minimum score threshold for a 
 enable     = false                      # Whether to enable keyword search.
 url        = "http://localhost:9069"    # The URL of the keyword search service.
 index_name = "default"                  # The name of the index to use.
+
+# The following items are the configuration for the MCP servers.
+
+[[mcp]]
+name   = "gaia-calculator"
+transport = "sse"
+url = "http://127.0.0.1:8001/sse"
+enable = false
+
+[[mcp]]
+name   = "gaia-weather"
+transport = "sse"
+url = "http://127.0.0.1:8002/sse"
+enable = false
+
+[[mcp]]
+name   = "gaia-qdrant"
+transport = "sse"
+url = "http://127.0.0.1:8003/sse"
+enable = false
+
+[[mcp]]
+name   = "gaia-keyword-search"
+transport = "sse"
+url = "http://127.0.0.1:8005/sse"
+enable = false
+
+[[mcp]]
+name   = "gaia-elastic-search"
+transport = "sse"
+url = "http://127.0.0.1:8006/sse"
+enable = false
