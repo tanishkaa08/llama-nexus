@@ -1,25 +1,25 @@
-# LlamaEdge-Nexus
+# Llama-Nexus
 
-LlamaEdge-Nexus is a gateway service for managing and orchestrating LlamaEdge API servers. It provides a unified interface to various AI services including chat completions, audio processing, image generation, and text-to-speech capabilities. Compatible with OpenAI API, LlamaEdge-Nexus allows you to use familiar API formats while working with open-source models. With LlamaEdge-Nexus, you can easily register and manage multiple API servers, handle requests, and monitor the health of your AI services.
+Llama-Nexus is a gateway service for managing and orchestrating LlamaEdge API servers. It provides a unified interface to various AI services including chat completions, audio processing, image generation, and text-to-speech capabilities. Compatible with OpenAI API, Llama-Nexus allows you to use familiar API formats while working with open-source models. With Llama-Nexus, you can easily register and manage multiple API servers, handle requests, and monitor the health of your AI services.
 
 ## Installation
 
-- Download LlamaEdge-Nexus binary
+- Download Llama-Nexus binary
 
-  The LlamaEdge-Nexus binaries can be found at the [release page](https://github.com/llamaedge/llamaedge-nexus/releases). To download the binary, you can use the following command:
+  The Llama-Nexus binaries can be found at the [release page](https://github.com/llamaedge/llamaedge-nexus/releases). To download the binary, you can use the following command:
 
   ```bash
   # Download the binary for Linux x86_64
-  curl -L https://github.com/LlamaEdge/LlamaEdge-Nexus/releases/latest/download/llama-nexus-unknown-linux-gnu-aarch64.tar.gz -o llama-nexus.tar.gz
+  curl -L https://github.com/LlamaEdge/llama-nexus/releases/latest/download/llama-nexus-unknown-linux-gnu-aarch64.tar.gz -o llama-nexus.tar.gz
 
   # Download the binary for Linux ARM64
-  curl -L https://github.com/LlamaEdge/LlamaEdge-Nexus/releases/latest/download/llama-nexus-unknown-linux-gnu-x86_64.tar.gz -o llama-nexus.tar.gz
+  curl -L https://github.com/LlamaEdge/llama-nexus/releases/latest/download/llama-nexus-unknown-linux-gnu-x86_64.tar.gz -o llama-nexus.tar.gz
 
   # Download the binary for macOS x86_64
-  curl -L https://github.com/LlamaEdge/LlamaEdge-Nexus/releases/latest/download/llama-nexus-apple-darwin-x86_64.tar.gz -o llama-nexus.tar.gz
+  curl -L https://github.com/LlamaEdge/llama-nexus/releases/latest/download/llama-nexus-apple-darwin-x86_64.tar.gz -o llama-nexus.tar.gz
 
   # Download the binary for macOS ARM64
-  curl -L https://github.com/LlamaEdge/LlamaEdge-Nexus/releases/latest/download/llama-nexus-apple-darwin-aarch64.tar.gz -o llama-nexus.tar.gz
+  curl -L https://github.com/LlamaEdge/llama-nexus/releases/latest/download/llama-nexus-apple-darwin-aarch64.tar.gz -o llama-nexus.tar.gz
 
   # Extract the binary
   tar -xzf llama-nexus.tar.gz
@@ -61,18 +61,18 @@ LlamaEdge-Nexus is a gateway service for managing and orchestrating LlamaEdge AP
   curl -sSf https://raw.githubusercontent.com/WasmEdge/WasmEdge/master/utils/install_v2.sh | bash -s -- -v 0.14.1 --ggmlbn=11
   ```
 
-- Start LlamaEdge-Nexus
+- Start Llama-Nexus
 
-  Run the following command to start LlamaEdge-Nexus:
+  Run the following command to start Llama-Nexus:
 
   ```bash
-  # Start LlamaEdge-Nexus with the default config file at default port 9069
+  # Start Llama-Nexus with the default config file at default port 9069
   llama-nexus --config config.toml
   ```
 
   For the details about the CLI options, please refer to the [Command Line Usage](#command-line-usage) section.
 
-- Register LlamaEdge API Servers to LlamaEdge-Nexus
+- Register LlamaEdge API Servers to Llama-Nexus
 
   Run the following commands to start LlamaEdge API Servers first:
 
@@ -89,7 +89,7 @@ LlamaEdge-Nexus is a gateway service for managing and orchestrating LlamaEdge AP
     --port 10010
   ```
 
-  Then, register the LlamaEdge API Servers to LlamaEdge-Nexus:
+  Then, register the LlamaEdge API Servers to Llama-Nexus:
 
   ```bash
   curl --location 'http://localhost:9068/admin/servers/register' \
@@ -112,7 +112,7 @@ LlamaEdge-Nexus is a gateway service for managing and orchestrating LlamaEdge AP
 
 ## Usage
 
-If you finish registering a chat server into LlamaEdge-Nexus, you can send a chat-completion request to the port LlamaEdge-Nexus is listening on. For example, you can use the following command to send a chat-completion request to the port 9068:
+If you finish registering a chat server into Llama-Nexus, you can send a chat-completion request to the port Llama-Nexus is listening on. For example, you can use the following command to send a chat-completion request to the port 9068:
 
 ```bash
 curl --location 'http://localhost:9068/v1/chat/completions' \
@@ -143,7 +143,7 @@ curl --location 'http://localhost:9068/v1/chat/completions' \
 
 ## Command Line Usage
 
-LlamaEdge-Nexus provides various command line options to configure the service behavior. You can specify the config file path, enable RAG functionality, set up health checks, configure the Web UI, and manage logging. Here are the available command line options by running `llama-nexus --help`:
+Llama-Nexus provides various command line options to configure the service behavior. You can specify the config file path, enable RAG functionality, set up health checks, configure the Web UI, and manage logging. Here are the available command line options by running `llama-nexus --help`:
 
 ```bash
 LlamaEdge Nexus - A gateway service for LLM backends
