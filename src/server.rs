@@ -192,8 +192,6 @@ bitflags! {
         const tts = 1 << 3;
         const translate = 1 << 4;
         const transcribe = 1 << 5;
-        // const vdb = 1 << 6;
-        // const kw_search = 1 << 7;
     }
 }
 impl std::fmt::Display for ServerKind {
@@ -217,12 +215,6 @@ impl std::fmt::Display for ServerKind {
         if self.contains(ServerKind::transcribe) {
             kind_str.push_str("transcribe,");
         }
-        // if self.contains(ServerKind::vdb) {
-        //     kind_str.push_str("vdb,");
-        // }
-        // if self.contains(ServerKind::kw_search) {
-        //     kind_str.push_str("kw_search,");
-        // }
 
         if !kind_str.is_empty() {
             kind_str = kind_str.trim_end_matches(',').to_string();
@@ -246,8 +238,6 @@ impl std::str::FromStr for ServerKind {
                 "tts" => kind.set(Self::tts, true),
                 "translate" => kind.set(Self::translate, true),
                 "transcribe" => kind.set(Self::transcribe, true),
-                // "vdb" => kind.set(Self::vdb, true),
-                // "kw_search" => kind.set(Self::kw_search, true),
                 _ => return Err(ServerError::InvalidServerKind(s.to_string())),
             }
         }
@@ -279,12 +269,6 @@ impl Serialize for ServerKind {
         if self.contains(ServerKind::transcribe) {
             kind_str.push_str("transcribe,");
         }
-        // if self.contains(ServerKind::vdb) {
-        //     kind_str.push_str("vdb,");
-        // }
-        // if self.contains(ServerKind::kw_search) {
-        //     kind_str.push_str("kw_search,");
-        // }
 
         // Remove trailing comma if present
         if !kind_str.is_empty() {
