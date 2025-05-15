@@ -1,4 +1,5 @@
 use crate::{
+    config::MCP_CLIENTS,
     dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
     AppState,
@@ -8,26 +9,33 @@ use axum::{
     http::HeaderMap,
     Json,
 };
-use chat_prompts::{
-    error as ChatPromptsError, MergeRagContext, MergeRagContextPolicy, PromptTemplateType,
-};
+use chat_prompts::{error as ChatPromptsError, MergeRagContext, MergeRagContextPolicy};
 use endpoints::{
     chat::{ChatCompletionRequest, ChatCompletionRequestMessage, ChatCompletionUserMessageContent},
     embeddings::{EmbeddingObject, EmbeddingRequest, EmbeddingsResponse, InputText},
     rag::{RagScoredPoint, RetrieveObject},
 };
-use qdrant::{Point, PointId, ScoredPoint};
+use gaia_kwsearch_common::SearchDocumentsResponse;
+use gaia_qdrant_common::{
+    CreateCollectionResponse, Point, ScoredPoint, SearchPointsResponse, UpsertPointsResponse,
+};
+use rmcp::model::CallToolRequestParam;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{hash_map::DefaultHasher, HashMap, HashSet},
     fmt,
+    hash::{Hash, Hasher},
     sync::Arc,
 };
 use text_splitter::{MarkdownSplitter, TextSplitter};
 use tokio_util::sync::CancellationToken;
 
-pub(crate) async fn chat(
+const VDB_MCP_SERVER_NAME: &str = "gaia-qdrant";
+pub const KWSEARCH_MCP_SERVER_NAME: &str = "gaia-keyword-search";
+const DEFAULT_WEIGHT_ALPHA: f32 = 0.5;
+
+pub async fn chat(
     State(state): State<Arc<AppState>>,
     Extension(cancel_token): Extension<CancellationToken>,
     headers: HeaderMap,
@@ -41,12 +49,111 @@ pub(crate) async fn chat(
 
     dual_info!("Received a new chat request - request_id: {}", request_id);
 
+    // perform kw-search
+    let mut kw_hits = Vec::new();
+    if let Some(kw_search_url) = &chat_request.kw_search_url {
+        if !kw_search_url.is_empty() {
+            let kw_search_url = kw_search_url.trim_end_matches('/');
+            dual_info!(
+                "URL to the kw-search mcp-server: {} - request_id: {}",
+                &kw_search_url,
+                request_id
+            );
+
+            if let Some(index_name) = &chat_request.kw_index_name {
+                if !index_name.is_empty() {
+                    if let Some(ChatCompletionRequestMessage::User(user_message)) =
+                        chat_request.messages.last()
+                    {
+                        if let ChatCompletionUserMessageContent::Text(text) = user_message.content()
+                        {
+                            match MCP_CLIENTS.get() {
+                                Some(mcp_clients) => {
+                                    let lock_mcp_clients = mcp_clients.read().await;
+                                    match lock_mcp_clients.get(KWSEARCH_MCP_SERVER_NAME) {
+                                        Some(mcp_client) => {
+                                            // request param
+                                            let request_param = CallToolRequestParam {
+                                                name: "search_documents".into(),
+                                                arguments: Some(serde_json::Map::from_iter([
+                                                    (
+                                                        "base_url".to_string(),
+                                                        Value::from(kw_search_url),
+                                                    ),
+                                                    (
+                                                        "index_name".to_string(),
+                                                        Value::from(index_name.to_string()),
+                                                    ),
+                                                    (
+                                                        "query".to_string(),
+                                                        Value::from(text.to_string()),
+                                                    ),
+                                                    (
+                                                        "limit".to_string(),
+                                                        Value::from(chat_request.kw_top_k.unwrap()),
+                                                    ),
+                                                ])),
+                                            };
+                                            dual_debug!(
+                                                "request_param: {:#?} - request_id: {}",
+                                                &request_param,
+                                                request_id
+                                            );
+
+                                            // call the search_documents tool
+                                            let tool_result = mcp_client
+                                                .read()
+                                                .await
+                                                .peer()
+                                                .call_tool(request_param)
+                                                .await
+                                                .map_err(|e| {
+                                                    let err_msg =
+                                                        format!("Failed to call the tool: {e}");
+                                                    dual_error!(
+                                                        "{} - request_id: {}",
+                                                        err_msg,
+                                                        request_id
+                                                    );
+                                                    ServerError::Operation(err_msg)
+                                                })?;
+
+                                            let search_response =
+                                                SearchDocumentsResponse::from(tool_result);
+                                            kw_hits = search_response.hits;
+
+                                            dual_info!(
+                                                "Got {} kw-search hits - request_id: {}",
+                                                kw_hits.len(),
+                                                request_id
+                                            );
+                                        }
+                                        None => {
+                                            let warn_msg = format!(
+                                                "Not found MCP client for `{KWSEARCH_MCP_SERVER_NAME}` - request_id: {request_id}"
+                                            );
+                                            dual_warn!("{}", warn_msg);
+                                        }
+                                    }
+                                }
+                                None => {
+                                    let warn_msg = "No MCP client found";
+                                    dual_warn!("{} - request_id: {}", warn_msg, request_id);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // qdrant config
     let qdrant_config_vec =
         match get_qdrant_configs(State(state.clone()), &chat_request, &request_id).await {
             Ok(qdrant_config_vec) => qdrant_config_vec,
             Err(e) => {
-                let err_msg = format!("Failed to get the VectorDB config: {}", e);
+                let err_msg = format!("Failed to get the VectorDB config: {e}");
                 dual_error!(
                     "Failed to get the VectorDB config: {} - request_id: {}",
                     e,
@@ -57,7 +164,7 @@ pub(crate) async fn chat(
         };
 
     // retrieve context
-    let retrieve_object_vec = retrieve_context_with_multiple_qdrant_configs(
+    let mut retrieve_object_vec = retrieve_context_with_multiple_qdrant_configs(
         State(state.clone()),
         Extension(cancel_token.clone()),
         headers.clone(),
@@ -73,6 +180,131 @@ pub(crate) async fn chat(
         request_id,
         serde_json::to_string_pretty(&retrieve_object_vec).unwrap()
     );
+
+    // fuse kw-search and embedding-search results
+    if !kw_hits.is_empty()
+        && !retrieve_object_vec.is_empty()
+        && retrieve_object_vec[0].points.is_some()
+    {
+        let points = retrieve_object_vec[0].points.as_ref().unwrap().clone();
+        if !points.is_empty() {
+            let limit = retrieve_object_vec[0].limit;
+            let score_threshold = retrieve_object_vec[0].score_threshold;
+
+            // create a hash map from retrieve_object_vec: key is the hash value of the source of the point, value is the point
+            let mut em_hits_map = HashMap::new();
+            let mut em_scores = HashMap::new();
+
+            for point in points {
+                let hash_value = calculate_hash(&point.source);
+                em_scores.insert(hash_value, point.score);
+                em_hits_map.insert(hash_value, point);
+            }
+
+            dual_info!(
+                "em_hits_map: {:#?} - request_id: {}",
+                &em_hits_map,
+                request_id
+            );
+
+            // normalize the em_scores
+            let em_scores = normalize(&em_scores);
+
+            dual_info!("em_scores: {:#?} - request_id: {}", &em_scores, request_id);
+
+            // create a hash map from kw_hits: key is the hash value of the content of the hit, value is the hit
+            let mut kw_hits_map = HashMap::new();
+            let mut kw_scores = HashMap::new();
+            for hit in kw_hits {
+                let hash_value = calculate_hash(&hit.content);
+                kw_scores.insert(hash_value, hit.score);
+                kw_hits_map.insert(hash_value, hit);
+            }
+
+            dual_info!(
+                "kw_hits_map: {:#?} - request_id: {}",
+                &kw_hits_map,
+                request_id
+            );
+
+            // normalize the kw_scores
+            let kw_scores = normalize(&kw_scores);
+
+            dual_info!("kw_scores: {:#?} - request_id: {}", &kw_scores, request_id);
+
+            // Set weight alpha
+            let alpha = chat_request.weighted_alpha.unwrap_or(DEFAULT_WEIGHT_ALPHA);
+            dual_debug!("alpha: {} - request_id: {}", alpha, request_id);
+
+            // fuse the two hash maps
+            let final_scores = weighted_fusion(kw_scores, em_scores, alpha);
+
+            dual_info!(
+                "final_scores: {:#?} - request_id: {}",
+                &final_scores,
+                request_id
+            );
+
+            // Sort by score from high to low
+            let mut final_ranking: Vec<(u64, f32)> = final_scores.into_iter().collect();
+            final_ranking.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+            // Print final ranking
+            dual_info!(
+                "final_ranking: {:#?} - request_id: {}",
+                &final_ranking,
+                request_id
+            );
+
+            let mut retrieved = Vec::new();
+            for (hash_value, score) in final_ranking {
+                let mut doc = RagScoredPoint {
+                    source: String::new(),
+                    score,
+                };
+                if kw_hits_map.contains_key(&hash_value) {
+                    doc.source = kw_hits_map[&hash_value].content.clone();
+                    retrieved.push(doc);
+                } else if em_hits_map.contains_key(&hash_value) {
+                    doc.source = em_hits_map[&hash_value].source.clone();
+                    retrieved.push(doc);
+                }
+            }
+
+            // // filter the retrieved points by the score threshold
+            // let mut retrieved = Vec::new();
+            // for (hash_value, score) in final_ranking {
+            //     if score >= score_threshold {
+            //         let mut doc = RagScoredPoint {
+            //             source: String::new(),
+            //             score,
+            //         };
+            //         if kw_hits_map.contains_key(&hash_value) {
+            //             doc.source = kw_hits_map[&hash_value].content.clone();
+            //             retrieved.push(doc);
+            //         } else if em_hits_map.contains_key(&hash_value) {
+            //             doc.source = em_hits_map[&hash_value].source.clone();
+            //             retrieved.push(doc);
+            //         }
+            //     }
+            // }
+
+            // // truncate the retrieved points to the limit
+            // if retrieved.len() > limit {
+            //     retrieved.truncate(limit);
+            // }
+
+            dual_info!("retrieved: {:#?} - request_id: {}", &retrieved, request_id);
+
+            let retrieve_object = RetrieveObject {
+                limit,
+                score_threshold,
+                points: Some(retrieved),
+            };
+
+            retrieve_object_vec = vec![retrieve_object];
+        }
+    }
 
     // extract the context from retrieved objects
     let mut context = String::new();
@@ -143,7 +375,7 @@ pub(crate) async fn chat(
         // get the rag policy
         let (rag_policy, rag_prompt) = {
             let config = state.config.read().await;
-            (config.rag.policy.to_owned(), config.rag.prompt.to_owned())
+            (config.rag.policy, config.rag.prompt.clone())
         };
 
         // insert rag context into chat request
@@ -446,7 +678,7 @@ async fn retrieve_context_with_single_qdrant_config(
             let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
                 .await
                 .map_err(|e| {
-                    let err_msg = format!("Failed to parse embeddings response: {}", e);
+                    let err_msg = format!("Failed to parse embeddings response: {e}");
 
                     // log
                     dual_error!("{} - request_id: {}", err_msg, request_id);
@@ -456,7 +688,7 @@ async fn retrieve_context_with_single_qdrant_config(
 
             // parse the response
             serde_json::from_slice::<EmbeddingsResponse>(&bytes).map_err(|e| {
-                let err_msg = format!("Failed to parse embeddings response: {}", e);
+                let err_msg = format!("Failed to parse embeddings response: {e}");
 
                 // log
                 dual_error!("{} - request_id: {}", err_msg, request_id);
@@ -498,7 +730,7 @@ async fn retrieve_context_with_single_qdrant_config(
     {
         Ok(search_result) => search_result,
         Err(e) => {
-            let err_msg = format!("No point retrieved. {}", e);
+            let err_msg = format!("No point retrieved. {e}");
 
             // log
             dual_error!("{} - request_id: {}", err_msg, request_id);
@@ -540,42 +772,93 @@ async fn retrieve_context(
         request_id
     );
 
-    // create a Qdrant client
-    let mut qdrant_client = qdrant::Qdrant::new_with_url(vdb_server_url.as_ref().to_string());
+    // search points from gaia-qdrant-mcp-server
+    let scored_points = match MCP_CLIENTS.get() {
+        Some(mcp_clients) => {
+            let lock_mcp_clients = mcp_clients.read().await;
+            let mcp_client = match lock_mcp_clients.get(VDB_MCP_SERVER_NAME) {
+                Some(mcp_client) => mcp_client,
+                None => {
+                    let err_msg = "No MCP client found";
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    return Err(ServerError::Operation(err_msg.to_string()));
+                }
+            };
 
-    // set the API key if provided
-    if let Some(key) = vdb_api_key.as_deref() {
-        if !key.is_empty() {
-            dual_debug!(
-                "Set the API key for the VectorDB server - request_id: {}",
+            // request param
+            let request_param = match vdb_api_key {
+                Some(api_key) => CallToolRequestParam {
+                    name: "search_points".into(),
+                    arguments: Some(serde_json::Map::from_iter([
+                        (
+                            "base_url".to_string(),
+                            Value::from(vdb_server_url.as_ref().to_string()),
+                        ),
+                        ("api_key".to_string(), Value::from(api_key)),
+                        (
+                            "name".to_string(),
+                            Value::from(vdb_collection_name.as_ref().to_string()),
+                        ),
+                        ("vector".to_string(), Value::from(query_embedding.to_vec())),
+                        ("limit".to_string(), Value::from(limit as u64)),
+                        (
+                            "score_threshold".to_string(),
+                            Value::from(score_threshold.unwrap_or(0.0)),
+                        ),
+                    ])),
+                },
+                None => CallToolRequestParam {
+                    name: "search_points".into(),
+                    arguments: Some(serde_json::Map::from_iter([
+                        (
+                            "base_url".to_string(),
+                            Value::from(vdb_server_url.as_ref().to_string()),
+                        ),
+                        (
+                            "name".to_string(),
+                            Value::from(vdb_collection_name.as_ref().to_string()),
+                        ),
+                        ("vector".to_string(), Value::from(query_embedding.to_vec())),
+                        ("limit".to_string(), Value::from(limit as u64)),
+                        (
+                            "score_threshold".to_string(),
+                            Value::from(score_threshold.unwrap_or(0.0)),
+                        ),
+                    ])),
+                },
+            };
+
+            // call the search_points tool
+            let tool_result = mcp_client
+                .read()
+                .await
+                .peer()
+                .call_tool(request_param)
+                .await
+                .map_err(|e| {
+                    let err_msg = format!("Failed to call the search_points tool: {e}");
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    ServerError::Operation(err_msg)
+                })?;
+
+            // parse the response
+            let response = SearchPointsResponse::from(tool_result);
+
+            dual_info!(
+                "Got {} points from the gaia-qdrant-mcp-server in {} seconds - request_id: {}",
+                response.result.len(),
+                response.time,
                 request_id
             );
-            qdrant_client.set_api_key(key);
+
+            response.result
         }
-    }
-
-    dual_info!(
-        "Search similar points from the qdrant instance - request_id: {}",
-        request_id
-    );
-
-    // search for similar points
-    let scored_points = qdrant_client
-        .search_points(
-            vdb_collection_name.as_ref(),
-            query_embedding.to_vec(),
-            limit as u64,
-            score_threshold,
-        )
-        .await
-        .map_err(|e| {
-            let err_msg = format!(
-                "Failed to search similar points from the qdrant instance: {}",
-                e
-            );
+        None => {
+            let err_msg = "No MCP client found";
             dual_error!("{} - request_id: {}", err_msg, request_id);
-            ServerError::Operation(err_msg)
-        })?;
+            return Err(ServerError::Operation(err_msg.to_string()));
+        }
+    };
 
     dual_info!(
         "Try to remove duplicated points - request_id: {}",
@@ -586,17 +869,7 @@ async fn retrieve_context(
     let mut seen = HashSet::new();
     let unique_scored_points: Vec<ScoredPoint> = scored_points
         .into_iter()
-        .filter(|point| {
-            seen.insert(
-                point
-                    .payload
-                    .as_ref()
-                    .unwrap()
-                    .get("source")
-                    .unwrap()
-                    .to_string(),
-            )
-        })
+        .filter(|point| seen.insert(point.payload.get("source").unwrap().to_string()))
         .collect();
 
     dual_debug!(
@@ -614,18 +887,22 @@ async fn retrieve_context(
         false => {
             let mut points: Vec<RagScoredPoint> = vec![];
             for point in unique_scored_points.iter() {
-                if let Some(payload) = &point.payload {
-                    if let Some(source) = payload.get("source").and_then(Value::as_str) {
-                        points.push(RagScoredPoint {
-                            source: source.to_string(),
-                            score: point.score,
-                        })
-                    }
+                if point.payload.is_empty() {
+                    continue;
+                }
 
-                    // For debugging purpose, log the optional search field if it exists
-                    if let Some(search) = payload.get("search").and_then(Value::as_str) {
-                        dual_info!("search: {} - request_id: {}", search, request_id);
-                    }
+                dual_debug!("point: {:?}", point);
+
+                if let Some(source) = point.payload.get("source").and_then(Value::as_str) {
+                    points.push(RagScoredPoint {
+                        source: source.to_string(),
+                        score: point.score as f32,
+                    })
+                }
+
+                // For debugging purpose, log the optional search field if it exists
+                if let Some(search) = point.payload.get("search").and_then(Value::as_str) {
+                    dual_info!("search: {} - request_id: {}", search, request_id);
                 }
             }
 
@@ -685,11 +962,13 @@ impl MergeRagContext for RagPromptBuilder {
                         let system_message = {
                             match rag_prompt {
                                 Some(global_rag_prompt) => {
+                                    let processed_rag_prompt =
+                                        global_rag_prompt.replace("\\n", "\n");
                                     // compose new system message content
                                     let content = format!(
                                         "{system_message}\n{rag_prompt}\n{context}",
                                         system_message = message.content().trim(),
-                                        rag_prompt = global_rag_prompt.to_owned(),
+                                        rag_prompt = &processed_rag_prompt,
                                         context = context
                                     );
 
@@ -722,10 +1001,11 @@ impl MergeRagContext for RagPromptBuilder {
                     _ => {
                         let system_message = match rag_prompt {
                             Some(global_rag_prompt) => {
+                                let processed_rag_prompt = global_rag_prompt.replace("\\n", "\n");
                                 // compose new system message content
                                 let content = format!(
                                     "{rag_prompt}\n{context}",
-                                    rag_prompt = global_rag_prompt.to_owned(),
+                                    rag_prompt = &processed_rag_prompt,
                                     context = context
                                 );
 
@@ -786,70 +1066,6 @@ impl MergeRagContext for RagPromptBuilder {
 
         Ok(())
     }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct ServerInfo {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    #[serde(rename = "node_version")]
-    node: Option<String>,
-    #[serde(rename = "api_server")]
-    server: ApiServer,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    chat_model: Option<ModelConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    embedding_model: Option<ModelConfig>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tts_model: Option<ModelConfig>,
-    extras: HashMap<String, String>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) struct ApiServer {
-    #[serde(rename = "type")]
-    ty: String,
-    version: String,
-    #[serde(rename = "ggml_plugin_version")]
-    plugin_version: String,
-    port: String,
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub(crate) struct ModelConfig {
-    // model name
-    name: String,
-    // type: chat or embedding
-    #[serde(rename = "type")]
-    ty: String,
-    pub ctx_size: u64,
-    pub batch_size: u64,
-    pub ubatch_size: u64,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub prompt_template: Option<PromptTemplateType>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub n_predict: Option<i32>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub reverse_prompt: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub n_gpu_layers: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub use_mmap: Option<bool>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub temperature: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub top_p: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub repeat_penalty: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub presence_penalty: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub frequency_penalty: Option<f64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub split_mode: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub main_gpu: Option<u64>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tensor_split: Option<String>,
 }
 
 // Segment the given text into chunks
@@ -916,7 +1132,8 @@ pub(crate) fn chunk_text(
 }
 
 pub(crate) async fn qdrant_create_collection(
-    qdrant_client: &qdrant::Qdrant,
+    vdb_server_url: impl AsRef<str>,
+    vdb_api_key: impl AsRef<str>,
     collection_name: impl AsRef<str>,
     dim: usize,
     request_id: impl AsRef<str>,
@@ -930,22 +1147,94 @@ pub(crate) async fn qdrant_create_collection(
         request_id
     );
 
-    if let Err(e) = qdrant_client
-        .create_collection(collection_name.as_ref(), dim as u32)
-        .await
-    {
-        let err_msg = e.to_string();
+    match MCP_CLIENTS.get() {
+        Some(mcp_clients) => {
+            let lock_mcp_clients = mcp_clients.read().await;
+            let mcp_client = match lock_mcp_clients.get(VDB_MCP_SERVER_NAME) {
+                Some(mcp_client) => mcp_client,
+                None => {
+                    let err_msg = "No MCP client found";
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    return Err(ServerError::Operation(err_msg.to_string()));
+                }
+            };
 
-        dual_error!("{} - request_id: {}", err_msg, request_id);
+            // request param
+            let request_param = match vdb_api_key.as_ref().is_empty() {
+                true => CallToolRequestParam {
+                    name: "create_collection".into(),
+                    arguments: Some(serde_json::Map::from_iter([
+                        (
+                            "base_url".to_string(),
+                            serde_json::Value::from(vdb_server_url.as_ref().to_string()),
+                        ),
+                        (
+                            "name".to_string(),
+                            serde_json::Value::String(collection_name.as_ref().to_string()),
+                        ),
+                        ("size".to_string(), serde_json::Value::from(dim as u64)),
+                    ])),
+                },
+                false => CallToolRequestParam {
+                    name: "create_collection".into(),
+                    arguments: Some(serde_json::Map::from_iter([
+                        (
+                            "base_url".to_string(),
+                            serde_json::Value::from(vdb_server_url.as_ref().to_string()),
+                        ),
+                        (
+                            "api_key".to_string(),
+                            serde_json::Value::String(vdb_api_key.as_ref().to_string()),
+                        ),
+                        (
+                            "name".to_string(),
+                            serde_json::Value::String(collection_name.as_ref().to_string()),
+                        ),
+                        ("size".to_string(), serde_json::Value::from(dim as u64)),
+                    ])),
+                },
+            };
 
-        return Err(ServerError::Operation(err_msg));
+            // call the create_collection tool
+            let tool_result = mcp_client
+                .read()
+                .await
+                .peer()
+                .call_tool(request_param)
+                .await
+                .map_err(|e| {
+                    let err_msg = format!("Failed to call the create_collection tool: {e}");
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    ServerError::Operation(err_msg)
+                })?;
+
+            // parse the response
+            let response = CreateCollectionResponse::from(tool_result);
+
+            if response.result {
+                dual_info!(
+                    "Collection `{}` created successfully - request_id: {}",
+                    collection_name.as_ref(),
+                    request_id
+                );
+                Ok(())
+            } else {
+                let err_msg = format!("Failed to create collection `{}`", collection_name.as_ref());
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                Err(ServerError::Operation(err_msg))
+            }
+        }
+        None => {
+            let err_msg = "No MCP client found";
+            dual_error!("{} - request_id: {}", err_msg, request_id);
+            Err(ServerError::Operation(err_msg.to_string()))
+        }
     }
-
-    Ok(())
 }
 
 pub(crate) async fn qdrant_persist_embeddings(
-    qdrant_client: &qdrant::Qdrant,
+    vdb_server_url: impl AsRef<str>,
+    vdb_api_key: impl AsRef<str>,
     collection_name: impl AsRef<str>,
     embeddings: &[EmbeddingObject],
     chunks: &[String],
@@ -969,13 +1258,13 @@ pub(crate) async fn qdrant_persist_embeddings(
             .map(|m| m.to_owned());
 
         // create a point
-        let p = Point {
-            id: PointId::Num(embedding.index),
+        let point = Point {
+            id: embedding.index,
             vector,
-            payload,
+            payload: payload.unwrap_or_default(),
         };
 
-        points.push(p);
+        points.push(point);
     }
 
     dual_info!(
@@ -984,16 +1273,147 @@ pub(crate) async fn qdrant_persist_embeddings(
         request_id
     );
 
-    if let Err(e) = qdrant_client
-        .upsert_points(collection_name.as_ref(), points)
-        .await
-    {
-        let err_msg = format!("{}", e);
+    match MCP_CLIENTS.get() {
+        Some(mcp_clients) => {
+            let lock_mcp_clients = mcp_clients.read().await;
+            let mcp_client = match lock_mcp_clients.get(VDB_MCP_SERVER_NAME) {
+                Some(mcp_client) => mcp_client,
+                None => {
+                    let err_msg = "No MCP client found";
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    return Err(ServerError::Operation(err_msg.to_string()));
+                }
+            };
 
-        dual_error!("{} - request_id: {}", err_msg, request_id);
+            // request param
+            let request_param = match vdb_api_key.as_ref().is_empty() {
+                true => CallToolRequestParam {
+                    name: "upsert_points".into(),
+                    arguments: Some(serde_json::Map::from_iter([
+                        (
+                            "base_url".to_string(),
+                            serde_json::Value::from(vdb_server_url.as_ref().to_string()),
+                        ),
+                        (
+                            "name".to_string(),
+                            serde_json::Value::from(collection_name.as_ref().to_string()),
+                        ),
+                        (
+                            "points".to_string(),
+                            serde_json::Value::Array(
+                                points
+                                    .into_iter()
+                                    .map(|p| serde_json::to_value(p).unwrap())
+                                    .collect(),
+                            ),
+                        ),
+                    ])),
+                },
+                false => CallToolRequestParam {
+                    name: "upsert_points".into(),
+                    arguments: Some(serde_json::Map::from_iter([
+                        (
+                            "base_url".to_string(),
+                            serde_json::Value::from(vdb_server_url.as_ref().to_string()),
+                        ),
+                        (
+                            "api_key".to_string(),
+                            serde_json::Value::String(vdb_api_key.as_ref().to_string()),
+                        ),
+                        (
+                            "name".to_string(),
+                            serde_json::Value::from(collection_name.as_ref().to_string()),
+                        ),
+                        (
+                            "points".to_string(),
+                            serde_json::Value::Array(
+                                points
+                                    .into_iter()
+                                    .map(|p| serde_json::to_value(p).unwrap())
+                                    .collect(),
+                            ),
+                        ),
+                    ])),
+                },
+            };
 
-        return Err(ServerError::Operation(err_msg));
+            // call the upsert_points tool
+            let tool_result = mcp_client
+                .read()
+                .await
+                .peer()
+                .call_tool(request_param)
+                .await
+                .map_err(|e| {
+                    let err_msg = format!("Failed to call the upsert_points tool: {e}");
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    ServerError::Operation(err_msg)
+                })?;
+            let response = UpsertPointsResponse::from(tool_result);
+
+            dual_info!(
+                "Upsert points - Status: {} - Time: {} - request_id: {}",
+                response.status,
+                response.time,
+                request_id
+            );
+
+            Ok(())
+        }
+        None => {
+            let err_msg = "No MCP client found";
+            dual_error!("{} - request_id: {}", err_msg, request_id);
+            Err(ServerError::Operation(err_msg.to_string()))
+        }
     }
+}
 
-    Ok(())
+fn calculate_hash(s: &str) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    s.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn normalize(scores: &HashMap<u64, f32>) -> HashMap<u64, f32> {
+    let min_score = scores.values().cloned().fold(f32::INFINITY, f32::min);
+    let max_score = scores.values().cloned().fold(f32::NEG_INFINITY, f32::max);
+    scores
+        .iter()
+        .map(|(&doc_id, &score)| {
+            let normalized_score = if max_score - min_score > 0.0 {
+                (score - min_score) / (max_score - min_score)
+            } else {
+                0.0
+            };
+            (doc_id, normalized_score)
+        })
+        .collect()
+}
+
+fn weighted_fusion(
+    bm25_scores: HashMap<u64, f32>,
+    embedding_scores: HashMap<u64, f32>,
+    alpha: f32,
+) -> HashMap<u64, f32> {
+    // Normalize BM25 and Embedding scores
+    let bm25_normalized = normalize(&bm25_scores);
+    let embedding_normalized = normalize(&embedding_scores);
+
+    // Get the union of all document IDs
+    let all_doc_ids: HashSet<u64> = bm25_scores
+        .keys()
+        .chain(embedding_scores.keys())
+        .cloned()
+        .collect();
+
+    // Calculate fusion scores
+    all_doc_ids
+        .into_iter()
+        .map(|doc_id| {
+            let bm25_score = *bm25_normalized.get(&doc_id).unwrap_or(&0.0);
+            let embedding_score = *embedding_normalized.get(&doc_id).unwrap_or(&0.0);
+            let final_score = alpha * bm25_score + (1.0 - alpha) * embedding_score;
+            (doc_id, final_score)
+        })
+        .collect()
 }

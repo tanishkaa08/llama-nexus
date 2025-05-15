@@ -91,8 +91,8 @@ async fn main() -> ServerResult<()> {
             config
         }
         Err(e) => {
-            let err_msg = format!("Failed to load config: {}", e);
-            dual_error!("{}", err_msg);
+            let err_msg = format!("Failed to load config: {e}");
+            dual_error!("{err_msg}");
             return Err(ServerError::FailedToLoadConfig(err_msg));
         }
     };
@@ -103,8 +103,8 @@ async fn main() -> ServerResult<()> {
     HEALTH_CHECK_INTERVAL
         .set(cli.check_health_interval)
         .map_err(|e| {
-            let err_msg = format!("Failed to set health check interval: {}", e);
-            dual_error!("{}", err_msg);
+            let err_msg = format!("Failed to set health check interval: {e}");
+            dual_error!("{err_msg}");
             ServerError::Operation(err_msg)
         })?;
 
@@ -193,9 +193,9 @@ async fn main() -> ServerResult<()> {
 
     // Create the listener
     let listener = tokio::net::TcpListener::bind(&addr).await.map_err(|e| {
-        let err_msg = format!("Failed to bind to address: {}", e);
+        let err_msg = format!("Failed to bind to address: {e}");
 
-        dual_error!("{}", err_msg);
+        dual_error!("{err_msg}");
 
         ServerError::Operation(err_msg)
     })?;
@@ -212,8 +212,8 @@ async fn main() -> ServerResult<()> {
             Ok(())
         }
         Err(e) => {
-            let err_msg = format!("Server failed: {}", e);
-            dual_error!("{}", err_msg);
+            let err_msg = format!("Server failed: {e}");
+            dual_error!("{err_msg}");
             Err(ServerError::Operation(err_msg))
         }
     }
@@ -254,7 +254,7 @@ fn init_logging(destination: &str, file_path: Option<&str>) -> ServerResult<()> 
         .set(destination.to_string())
         .map_err(|_| {
             let err_msg = "Failed to set log destination".to_string();
-            eprintln!("{}", err_msg);
+            eprintln!("{err_msg}");
             ServerError::Operation(err_msg)
         })?;
 
@@ -276,8 +276,8 @@ fn init_logging(destination: &str, file_path: Option<&str>) -> ServerResult<()> 
         "file" => {
             if let Some(path) = file_path {
                 let file = std::fs::File::create(path).map_err(|e| {
-                    let err_msg = format!("Failed to create log file: {}", e);
-                    eprintln!("{}", err_msg);
+                    let err_msg = format!("Failed to create log file: {e}");
+                    eprintln!("{err_msg}");
                     ServerError::Operation(err_msg)
                 })?;
 
@@ -303,8 +303,8 @@ fn init_logging(destination: &str, file_path: Option<&str>) -> ServerResult<()> 
                 if let Some(parent) = std::path::Path::new(path).parent() {
                     if !parent.exists() {
                         std::fs::create_dir_all(parent).map_err(|e| {
-                            let err_msg = format!("Failed to create directory for log file: {}", e);
-                            eprintln!("{}", err_msg);
+                            let err_msg = format!("Failed to create directory for log file: {e}");
+                            eprintln!("{err_msg}");
                             ServerError::Operation(err_msg)
                         })?;
                     }
@@ -331,7 +331,7 @@ fn init_logging(destination: &str, file_path: Option<&str>) -> ServerResult<()> 
                     .with_ansi(false) // Disable ANSI colors
                     .init();
 
-                println!("Logging to both stdout and file: {}", path);
+                println!("Logging to both stdout and file: {path}");
 
                 Ok(())
             } else {
@@ -340,10 +340,9 @@ fn init_logging(destination: &str, file_path: Option<&str>) -> ServerResult<()> 
         }
         _ => {
             let err_msg = format!(
-                "Invalid log destination: {}. Valid values are 'stdout', 'file', or 'both'",
-                destination
+                "Invalid log destination: {destination}. Valid values are 'stdout', 'file', or 'both'",
             );
-            eprintln!("{}", err_msg);
+            eprintln!("{err_msg}");
             Err(ServerError::Operation(err_msg))
         }
     }
@@ -597,7 +596,7 @@ impl AppState {
                     .send()
                     .await
                     .map_err(|e| {
-                        let err_msg = format!("Failed to send health check result: {}", e);
+                        let err_msg = format!("Failed to send health check result: {e}");
 
                         dual_error!("{}", err_msg);
 

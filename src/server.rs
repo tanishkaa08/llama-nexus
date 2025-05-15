@@ -4,7 +4,6 @@ use crate::{
     HEALTH_CHECK_INTERVAL,
 };
 use async_trait::async_trait;
-use axum::http::Uri;
 use bitflags::bitflags;
 use serde::{Deserialize, Serialize};
 use std::{
@@ -229,7 +228,7 @@ impl std::fmt::Display for ServerKind {
             kind_str = kind_str.trim_end_matches(',').to_string();
         }
 
-        write!(f, "{}", kind_str)
+        write!(f, "{kind_str}")
     }
 }
 impl std::str::FromStr for ServerKind {
@@ -306,7 +305,7 @@ impl<'de> Deserialize<'de> for ServerKind {
 
         // Parse the string using from_str
         s.parse::<ServerKind>()
-            .map_err(|e| serde::de::Error::custom(format!("Failed to parse ServerKindNew: {}", e)))
+            .map_err(|e| serde::de::Error::custom(format!("Failed to parse ServerKindNew: {e}")))
     }
 }
 impl std::hash::Hash for ServerKind {
@@ -402,8 +401,8 @@ impl ServerGroup {
 
         // Remove the server from the healthy server set if found
         if !self.healthy_servers.write().await.remove(id_to_remove) {
-            let err_msg = format!("Server not found: {}", id_to_remove);
-            dual_warn!("{}", &err_msg);
+            let err_msg = format!("Server not found: {id_to_remove}");
+            dual_warn!("{err_msg}");
             return Err(ServerError::Operation(err_msg));
         }
 
@@ -421,7 +420,7 @@ impl ServerGroup {
 }
 #[async_trait]
 impl RoutingPolicy for ServerGroup {
-    async fn next(&self) -> Result<Uri, ServerError> {
+    async fn next(&self) -> Result<TargetServerInfo, ServerError> {
         let servers = self.servers.read().await;
         if servers.is_empty() {
             let err_msg = format!("No {} server found", self.ty);
@@ -448,17 +447,28 @@ impl RoutingPolicy for ServerGroup {
         };
 
         // Access the chosen server
-        let url = {
+        let target_server_info = {
             let server = server_lock.write().await;
             server.connections.fetch_add(1, Ordering::Relaxed);
-            server.url.parse().unwrap()
+            TargetServerInfo {
+                id: server.id.clone(),
+                url: server.url.clone(),
+            }
+            // server.url.parse().unwrap()
         };
 
-        Ok(url)
+        Ok(target_server_info)
     }
+}
+
+#[allow(dead_code)]
+#[derive(Debug, Clone)]
+pub struct TargetServerInfo {
+    pub id: ServerId,
+    pub url: String,
 }
 
 #[async_trait]
 pub(crate) trait RoutingPolicy: Sync + Send {
-    async fn next(&self) -> Result<Uri, ServerError>;
+    async fn next(&self) -> Result<TargetServerInfo, ServerError>;
 }

@@ -1,8 +1,10 @@
 use crate::{
+    config::{MCP_CLIENTS, MCP_TOOLS},
     dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
     info::ApiServer,
     rag,
+    rag::KWSEARCH_MCP_SERVER_NAME,
     server::{RoutingPolicy, Server, ServerIdToRemove, ServerKind},
     AppState,
 };
@@ -13,10 +15,18 @@ use axum::{
     Json,
 };
 use endpoints::{
-    chat::ChatCompletionRequest,
+    chat::{
+        ChatCompletionAssistantMessage, ChatCompletionChunk, ChatCompletionObject,
+        ChatCompletionRequest, ChatCompletionRequestMessage, ChatCompletionToolMessage, Tool,
+        ToolCall, ToolChoice, ToolFunction,
+    },
     embeddings::{EmbeddingRequest, EmbeddingsResponse},
     models::ListModelsResponse,
 };
+use futures_util::StreamExt;
+use gaia_kwsearch_common::{CreateIndexResponse, KwDocumentInput};
+use reqwest::header::CONTENT_TYPE;
+use rmcp::model::{CallToolRequestParam, RawContent};
 use std::{sync::Arc, time::SystemTime};
 use tokio::select;
 use tokio_util::sync::CancellationToken;
@@ -54,7 +64,7 @@ pub(crate) async fn chat(
     State(state): State<Arc<AppState>>,
     Extension(cancel_token): Extension<CancellationToken>,
     headers: HeaderMap,
-    Json(request): Json<ChatCompletionRequest>,
+    Json(mut request): Json<ChatCompletionRequest>,
 ) -> ServerResult<axum::response::Response> {
     let request_id = headers
         .get("x-request-id")
@@ -65,7 +75,7 @@ pub(crate) async fn chat(
     dual_info!("Received a new chat request - request_id: {}", request_id);
 
     // get the chat server
-    let chat_server_base_url = {
+    let target_server_info = {
         let servers = state.server_group.read().await;
         let chat_servers = match servers.get(&ServerKind::chat) {
             Some(servers) => servers,
@@ -77,28 +87,65 @@ pub(crate) async fn chat(
         };
 
         match chat_servers.next().await {
-            Ok(url) => url,
+            Ok(target_server_info) => target_server_info,
             Err(e) => {
-                let err_msg = format!("Failed to get the chat server: {}", e);
+                let err_msg = format!("Failed to get the chat server: {e}");
                 dual_error!("{} - request_id: {}", err_msg, request_id);
                 return Err(ServerError::Operation(err_msg));
             }
         }
     };
 
-    let chat_service_url = format!("{}v1/chat/completions", chat_server_base_url);
+    // update the request with MCP tools
+    if let Some(config_mcp_servers) = state.config.read().await.mcp.as_ref() {
+        if !config_mcp_servers.is_empty() {
+            let mut more_tools = Vec::new();
+            for server_config in config_mcp_servers.iter() {
+                if server_config.enable {
+                    server_config
+                        .tools
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .for_each(|mcp_tool| {
+                            let tool = Tool::new(ToolFunction {
+                                name: mcp_tool.name.to_string(),
+                                description: mcp_tool.description.as_ref().map(|s| s.to_string()),
+                                parameters: Some((*mcp_tool.input_schema).clone()),
+                            });
+
+                            more_tools.push(tool.clone());
+                        });
+                }
+            }
+
+            if let Some(tools) = &mut request.tools {
+                tools.extend(more_tools);
+            } else {
+                request.tools = Some(more_tools);
+            }
+
+            // set the tool choice to auto
+            if let Some(ToolChoice::None) | None = request.tool_choice {
+                request.tool_choice = Some(ToolChoice::Auto);
+            }
+        }
+    }
+
+    let chat_service_url = format!(
+        "{}/v1/chat/completions",
+        target_server_info.url.trim_end_matches('/')
+    );
     dual_info!(
         "Forward the chat request to {} - request_id: {}",
         chat_service_url,
         request_id
     );
 
-    let stream = request.stream;
-
     // Create a request client that can be cancelled
     let request_builder = reqwest::Client::new()
-        .post(chat_service_url)
-        .header("content-type", "application/json")
+        .post(&chat_service_url)
+        .header(CONTENT_TYPE, "application/json")
         .json(&request);
 
     // Use select! to handle request cancellation
@@ -106,8 +153,7 @@ pub(crate) async fn chat(
         response = request_builder.send() => {
             response.map_err(|e| {
                 let err_msg = format!(
-                    "Failed to forward the request to the downstream server: {}",
-                    e
+                    "Failed to forward the request to the downstream server: {e}"
                 );
                 dual_error!("{} - request_id: {}", err_msg, request_id);
                 ServerError::Operation(err_msg)
@@ -121,50 +167,250 @@ pub(crate) async fn chat(
     };
 
     let status = ds_response.status();
+    dual_debug!("status: {} - request_id: {}", status, request_id);
+    let headers = ds_response.headers().clone();
 
-    // Handle response body reading with cancellation
-    let bytes = select! {
-        bytes = ds_response.bytes() => {
-            bytes.map_err(|e| {
-                let err_msg = format!("Failed to get the full response as bytes: {}", e);
-                dual_error!("{} - request_id: {}", err_msg, request_id);
-                ServerError::Operation(err_msg)
-            })?
-        }
-        _ = cancel_token.cancelled() => {
-            let warn_msg = "Request was cancelled while reading response";
-            dual_warn!("{} - request_id: {}", warn_msg, request_id);
-            return Err(ServerError::Operation(warn_msg.to_string()));
-        }
-    };
-
-    match stream {
+    match request.stream {
         Some(true) => {
-            match Response::builder()
-                .status(status)
-                .header("Content-Type", "text/event-stream")
-                .body(Body::from(bytes))
-            {
-                Ok(response) => {
-                    dual_info!(
-                        "Chat request completed successfully - request_id: {}",
-                        request_id
-                    );
-                    Ok(response)
+            // check if the response has a header with the key "requires-tool-call"
+            let mut requires_tool_call = false;
+            if let Some(value) = headers.get("requires-tool-call") {
+                // convert the value to a boolean
+                requires_tool_call = value.to_str().unwrap().parse().unwrap();
+            }
+
+            dual_debug!(
+                "requires_tool_call: {} - request_id: {}",
+                requires_tool_call,
+                request_id
+            );
+
+            match requires_tool_call {
+                true => {
+                    // Handle response body reading with cancellation
+                    let mut ds_stream = ds_response.bytes_stream();
+
+                    let mut tool_calls: Vec<ToolCall> = Vec::new();
+                    while let Some(item) = ds_stream.next().await {
+                        match item {
+                            Ok(bytes) => {
+                                match String::from_utf8(bytes.to_vec()) {
+                                    Ok(s) => {
+                                        let x = s
+                                            .trim_start_matches("data:")
+                                            .trim()
+                                            .split("data:")
+                                            .collect::<Vec<_>>();
+                                        let s = x[0];
+
+                                        // let s = s.trim_start_matches("data:").trim();
+
+                                        dual_debug!("s: {}", s);
+
+                                        // convert the bytes to ChatCompletionChunk
+                                        if let Ok(chunk) =
+                                            serde_json::from_str::<ChatCompletionChunk>(s)
+                                        {
+                                            dual_debug!(
+                                                "chunk: {:?} - request_id: {}",
+                                                &chunk,
+                                                request_id
+                                            );
+
+                                            if !chunk.choices.is_empty() {
+                                                for tool in chunk.choices[0].delta.tool_calls.iter()
+                                                {
+                                                    let tool_call = tool.clone().into();
+
+                                                    dual_debug!("tool_call: {:?}", &tool_call);
+
+                                                    tool_calls.push(tool_call);
+                                                }
+
+                                                break;
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        let err_msg = format!(
+                                            "Failed to convert bytes from downstream server into string: {e}"
+                                        );
+                                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                                        return Err(ServerError::Operation(err_msg));
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                let err_msg =
+                                    format!("Failed to get the full response as bytes: {e}");
+                                dual_error!("{} - request_id: {}", err_msg, request_id);
+                                return Err(ServerError::Operation(err_msg));
+                            }
+                        }
+                    }
+
+                    match call_mcp_server(
+                        tool_calls.as_slice(),
+                        &mut request,
+                        &chat_service_url,
+                        &request_id,
+                        cancel_token,
+                    )
+                    .await
+                    {
+                        Ok(response) => Ok(response),
+                        Err(ServerError::McpNotFoundClient) => {
+                            let err_msg =
+                                format!("Not found MCP server - request_id: {request_id}");
+                            dual_error!("{}", err_msg);
+                            Err(ServerError::Operation(err_msg))
+                        }
+                        Err(e) => {
+                            let err_msg = format!(
+                                "Failed to call MCP server: {e} - request_id: {request_id}"
+                            );
+                            dual_error!("{}", err_msg);
+                            Err(ServerError::Operation(err_msg))
+                        }
+                    }
                 }
-                Err(e) => {
-                    let err_msg = format!("Failed to create the response: {}", e);
-                    dual_error!("{} - request_id: {}", err_msg, request_id);
-                    Err(ServerError::Operation(err_msg))
+                false => {
+                    // Handle response body reading with cancellation
+                    let bytes = select! {
+                        bytes = ds_response.bytes() => {
+                            bytes.map_err(|e| {
+                                let err_msg = format!("Failed to get the full response as bytes: {e}");
+                                dual_error!("{} - request_id: {}", err_msg, request_id);
+                                ServerError::Operation(err_msg)
+                            })?
+                        }
+                        _ = cancel_token.cancelled() => {
+                            let warn_msg = "Request was cancelled while reading response";
+                            dual_warn!("{} - request_id: {}", warn_msg, request_id);
+                            return Err(ServerError::Operation(warn_msg.to_string()));
+                        }
+                    };
+
+                    let mut response_builder = Response::builder().status(status);
+                    // Copy all headers from downstream response
+                    for (name, value) in headers.iter() {
+                        match name.as_str() {
+                            "access-control-allow-origin" => {
+                                response_builder = response_builder.header(name, value);
+                            }
+                            "access-control-allow-headers" => {
+                                response_builder = response_builder.header(name, value);
+                            }
+                            "access-control-allow-methods" => {
+                                response_builder = response_builder.header(name, value);
+                            }
+                            "content-type" => {
+                                response_builder = response_builder.header(name, value);
+                            }
+                            "cache-control" => {
+                                response_builder = response_builder.header(name, value);
+                            }
+                            "connection" => {
+                                response_builder = response_builder.header(name, value);
+                            }
+                            "user" => {
+                                response_builder = response_builder.header(name, value);
+                            }
+                            "date" => {
+                                response_builder = response_builder.header(name, value);
+                            }
+                            _ => {
+                                dual_debug!(
+                                    "ignore header: {} - {}",
+                                    name,
+                                    value.to_str().unwrap()
+                                );
+                            }
+                        }
+                    }
+
+                    match response_builder.body(Body::from(bytes)) {
+                        Ok(response) => {
+                            dual_info!(
+                                "Chat request completed successfully - request_id: {}",
+                                request_id
+                            );
+                            Ok(response)
+                        }
+                        Err(e) => {
+                            let err_msg = format!("Failed to create the response: {e}");
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                            Err(ServerError::Operation(err_msg))
+                        }
+                    }
                 }
             }
         }
         Some(false) | None => {
-            match Response::builder()
-                .status(status)
-                .header("Content-Type", "application/json")
-                .body(Body::from(bytes))
-            {
+            // Handle response body reading with cancellation
+            let bytes = select! {
+                bytes = ds_response.bytes() => {
+                    bytes.map_err(|e| {
+                        let err_msg = format!("Failed to get the full response as bytes: {e}");
+                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                        ServerError::Operation(err_msg)
+                    })?
+                }
+                _ = cancel_token.cancelled() => {
+                    let warn_msg = "Request was cancelled while reading response";
+                    dual_warn!("{} - request_id: {}", warn_msg, request_id);
+                    return Err(ServerError::Operation(warn_msg.to_string()));
+                }
+            };
+
+            // check if the response has a header with the key "requires-tool-call"
+            if let Some(value) = headers.get("requires-tool-call") {
+                // convert the value to a boolean
+                let requires_tool_call: bool = value.to_str().unwrap().parse().unwrap();
+                if requires_tool_call {
+                    let chat_completion: ChatCompletionObject = match serde_json::from_slice(&bytes)
+                    {
+                        Ok(message) => message,
+                        Err(e) => {
+                            dual_error!("Failed to parse the response: {}", e);
+                            return Err(ServerError::Operation(e.to_string()));
+                        }
+                    };
+
+                    let assistant_message = &chat_completion.choices[0].message;
+
+                    match call_mcp_server(
+                        assistant_message.tool_calls.as_slice(),
+                        &mut request,
+                        &chat_service_url,
+                        &request_id,
+                        cancel_token,
+                    )
+                    .await
+                    {
+                        Ok(response) => return Ok(response),
+                        Err(ServerError::McpNotFoundClient) => {
+                            dual_warn!("Not found MCP server - request_id: {}", request_id);
+                        }
+                        Err(e) => {
+                            let err_msg = format!(
+                                "Failed to call MCP server: {e} - request_id: {request_id}"
+                            );
+                            dual_error!("{}", err_msg);
+                            return Err(ServerError::Operation(err_msg));
+                        }
+                    }
+                }
+            }
+
+            let mut response_builder = Response::builder().status(status);
+            // Copy all headers from downstream response
+            for (name, value) in headers.iter() {
+                dual_debug!("{}: {}", name, value.to_str().unwrap());
+                response_builder = response_builder.header(name, value);
+            }
+
+            match response_builder.body(Body::from(bytes)) {
                 Ok(response) => {
                     dual_info!(
                         "Chat request completed successfully - request_id: {}",
@@ -173,12 +419,262 @@ pub(crate) async fn chat(
                     Ok(response)
                 }
                 Err(e) => {
-                    let err_msg = format!("Failed to create the response: {}", e);
+                    let err_msg = format!("Failed to create the response: {e}");
                     dual_error!("{} - request_id: {}", err_msg, request_id);
                     Err(ServerError::Operation(err_msg))
                 }
             }
         }
+    }
+}
+
+async fn call_mcp_server(
+    tool_calls: &[ToolCall],
+    request: &mut ChatCompletionRequest,
+    chat_service_url: impl AsRef<str>,
+    request_id: impl AsRef<str>,
+    cancel_token: CancellationToken,
+) -> ServerResult<axum::response::Response> {
+    let request_id = request_id.as_ref();
+    let chat_service_url = chat_service_url.as_ref();
+
+    // let tool_calls = assistant_message.tool_calls.clone();
+    let tool_call = &tool_calls[0];
+    let tool_name = tool_call.function.name.as_str();
+    let tool_args = &tool_call.function.arguments;
+
+    dual_debug!(
+        "tool name: {}, tool args: {} - request_id: {}",
+        tool_name,
+        tool_args,
+        request_id
+    );
+
+    // convert the func_args to a json object
+    let arguments =
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(tool_args).ok();
+
+    // find mcp client by tool name
+    if let Some(mcp_tools) = MCP_TOOLS.get() {
+        let tools = mcp_tools.read().await;
+        dual_debug!("mcp_tools: {:?}", mcp_tools);
+
+        // look up the tool name in MCP_TOOLS
+        if let Some(mcp_client_name) = tools.get(tool_name) {
+            if let Some(lock_mcp_clients) = MCP_CLIENTS.get() {
+                let mcp_clients = lock_mcp_clients.read().await;
+
+                // get the mcp client
+                let mcp_client = match mcp_clients.get(mcp_client_name) {
+                    Some(mcp_client) => mcp_client,
+                    None => {
+                        dual_error!("Tool not found: {}", tool_name);
+                        return Err(ServerError::McpOperation(tool_name.to_string()));
+                    }
+                };
+
+                // call a tool
+                let tool_sum = CallToolRequestParam {
+                    name: tool_name.to_string().into(),
+                    arguments,
+                };
+                let res = mcp_client
+                    .read()
+                    .await
+                    .peer()
+                    .call_tool(tool_sum)
+                    .await
+                    .map_err(|e| {
+                        dual_error!("Failed to call the tool: {}", e);
+                        ServerError::Operation(e.to_string())
+                    })?;
+                dual_debug!("{}", serde_json::to_string_pretty(&res).unwrap());
+
+                match res.is_error {
+                    Some(false) => {
+                        match res.content.is_empty() {
+                            true => Err(ServerError::McpEmptyContent),
+                            false => {
+                                let content = &res.content[0];
+                                match &content.raw {
+                                    RawContent::Text(text) => {
+                                        dual_debug!("tool result: {}", text.text);
+
+                                        // create an assistant message
+                                        let tool_completion_message =
+                                            ChatCompletionRequestMessage::Tool(
+                                                ChatCompletionToolMessage::new(&text.text, None),
+                                            );
+
+                                        // append assistant message with tool call to request messages
+                                        let assistant_completion_message =
+                                            ChatCompletionRequestMessage::Assistant(
+                                                ChatCompletionAssistantMessage::new(
+                                                    None,
+                                                    None,
+                                                    Some(tool_calls.to_vec()),
+                                                ),
+                                            );
+                                        request.messages.push(assistant_completion_message);
+                                        // append tool message with tool result to request messages
+                                        request.messages.push(tool_completion_message);
+
+                                        // Create a request client that can be cancelled
+                                        let request_builder = reqwest::Client::new()
+                                            .post(chat_service_url)
+                                            .header(CONTENT_TYPE, "application/json")
+                                            .json(&request);
+
+                                        // Use select! to handle request cancellation
+                                        let ds_response = select! {
+                                            response = request_builder.send() => {
+                                                response.map_err(|e| {
+                                                    let err_msg = format!(
+                                                        "Failed to forward the request to the downstream server: {e}"
+                                                    );
+                                                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                                                    ServerError::Operation(err_msg)
+                                                })?
+                                            }
+                                            _ = cancel_token.cancelled() => {
+                                                let warn_msg = "Request was cancelled by client";
+                                                dual_warn!("{} - request_id: {}", warn_msg, request_id);
+                                                return Err(ServerError::Operation(warn_msg.to_string()));
+                                            }
+                                        };
+
+                                        let status = ds_response.status();
+                                        let headers = ds_response.headers().clone();
+
+                                        // Handle response body reading with cancellation
+                                        let bytes = select! {
+                                            bytes = ds_response.bytes() => {
+                                                bytes.map_err(|e| {
+                                                    let err_msg = format!("Failed to get the full response as bytes: {e}");
+                                                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                                                    ServerError::Operation(err_msg)
+                                                })?
+                                            }
+                                            _ = cancel_token.cancelled() => {
+                                                let warn_msg = "Request was cancelled while reading response";
+                                                dual_warn!("{} - request_id: {}", warn_msg, request_id);
+                                                return Err(ServerError::Operation(warn_msg.to_string()));
+                                            }
+                                        };
+
+                                        let mut response_builder =
+                                            Response::builder().status(status);
+
+                                        // Copy all headers from downstream response
+                                        match request.stream {
+                                            Some(true) => {
+                                                for (name, value) in headers.iter() {
+                                                    match name.as_str() {
+                                                        "access-control-allow-origin" => {
+                                                            response_builder = response_builder
+                                                                .header(name, value);
+                                                        }
+                                                        "access-control-allow-headers" => {
+                                                            response_builder = response_builder
+                                                                .header(name, value);
+                                                        }
+                                                        "access-control-allow-methods" => {
+                                                            response_builder = response_builder
+                                                                .header(name, value);
+                                                        }
+                                                        "content-type" => {
+                                                            response_builder = response_builder
+                                                                .header(name, value);
+                                                        }
+                                                        "cache-control" => {
+                                                            response_builder = response_builder
+                                                                .header(name, value);
+                                                        }
+                                                        "connection" => {
+                                                            response_builder = response_builder
+                                                                .header(name, value);
+                                                        }
+                                                        "user" => {
+                                                            response_builder = response_builder
+                                                                .header(name, value);
+                                                        }
+                                                        "date" => {
+                                                            response_builder = response_builder
+                                                                .header(name, value);
+                                                        }
+                                                        _ => {
+                                                            dual_debug!(
+                                                                "ignore header: {} - {}",
+                                                                name,
+                                                                value.to_str().unwrap()
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                            Some(false) | None => {
+                                                for (name, value) in headers.iter() {
+                                                    dual_debug!(
+                                                        "{}: {}",
+                                                        name,
+                                                        value.to_str().unwrap()
+                                                    );
+                                                    response_builder =
+                                                        response_builder.header(name, value);
+                                                }
+                                            }
+                                        }
+
+                                        match response_builder.body(Body::from(bytes)) {
+                                            Ok(response) => {
+                                                dual_info!(
+                                                    "Chat request completed successfully - request_id: {}",
+                                                    request_id
+                                                );
+                                                Ok(response)
+                                            }
+                                            Err(e) => {
+                                                let err_msg =
+                                                    format!("Failed to create the response: {e}");
+                                                dual_error!(
+                                                    "{} - request_id: {}",
+                                                    err_msg,
+                                                    request_id
+                                                );
+                                                Err(ServerError::Operation(err_msg))
+                                            }
+                                        }
+                                    }
+                                    _ => {
+                                        let err_msg =
+                                            "Only text content is supported for tool call results";
+                                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                                        Err(ServerError::Operation(err_msg.to_string()))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        let err_msg = format!("Failed to call the tool: {tool_name}");
+                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                        Err(ServerError::Operation(err_msg))
+                    }
+                }
+            } else {
+                dual_error!("Empty MCP CLIENTS");
+                Err(ServerError::McpNotFoundClient)
+            }
+        } else {
+            dual_error!(
+                "Failed to find the MCP client with tool name: {}",
+                tool_name
+            );
+            Err(ServerError::McpNotFoundClient)
+        }
+    } else {
+        dual_error!("Empty MCP TOOLS");
+        Err(ServerError::McpNotFoundClient)
     }
 }
 
@@ -211,15 +707,18 @@ pub(crate) async fn embeddings_handler(
         }
     };
 
-    let embeddings_server_base_url = match embeddings_servers.next().await {
-        Ok(url) => url,
+    let target_server_info = match embeddings_servers.next().await {
+        Ok(target_server_info) => target_server_info,
         Err(e) => {
-            let err_msg = format!("Failed to get the embeddings server: {}", e);
+            let err_msg = format!("Failed to get the embeddings server: {e}");
             dual_error!("{} - request_id: {}", err_msg, request_id);
             return Err(ServerError::Operation(err_msg));
         }
     };
-    let embeddings_service_url = format!("{}v1/embeddings", embeddings_server_base_url);
+    let embeddings_service_url = format!(
+        "{}/v1/embeddings",
+        target_server_info.url.trim_end_matches('/')
+    );
     dual_info!(
         "Forward the embeddings request to {} - request_id: {}",
         embeddings_service_url,
@@ -254,10 +753,9 @@ pub(crate) async fn embeddings_handler(
         response = request.send() => {
             response.map_err(|e| {
                 let err_msg = format!(
-                    "Failed to forward the request to the downstream server: {}",
-                    e
+                    "Failed to forward the request to the downstream server: {e}",
                 );
-                dual_error!("{} - request_id: {}", err_msg, request_id);
+                dual_error!("{err_msg} - request_id: {request_id}");
                 ServerError::Operation(err_msg)
             })?
         }
@@ -274,8 +772,8 @@ pub(crate) async fn embeddings_handler(
     let bytes = select! {
         bytes = response.bytes() => {
             bytes.map_err(|e| {
-                let err_msg = format!("Failed to get the full response as bytes: {}", e);
-                dual_error!("{} - request_id: {}", err_msg, request_id);
+                let err_msg = format!("Failed to get the full response as bytes: {e}");
+                dual_error!("{err_msg} - request_id: {request_id}");
                 ServerError::Operation(err_msg)
             })?
         }
@@ -299,8 +797,8 @@ pub(crate) async fn embeddings_handler(
             Ok(response)
         }
         Err(e) => {
-            let err_msg = format!("Failed to create the response: {}", e);
-            dual_error!("{} - request_id: {}", err_msg, request_id);
+            let err_msg = format!("Failed to create the response: {e}");
+            dual_error!("{err_msg} - request_id: {request_id}");
             Err(ServerError::Operation(err_msg))
         }
     }
@@ -325,7 +823,7 @@ pub(crate) async fn audio_transcriptions_handler(
     );
 
     // get the transcribe server
-    let transcribe_server_base_url = {
+    let target_server_info = {
         let servers = state.server_group.read().await;
         let transcribe_servers = match servers.get(&ServerKind::transcribe) {
             Some(servers) => servers,
@@ -337,17 +835,19 @@ pub(crate) async fn audio_transcriptions_handler(
         };
 
         match transcribe_servers.next().await {
-            Ok(url) => url,
+            Ok(target_server_info) => target_server_info,
             Err(e) => {
-                let err_msg = format!("Failed to get the transcribe server: {}", e);
+                let err_msg = format!("Failed to get the transcribe server: {e}");
                 dual_error!("{} - request_id: {}", err_msg, request_id);
                 return Err(ServerError::Operation(err_msg));
             }
         }
     };
 
-    let transcription_service_url =
-        format!("{}v1/audio/transcriptions", transcribe_server_base_url);
+    let transcription_service_url = format!(
+        "{}/v1/audio/transcriptions",
+        target_server_info.url.trim_end_matches('/')
+    );
     dual_info!(
         "Forward the audio transcription request to {} - request_id: {}",
         transcription_service_url,
@@ -363,8 +863,8 @@ pub(crate) async fn audio_transcriptions_handler(
     // convert the request body into bytes
     let body = req.into_body();
     let body_bytes = axum::body::to_bytes(body, usize::MAX).await.map_err(|e| {
-        let err_msg = format!("Failed to convert the request body into bytes: {}", e);
-        dual_error!("{} - request_id: {}", err_msg, request_id);
+        let err_msg = format!("Failed to convert the request body into bytes: {e}");
+        dual_error!("{err_msg} - request_id: {request_id}");
         ServerError::Operation(err_msg)
     })?;
 
@@ -375,10 +875,9 @@ pub(crate) async fn audio_transcriptions_handler(
         response = request_builder.send() => {
             response.map_err(|e| {
                 let err_msg = format!(
-                    "Failed to forward the request to the downstream server: {}",
-                    e
+                    "Failed to forward the request to the downstream server: {e}"
                 );
-                dual_error!("{} - request_id: {}", err_msg, request_id);
+                dual_error!("{err_msg} - request_id: {request_id}");
                 ServerError::Operation(err_msg)
             })?
         }
@@ -395,8 +894,8 @@ pub(crate) async fn audio_transcriptions_handler(
     let bytes = select! {
         bytes = response.bytes() => {
             bytes.map_err(|e| {
-                let err_msg = format!("Failed to get the full response as bytes: {}", e);
-                dual_error!("{} - request_id: {}", err_msg, request_id);
+                let err_msg = format!("Failed to get the full response as bytes: {e}");
+                dual_error!("{err_msg} - request_id: {request_id}");
                 ServerError::Operation(err_msg)
             })?
         }
@@ -420,8 +919,8 @@ pub(crate) async fn audio_transcriptions_handler(
             Ok(response)
         }
         Err(e) => {
-            let err_msg = format!("Failed to create the response: {}", e);
-            dual_error!("{} - request_id: {}", err_msg, request_id);
+            let err_msg = format!("Failed to create the response: {e}");
+            dual_error!("{err_msg} - request_id: {request_id}");
             Err(ServerError::Operation(err_msg))
         }
     }
@@ -446,7 +945,7 @@ pub(crate) async fn audio_translations_handler(
     );
 
     // get the transcribe server
-    let translate_server_base_url = {
+    let target_server_info = {
         let servers = state.server_group.read().await;
         let translate_servers = match servers.get(&ServerKind::translate) {
             Some(servers) => servers,
@@ -458,16 +957,19 @@ pub(crate) async fn audio_translations_handler(
         };
 
         match translate_servers.next().await {
-            Ok(url) => url,
+            Ok(target_server_info) => target_server_info,
             Err(e) => {
-                let err_msg = format!("Failed to get the translate server: {}", e);
+                let err_msg = format!("Failed to get the translate server: {e}");
                 dual_error!("{} - request_id: {}", err_msg, request_id);
                 return Err(ServerError::Operation(err_msg));
             }
         }
     };
 
-    let translation_service_url = format!("{}v1/audio/translations", translate_server_base_url);
+    let translation_service_url = format!(
+        "{}/v1/audio/translations",
+        target_server_info.url.trim_end_matches('/')
+    );
     dual_info!(
         "Forward the audio translation request to {} - request_id: {}",
         translation_service_url,
@@ -483,8 +985,8 @@ pub(crate) async fn audio_translations_handler(
     // convert the request body into bytes
     let body = req.into_body();
     let body_bytes = axum::body::to_bytes(body, usize::MAX).await.map_err(|e| {
-        let err_msg = format!("Failed to convert the request body into bytes: {}", e);
-        dual_error!("{} - request_id: {}", err_msg, request_id);
+        let err_msg = format!("Failed to convert the request body into bytes: {e}");
+        dual_error!("{err_msg} - request_id: {request_id}");
         ServerError::Operation(err_msg)
     })?;
 
@@ -495,10 +997,9 @@ pub(crate) async fn audio_translations_handler(
         response = request_builder.send() => {
             response.map_err(|e| {
                 let err_msg = format!(
-                    "Failed to forward the request to the downstream server: {}",
-                    e
+                    "Failed to forward the request to the downstream server: {e}"
                 );
-                dual_error!("{} - request_id: {}", err_msg, request_id);
+                dual_error!("{err_msg} - request_id: {request_id}");
                 ServerError::Operation(err_msg)
             })?
         }
@@ -515,8 +1016,8 @@ pub(crate) async fn audio_translations_handler(
     let bytes = select! {
         bytes = response.bytes() => {
             bytes.map_err(|e| {
-                let err_msg = format!("Failed to get the full response as bytes: {}", e);
-                dual_error!("{} - request_id: {}", err_msg, request_id);
+                let err_msg = format!("Failed to get the full response as bytes: {e}");
+                dual_error!("{err_msg} - request_id: {request_id}");
                 ServerError::Operation(err_msg)
             })?
         }
@@ -540,8 +1041,8 @@ pub(crate) async fn audio_translations_handler(
             Ok(response)
         }
         Err(e) => {
-            let err_msg = format!("Failed to create the response: {}", e);
-            dual_error!("{} - request_id: {}", err_msg, request_id);
+            let err_msg = format!("Failed to create the response: {e}");
+            dual_error!("{err_msg} - request_id: {request_id}");
             Err(ServerError::Operation(err_msg))
         }
     }
@@ -566,7 +1067,7 @@ pub(crate) async fn audio_tts_handler(
     );
 
     // get the tts server
-    let tts_server_base_url = {
+    let target_server_info = {
         let servers = state.server_group.read().await;
         let tts_servers = match servers.get(&ServerKind::tts) {
             Some(servers) => servers,
@@ -578,16 +1079,19 @@ pub(crate) async fn audio_tts_handler(
         };
 
         match tts_servers.next().await {
-            Ok(url) => url,
+            Ok(target_server_info) => target_server_info,
             Err(e) => {
-                let err_msg = format!("Failed to get the tts server: {}", e);
+                let err_msg = format!("Failed to get the tts server: {e}");
                 dual_error!("{} - request_id: {}", err_msg, request_id);
                 return Err(ServerError::Operation(err_msg));
             }
         }
     };
 
-    let tts_service_url = format!("{}v1/audio/speech", tts_server_base_url);
+    let tts_service_url = format!(
+        "{}/v1/audio/speech",
+        target_server_info.url.trim_end_matches('/')
+    );
     dual_info!(
         "Forward the audio speech request to {} - request_id: {}",
         tts_service_url,
@@ -602,8 +1106,8 @@ pub(crate) async fn audio_tts_handler(
 
     let body = req.into_body();
     let body_bytes = axum::body::to_bytes(body, usize::MAX).await.map_err(|e| {
-        let err_msg = format!("Failed to convert the request body into bytes: {}", e);
-        dual_error!("{} - request_id: {}", err_msg, request_id);
+        let err_msg = format!("Failed to convert the request body into bytes: {e}");
+        dual_error!("{err_msg} - request_id: {request_id}");
         ServerError::Operation(err_msg)
     })?;
 
@@ -614,10 +1118,9 @@ pub(crate) async fn audio_tts_handler(
         response = request_builder.send() => {
             response.map_err(|e| {
                 let err_msg = format!(
-                    "Failed to forward the request to the downstream server: {}",
-                    e
+                    "Failed to forward the request to the downstream server: {e}"
                 );
-                dual_error!("{} - request_id: {}", err_msg, request_id);
+                dual_error!("{err_msg} - request_id: {request_id}");
                 ServerError::Operation(err_msg)
             })?
         }
@@ -638,8 +1141,8 @@ pub(crate) async fn audio_tts_handler(
     let bytes = select! {
         bytes = ds_response.bytes() => {
             bytes.map_err(|e| {
-                let err_msg = format!("Failed to get the full response as bytes: {}", e);
-                dual_error!("{} - request_id: {}", err_msg, request_id);
+                let err_msg = format!("Failed to get the full response as bytes: {e}");
+                dual_error!("{err_msg} - request_id: {request_id}");
                 ServerError::Operation(err_msg)
             })?
         }
@@ -659,8 +1162,8 @@ pub(crate) async fn audio_tts_handler(
             Ok(response)
         }
         Err(e) => {
-            let err_msg = format!("Failed to create the response: {}", e);
-            dual_error!("{} - request_id: {}", err_msg, request_id);
+            let err_msg = format!("Failed to create the response: {e}");
+            dual_error!("{err_msg} - request_id: {request_id}");
             Err(ServerError::Operation(err_msg))
         }
     }
@@ -682,7 +1185,7 @@ pub(crate) async fn image_handler(
     dual_info!("Received a new image request - request_id: {}", request_id);
 
     // get the image server
-    let image_server_base_url = {
+    let target_server_info = {
         let servers = state.server_group.read().await;
         let image_servers = match servers.get(&ServerKind::image) {
             Some(servers) => servers,
@@ -694,16 +1197,19 @@ pub(crate) async fn image_handler(
         };
 
         match image_servers.next().await {
-            Ok(url) => url,
+            Ok(target_server_info) => target_server_info,
             Err(e) => {
-                let err_msg = format!("Failed to get the image server: {}", e);
+                let err_msg = format!("Failed to get the image server: {e}");
                 dual_error!("{} - request_id: {}", err_msg, request_id);
                 return Err(ServerError::Operation(err_msg));
             }
         }
     };
 
-    let image_service_url = format!("{}v1/images/generations", image_server_base_url);
+    let image_service_url = format!(
+        "{}/v1/images/generations",
+        target_server_info.url.trim_end_matches('/')
+    );
     dual_info!(
         "Forward the image request to {} - request_id: {}",
         image_service_url,
@@ -719,8 +1225,8 @@ pub(crate) async fn image_handler(
     // convert the request body into bytes
     let body = req.into_body();
     let body_bytes = axum::body::to_bytes(body, usize::MAX).await.map_err(|e| {
-        let err_msg = format!("Failed to convert the request body into bytes: {}", e);
-        dual_error!("{} - request_id: {}", err_msg, request_id);
+        let err_msg = format!("Failed to convert the request body into bytes: {e}");
+        dual_error!("{err_msg} - request_id: {request_id}");
         ServerError::Operation(err_msg)
     })?;
 
@@ -731,10 +1237,9 @@ pub(crate) async fn image_handler(
         response = request_builder.send() => {
             response.map_err(|e| {
                 let err_msg = format!(
-                    "Failed to forward the request to the downstream server: {}",
-                    e
+                    "Failed to forward the request to the downstream server: {e}"
                 );
-                dual_error!("{} - request_id: {}", err_msg, request_id);
+                dual_error!("{err_msg} - request_id: {request_id}");
                 ServerError::Operation(err_msg)
             })?
         }
@@ -755,8 +1260,8 @@ pub(crate) async fn image_handler(
     let bytes = select! {
         bytes = ds_response.bytes() => {
             bytes.map_err(|e| {
-                let err_msg = format!("Failed to get the full response as bytes: {}", e);
-                dual_error!("{} - request_id: {}", err_msg, request_id);
+                let err_msg = format!("Failed to get the full response as bytes: {e}");
+                dual_error!("{err_msg} - request_id: {request_id}");
                 ServerError::Operation(err_msg)
             })?
         }
@@ -776,8 +1281,8 @@ pub(crate) async fn image_handler(
             Ok(response)
         }
         Err(e) => {
-            let err_msg = format!("Failed to create the response: {}", e);
-            dual_error!("{} - request_id: {}", err_msg, request_id);
+            let err_msg = format!("Failed to create the response: {e}");
+            dual_error!("{err_msg} - request_id: {request_id}");
             Err(ServerError::Operation(err_msg))
         }
     }
@@ -802,8 +1307,8 @@ pub(crate) async fn chunks_handler(
     let mut extension = String::new();
     let mut chunk_capacity: usize = 0;
     while let Some(mut field) = multipart.next_field().await.map_err(|e| {
-        let err_msg = format!("Failed to get next field: {}", e);
-        dual_error!("{} - request_id: {}", err_msg, request_id);
+        let err_msg = format!("Failed to get next field: {e}");
+        dual_error!("{err_msg} - request_id: {request_id}");
         ServerError::Operation(err_msg)
     })? {
         match field.name() {
@@ -828,14 +1333,13 @@ pub(crate) async fn chunks_handler(
 
                 // get the file contents
                 while let Some(chunk) = field.chunk().await.map_err(|e| {
-                    let err_msg = format!("Failed to get the next chunk: {}", e);
-                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    let err_msg = format!("Failed to get the next chunk: {e}");
+                    dual_error!("{err_msg} - request_id: {request_id}");
                     ServerError::Operation(err_msg)
                 })? {
                     let chunk_data = String::from_utf8(chunk.to_vec()).map_err(|e| {
-                        let err_msg =
-                            format!("Failed to convert the chunk data to a string: {}", e);
-                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                        let err_msg = format!("Failed to convert the chunk data to a string: {e}");
+                        dual_error!("{err_msg} - request_id: {request_id}");
                         ServerError::Operation(err_msg)
                     })?;
 
@@ -854,14 +1358,14 @@ pub(crate) async fn chunks_handler(
 
                 // Get the field data as a string
                 let capacity = field.text().await.map_err(|e| {
-                    let err_msg = format!("`chunk_capacity` field should be a text field. {}", e);
-                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    let err_msg = format!("`chunk_capacity` field should be a text field. {e}");
+                    dual_error!("{err_msg} - request_id: {request_id}");
                     ServerError::Operation(err_msg)
                 })?;
 
                 chunk_capacity = capacity.parse().map_err(|e| {
-                    let err_msg = format!("Failed to convert the chunk capacity to a usize: {}", e);
-                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    let err_msg = format!("Failed to convert the chunk capacity to a usize: {e}");
+                    dual_error!("{err_msg} - request_id: {request_id}");
                     ServerError::Operation(err_msg)
                 })?;
 
@@ -872,8 +1376,8 @@ pub(crate) async fn chunks_handler(
                 );
             }
             Some(field_name) => {
-                let warn_msg = format!("Unknown field: {}", field_name);
-                dual_warn!("{} - request_id: {}", warn_msg, request_id);
+                let warn_msg = format!("Unknown field: {field_name}");
+                dual_warn!("{warn_msg} - request_id: {request_id}");
             }
             None => {
                 let warn_msg = "No field name found";
@@ -894,8 +1398,8 @@ pub(crate) async fn chunks_handler(
         "chunks": chunks,
     });
     let data = serde_json::to_string(&json_body).map_err(|e| {
-        let err_msg = format!("Failed to serialize chunks response: {}", e);
-        dual_error!("{} - request_id: {}", err_msg, request_id);
+        let err_msg = format!("Failed to serialize chunks response: {e}");
+        dual_error!("{err_msg} - request_id: {request_id}");
         ServerError::Operation(err_msg)
     })?;
 
@@ -904,8 +1408,8 @@ pub(crate) async fn chunks_handler(
         .header("Content-Type", "application/json")
         .body(Body::from(data))
         .map_err(|e| {
-            let err_msg = format!("Failed to create response: {}", e);
-            dual_error!("{} - request_id: {}", err_msg, request_id);
+            let err_msg = format!("Failed to create response: {e}");
+            dual_error!("{err_msg} - request_id: {request_id}");
             ServerError::Operation(err_msg)
         })
 }
@@ -933,9 +1437,11 @@ pub(crate) async fn create_rag_handler(
     let mut vdb_server_url = String::new();
     let mut vdb_collection_name = String::new();
     let mut vdb_api_key = String::new();
+    let mut kw_search_url = String::new();
+    let mut kw_search_index_name = String::new();
     let mut chunk_capacity = 100;
     while let Some(mut field) = multipart.next_field().await.map_err(|e| {
-        let err_msg = format!("Failed to get next field: {}", e);
+        let err_msg = format!("Failed to get next field: {e}");
         dual_error!("{} - request_id: {}", err_msg, request_id);
         ServerError::Operation(err_msg)
     })? {
@@ -961,13 +1467,12 @@ pub(crate) async fn create_rag_handler(
 
                 // get the file contents
                 while let Some(chunk) = field.chunk().await.map_err(|e| {
-                    let err_msg = format!("Failed to get the next chunk: {}", e);
+                    let err_msg = format!("Failed to get the next chunk: {e}");
                     dual_error!("{} - request_id: {}", err_msg, request_id);
                     ServerError::Operation(err_msg)
                 })? {
                     let chunk_data = String::from_utf8(chunk.to_vec()).map_err(|e| {
-                        let err_msg =
-                            format!("Failed to convert the chunk data to a string: {}", e);
+                        let err_msg = format!("Failed to convert the chunk data to a string: {e}");
                         dual_error!("{} - request_id: {}", err_msg, request_id);
                         ServerError::Operation(err_msg)
                     })?;
@@ -987,13 +1492,13 @@ pub(crate) async fn create_rag_handler(
 
                 // Get the field data as a string
                 let capacity = field.text().await.map_err(|e| {
-                    let err_msg = format!("`chunk_capacity` field should be a text field. {}", e);
+                    let err_msg = format!("`chunk_capacity` field should be a text field. {e}");
                     dual_error!("{} - request_id: {}", err_msg, request_id);
                     ServerError::Operation(err_msg)
                 })?;
 
                 chunk_capacity = capacity.parse().map_err(|e| {
-                    let err_msg = format!("Failed to convert the chunk capacity to a usize: {}", e);
+                    let err_msg = format!("Failed to convert the chunk capacity to a usize: {e}");
                     dual_error!("{} - request_id: {}", err_msg, request_id);
                     ServerError::Operation(err_msg)
                 })?;
@@ -1016,7 +1521,7 @@ pub(crate) async fn create_rag_handler(
 
                 // Get the field data as a string
                 vdb_server_url = field.text().await.map_err(|e| {
-                    let err_msg = format!("`vdb_server_url` field should be a text field. {}", e);
+                    let err_msg = format!("`vdb_server_url` field should be a text field. {e}");
                     dual_error!("{} - request_id: {}", err_msg, request_id);
                     ServerError::Operation(err_msg)
                 })?;
@@ -1040,7 +1545,7 @@ pub(crate) async fn create_rag_handler(
                 // Get the field data as a string
                 vdb_collection_name = field.text().await.map_err(|e| {
                     let err_msg =
-                        format!("`vdb_collection_name` field should be a text field. {}", e);
+                        format!("`vdb_collection_name` field should be a text field. {e}");
                     dual_error!("{} - request_id: {}", err_msg, request_id);
                     ServerError::Operation(err_msg)
                 })?;
@@ -1063,13 +1568,48 @@ pub(crate) async fn create_rag_handler(
 
                 // Get the field data as a string
                 vdb_api_key = field.text().await.map_err(|e| {
-                    let err_msg = format!("`vdb_api_key` field should be a text field. {}", e);
+                    let err_msg = format!("`vdb_api_key` field should be a text field. {e}");
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    ServerError::Operation(err_msg)
+                })?;
+            }
+            Some("kw_search_url") => {
+                // Get content type if available
+                if let Some(content_type) = field.content_type() {
+                    dual_info!(
+                        "Content type: {} - request_id: {}",
+                        content_type,
+                        request_id
+                    );
+                }
+
+                // Get the field data as a string
+                kw_search_url = field.text().await.map_err(|e| {
+                    let err_msg = format!("`kw_search_url` field should be a text field. {e}");
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    ServerError::Operation(err_msg)
+                })?;
+            }
+            Some("kw_search_index_name") => {
+                // Get content type if available
+                if let Some(content_type) = field.content_type() {
+                    dual_info!(
+                        "Content type: {} - request_id: {}",
+                        content_type,
+                        request_id
+                    );
+                }
+
+                // Get the field data as a string
+                kw_search_index_name = field.text().await.map_err(|e| {
+                    let err_msg =
+                        format!("`kw_search_index_name` field should be a text field. {e}");
                     dual_error!("{} - request_id: {}", err_msg, request_id);
                     ServerError::Operation(err_msg)
                 })?;
             }
             Some(field_name) => {
-                let warn_msg = format!("Unknown field: {}", field_name);
+                let warn_msg = format!("Unknown field: {field_name}");
                 dual_warn!("{} - request_id: {}", warn_msg, request_id);
             }
             None => {
@@ -1086,6 +1626,87 @@ pub(crate) async fn create_rag_handler(
         request_id
     );
     let chunks = rag::chunk_text(&contents, extension, chunk_capacity, &request_id)?;
+
+    // create index for the chunks for keyword search
+    let mut index_response: Option<CreateIndexResponse> = None;
+    match (kw_search_url.is_empty(), kw_search_index_name.is_empty()) {
+        (false, false) => {
+            if let Some(mcp_clients) = MCP_CLIENTS.get() {
+                let lock_mcp_clients = mcp_clients.read().await;
+                match lock_mcp_clients.get(KWSEARCH_MCP_SERVER_NAME) {
+                    Some(mcp_client) => {
+                        let documents: Vec<KwDocumentInput> = chunks
+                            .iter()
+                            .map(|c| KwDocumentInput {
+                                content: c.to_string(),
+                                title: None,
+                            })
+                            .collect();
+
+                        let request_param = CallToolRequestParam {
+                            name: "create_index".into(),
+                            arguments: Some(serde_json::Map::from_iter([
+                                (
+                                    "base_url".to_string(),
+                                    serde_json::Value::from(kw_search_url),
+                                ),
+                                (
+                                    "name".to_string(),
+                                    serde_json::Value::from(kw_search_index_name),
+                                ),
+                                (
+                                    "documents".to_string(),
+                                    serde_json::Value::Array(
+                                        documents
+                                            .into_iter()
+                                            .map(|d| serde_json::to_value(d).unwrap())
+                                            .collect(),
+                                    ),
+                                ),
+                            ])),
+                        };
+
+                        // call the create_index tool
+                        let tool_result = mcp_client
+                            .read()
+                            .await
+                            .peer()
+                            .call_tool(request_param)
+                            .await
+                            .map_err(|e| {
+                                let err_msg = format!("Failed to call the tool: {e}");
+                                dual_error!("{} - request_id: {}", err_msg, request_id);
+                                ServerError::Operation(err_msg)
+                            })?;
+
+                        let response = CreateIndexResponse::from(tool_result);
+
+                        dual_info!("Index created successfully - request_id: {}", request_id);
+
+                        index_response = Some(response);
+                    }
+                    None => {
+                        let warn_msg = format!(
+                            "Not found MCP client for `{KWSEARCH_MCP_SERVER_NAME}` - request_id: {request_id}"
+                        );
+                        dual_warn!("{}", warn_msg);
+                    }
+                }
+            }
+        }
+        (false, true) => {
+            let warn_msg = "No keyword search index name provided";
+            dual_warn!("{} - request_id: {}", warn_msg, request_id);
+        }
+        (true, false) => {
+            let warn_msg = "No keyword search URL provided";
+            dual_warn!("{} - request_id: {}", warn_msg, request_id);
+        }
+        (true, true) => {
+            let warn_msg = "No keyword search URL and index name provided";
+            dual_warn!("{} - request_id: {}", warn_msg, request_id);
+        }
+    }
 
     // compute the embeddings for each chunk
     dual_info!(
@@ -1117,12 +1738,15 @@ pub(crate) async fn create_rag_handler(
         let embeddings_server_base_url = match embeddings_servers.next().await {
             Ok(url) => url,
             Err(e) => {
-                let err_msg = format!("Failed to get the embeddings server: {}", e);
+                let err_msg = format!("Failed to get the embeddings server: {e}");
                 dual_error!("{} - request_id: {}", err_msg, request_id);
                 return Err(ServerError::Operation(err_msg));
             }
         };
-        let embeddings_service_url = format!("{}v1/embeddings", embeddings_server_base_url);
+        let embeddings_service_url = format!(
+            "{}/v1/embeddings",
+            embeddings_server_base_url.url.trim_end_matches('/')
+        );
         dual_info!(
             "Forward the embeddings request to {} - request_id: {}",
             embeddings_service_url,
@@ -1157,8 +1781,7 @@ pub(crate) async fn create_rag_handler(
             response = request.send() => {
                 response.map_err(|e| {
                     let err_msg = format!(
-                        "Failed to forward the request to the downstream embedding server: {}",
-                        e
+                        "Failed to forward the request to the downstream embedding server: {e}"
                     );
                     dual_error!("{} - request_id: {}", err_msg, request_id);
                     ServerError::Operation(err_msg)
@@ -1172,7 +1795,7 @@ pub(crate) async fn create_rag_handler(
         };
 
         response.json::<EmbeddingsResponse>().await.map_err(|e| {
-            let err_msg = format!("Failed to parse the embedding response: {}", e);
+            let err_msg = format!("Failed to parse the embedding response: {e}");
             dual_error!("{} - request_id: {}", err_msg, request_id);
             ServerError::Operation(err_msg)
         })?
@@ -1185,19 +1808,21 @@ pub(crate) async fn create_rag_handler(
         request_id
     );
 
-    // create a Qdrant client
-    let mut qdrant_client = qdrant::Qdrant::new_with_url(vdb_server_url);
-    if !vdb_api_key.is_empty() {
-        qdrant_client.set_api_key(vdb_api_key);
-    }
-
     // create a collection in VectorDB
     let dim = embeddings[0].embedding.len();
-    rag::qdrant_create_collection(&qdrant_client, &vdb_collection_name, dim, &request_id).await?;
+    rag::qdrant_create_collection(
+        &vdb_server_url,
+        &vdb_api_key,
+        &vdb_collection_name,
+        dim,
+        &request_id,
+    )
+    .await?;
 
     // persist the embeddings to the collection
     rag::qdrant_persist_embeddings(
-        &qdrant_client,
+        &vdb_server_url,
+        &vdb_api_key,
         &vdb_collection_name,
         embeddings.as_slice(),
         chunks.as_slice(),
@@ -1206,16 +1831,22 @@ pub(crate) async fn create_rag_handler(
     .await?;
 
     // create a response with status code 200. Content-Type is JSON
-    let json_body = serde_json::json!({
-        "message": format!("Collection `{}` created successfully.", vdb_collection_name),
-    });
+    let json_body = match index_response {
+        Some(index_response) => serde_json::json!({
+            "vdb": format!("Collection `{}` created successfully.", vdb_collection_name),
+            "index": index_response,
+        }),
+        None => serde_json::json!({
+            "vdb": format!("Collection `{}` created successfully.", vdb_collection_name),
+        }),
+    };
 
     Response::builder()
         .status(StatusCode::OK)
         .header("Content-Type", "application/json")
         .body(Body::from(json_body.to_string()))
         .map_err(|e| {
-            let err_msg = format!("Failed to create response: {}", e);
+            let err_msg = format!("Failed to create response: {e}");
             dual_error!("{} - request_id: {}", err_msg, request_id);
             ServerError::Operation(err_msg)
         })
@@ -1238,8 +1869,8 @@ pub(crate) async fn models_handler(
     };
 
     let json_body = serde_json::to_string(&list_response).map_err(|e| {
-        let err_msg = format!("Failed to serialize the models: {}", e);
-        dual_error!("{} - request_id: {}", err_msg, request_id);
+        let err_msg = format!("Failed to serialize the models: {e}");
+        dual_error!("{err_msg} - request_id: {request_id}");
         ServerError::Operation(err_msg)
     })?;
 
@@ -1248,8 +1879,8 @@ pub(crate) async fn models_handler(
         .header("Content-Type", "application/json")
         .body(Body::from(json_body))
         .map_err(|e| {
-            let err_msg = format!("Failed to create response: {}", e);
-            dual_error!("{} - request_id: {}", err_msg, request_id);
+            let err_msg = format!("Failed to create response: {e}");
+            dual_error!("{err_msg} - request_id: {request_id}");
             ServerError::Operation(err_msg)
         })
 }
@@ -1308,8 +1939,8 @@ pub(crate) async fn info_handler(
         .header("Content-Type", "application/json")
         .body(Body::from(json_body.to_string()))
         .map_err(|e| {
-            let err_msg = format!("Failed to create response: {}", e);
-            dual_error!("{} - request_id: {}", err_msg, request_id);
+            let err_msg = format!("Failed to create response: {e}");
+            dual_error!("{err_msg} - request_id: {request_id}");
             ServerError::Operation(err_msg)
         })
 }
@@ -1375,8 +2006,8 @@ pub(crate) mod admin {
             .header("Content-Type", "application/json")
             .body(Body::from(json_body.to_string()))
             .map_err(|e| {
-                let err_msg = format!("Failed to create response: {}", e);
-                dual_error!("{} - request_id: {}", err_msg, request_id);
+                let err_msg = format!("Failed to create response: {e}");
+                dual_error!("{err_msg} - request_id: {request_id}");
                 ServerError::Operation(err_msg)
             })?;
 
@@ -1397,13 +2028,10 @@ pub(crate) mod admin {
 
         let client = reqwest::Client::new();
 
-        let server_info_url = format!("{}/v1/info", server_url);
+        let server_info_url = format!("{server_url}/v1/info");
         let response = client.get(&server_info_url).send().await.map_err(|e| {
-            let err_msg = format!(
-                "Failed to verify the {} downstream server: {}",
-                server_kind, e
-            );
-            dual_error!("{} - request_id: {}", err_msg, request_id);
+            let err_msg = format!("Failed to verify the {server_kind} downstream server: {e}",);
+            dual_error!("{err_msg} - request_id: {request_id}");
             ServerError::Operation(err_msg)
         })?;
 
@@ -1418,8 +2046,8 @@ pub(crate) mod admin {
         }
 
         let mut api_server = response.json::<ApiServer>().await.map_err(|e| {
-            let err_msg = format!("Failed to parse the server info: {}", e);
-            dual_error!("{} - request_id: {}", err_msg, request_id);
+            let err_msg = format!("Failed to parse the server info: {e}");
+            dual_error!("{err_msg} - request_id: {request_id}");
             ServerError::Operation(err_msg)
         })?;
         api_server.server_id = Some(server_id.to_string());
@@ -1470,10 +2098,10 @@ pub(crate) mod admin {
             .insert(server_id.to_string(), api_server);
 
         // get the models from the downstream server
-        let list_models_url = format!("{}/v1/models", server_url);
+        let list_models_url = format!("{server_url}/v1/models");
         let list_models_response = client.get(&list_models_url).send().await.map_err(|e| {
-            let err_msg = format!("Failed to get the models from the downstream server: {}", e);
-            dual_error!("{} - request_id: {}", err_msg, request_id);
+            let err_msg = format!("Failed to get the models from the downstream server: {e}");
+            dual_error!("{err_msg} - request_id: {request_id}");
             ServerError::Operation(err_msg)
         })?;
 
@@ -1481,8 +2109,8 @@ pub(crate) mod admin {
             .json::<ListModelsResponse>()
             .await
             .map_err(|e| {
-                let err_msg = format!("Failed to parse the models: {}", e);
-                dual_error!("{} - request_id: {}", err_msg, request_id);
+                let err_msg = format!("Failed to parse the models: {e}");
+                dual_error!("{err_msg} - request_id: {request_id}");
                 ServerError::Operation(err_msg)
             })?;
 
@@ -1520,8 +2148,8 @@ pub(crate) mod admin {
             .header("Content-Type", "application/json")
             .body(Body::from(json_body.to_string()))
             .map_err(|e| {
-                let err_msg = format!("Failed to create response: {}", e);
-                dual_error!("{} - request_id: {}", err_msg, request_id);
+                let err_msg = format!("Failed to create response: {e}");
+                dual_error!("{err_msg} - request_id: {request_id}");
                 ServerError::Operation(err_msg)
             })?;
 
@@ -1556,8 +2184,8 @@ pub(crate) mod admin {
             .header("Content-Type", "application/json")
             .body(Body::from(json_body))
             .map_err(|e| {
-                let err_msg = format!("Failed to create response: {}", e);
-                dual_error!("{} - request_id: {}", err_msg, request_id);
+                let err_msg = format!("Failed to create response: {e}");
+                dual_error!("{err_msg} - request_id: {request_id}");
                 ServerError::Operation(err_msg)
             })?;
 
