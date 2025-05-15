@@ -1,5 +1,5 @@
 use crate::{
-    config::MCP_CLIENTS,
+    config::{MCP_CLIENTS, MCP_KEYWORD_SEARCH_CLIENT, MCP_VECTOR_SEARCH_CLIENT},
     dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
     AppState,
@@ -67,77 +67,55 @@ pub async fn chat(
                     {
                         if let ChatCompletionUserMessageContent::Text(text) = user_message.content()
                         {
-                            match MCP_CLIENTS.get() {
-                                Some(mcp_clients) => {
-                                    let lock_mcp_clients = mcp_clients.read().await;
-                                    match lock_mcp_clients.get(KWSEARCH_MCP_SERVER_NAME) {
-                                        Some(mcp_client) => {
-                                            // request param
-                                            let request_param = CallToolRequestParam {
-                                                name: "search_documents".into(),
-                                                arguments: Some(serde_json::Map::from_iter([
-                                                    (
-                                                        "base_url".to_string(),
-                                                        Value::from(kw_search_url),
-                                                    ),
-                                                    (
-                                                        "index_name".to_string(),
-                                                        Value::from(index_name.to_string()),
-                                                    ),
-                                                    (
-                                                        "query".to_string(),
-                                                        Value::from(text.to_string()),
-                                                    ),
-                                                    (
-                                                        "limit".to_string(),
-                                                        Value::from(chat_request.kw_top_k.unwrap()),
-                                                    ),
-                                                ])),
-                                            };
-                                            dual_debug!(
-                                                "request_param: {:#?} - request_id: {}",
-                                                &request_param,
-                                                request_id
-                                            );
+                            match MCP_KEYWORD_SEARCH_CLIENT.get() {
+                                Some(mcp_client) => {
+                                    // request param
+                                    let request_param = CallToolRequestParam {
+                                        name: "search_documents".into(),
+                                        arguments: Some(serde_json::Map::from_iter([
+                                            ("base_url".to_string(), Value::from(kw_search_url)),
+                                            (
+                                                "index_name".to_string(),
+                                                Value::from(index_name.to_string()),
+                                            ),
+                                            ("query".to_string(), Value::from(text.to_string())),
+                                            (
+                                                "limit".to_string(),
+                                                Value::from(chat_request.kw_top_k.unwrap()),
+                                            ),
+                                        ])),
+                                    };
+                                    dual_debug!(
+                                        "request_param: {:#?} - request_id: {}",
+                                        &request_param,
+                                        request_id
+                                    );
 
-                                            // call the search_documents tool
-                                            let tool_result = mcp_client
-                                                .read()
-                                                .await
-                                                .peer()
-                                                .call_tool(request_param)
-                                                .await
-                                                .map_err(|e| {
-                                                    let err_msg =
-                                                        format!("Failed to call the tool: {e}");
-                                                    dual_error!(
-                                                        "{} - request_id: {}",
-                                                        err_msg,
-                                                        request_id
-                                                    );
-                                                    ServerError::Operation(err_msg)
-                                                })?;
+                                    // call the search_documents tool
+                                    let tool_result = mcp_client
+                                        .read()
+                                        .await
+                                        .peer()
+                                        .call_tool(request_param)
+                                        .await
+                                        .map_err(|e| {
+                                            let err_msg = format!("Failed to call the tool: {e}");
+                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                                            ServerError::Operation(err_msg)
+                                        })?;
 
-                                            let search_response =
-                                                SearchDocumentsResponse::from(tool_result);
-                                            kw_hits = search_response.hits;
+                                    let search_response =
+                                        SearchDocumentsResponse::from(tool_result);
+                                    kw_hits = search_response.hits;
 
-                                            dual_info!(
-                                                "Got {} kw-search hits - request_id: {}",
-                                                kw_hits.len(),
-                                                request_id
-                                            );
-                                        }
-                                        None => {
-                                            let warn_msg = format!(
-                                                "Not found MCP client for `{KWSEARCH_MCP_SERVER_NAME}` - request_id: {request_id}"
-                                            );
-                                            dual_warn!("{}", warn_msg);
-                                        }
-                                    }
+                                    dual_info!(
+                                        "Got {} kw-search hits - request_id: {}",
+                                        kw_hits.len(),
+                                        request_id
+                                    );
                                 }
                                 None => {
-                                    let warn_msg = "No MCP client found";
+                                    let warn_msg = "No keyword search mcp client available";
                                     dual_warn!("{} - request_id: {}", warn_msg, request_id);
                                 }
                             }
@@ -378,7 +356,6 @@ pub async fn chat(
             (config.rag.policy, config.rag.prompt.clone())
         };
 
-        // insert rag context into chat request
         if let Err(e) = RagPromptBuilder::build(
             &mut chat_request.messages,
             &[context],
@@ -773,18 +750,8 @@ async fn retrieve_context(
     );
 
     // search points from gaia-qdrant-mcp-server
-    let scored_points = match MCP_CLIENTS.get() {
-        Some(mcp_clients) => {
-            let lock_mcp_clients = mcp_clients.read().await;
-            let mcp_client = match lock_mcp_clients.get(VDB_MCP_SERVER_NAME) {
-                Some(mcp_client) => mcp_client,
-                None => {
-                    let err_msg = "No MCP client found";
-                    dual_error!("{} - request_id: {}", err_msg, request_id);
-                    return Err(ServerError::Operation(err_msg.to_string()));
-                }
-            };
-
+    let scored_points = match MCP_VECTOR_SEARCH_CLIENT.get() {
+        Some(mcp_client) => {
             // request param
             let request_param = match vdb_api_key {
                 Some(api_key) => CallToolRequestParam {
@@ -854,7 +821,7 @@ async fn retrieve_context(
             response.result
         }
         None => {
-            let err_msg = "No MCP client found";
+            let err_msg = "No vector search mcp client available";
             dual_error!("{} - request_id: {}", err_msg, request_id);
             return Err(ServerError::Operation(err_msg.to_string()));
         }
@@ -1033,12 +1000,28 @@ impl MergeRagContext for RagPromptBuilder {
                 match &messages.last() {
                     Some(ChatCompletionRequestMessage::User(message)) => {
                         if let ChatCompletionUserMessageContent::Text(content) = message.content() {
-                            // compose new user message content
-                            let content = format!(
-                                    "{context}\nAnswer the question based on the pieces of context above. The question is:\n{user_message}",
-                                    context = context,
-                                    user_message = content.trim(),
-                                );
+                            let content = match rag_prompt {
+                                Some(global_rag_prompt) => {
+                                    let processed_rag_prompt =
+                                        global_rag_prompt.replace("\\n", "\n");
+
+                                    // compose new user message content
+                                    format!(
+                                            "{rag_prompt}\n{context}\n\nAnswer the question based on the pieces of context above. The question is:\n{user_message}",
+                                            rag_prompt = &processed_rag_prompt,
+                                            context = context,
+                                            user_message = content.trim(),
+                                        )
+                                }
+                                None => {
+                                    // compose new user message content
+                                    format!(
+                                            "{context}\n\nAnswer the question based on the pieces of context above. The question is:\n{user_message}",
+                                            context = context,
+                                            user_message = content.trim(),
+                                        )
+                                }
+                            };
 
                             let content = ChatCompletionUserMessageContent::Text(content);
 

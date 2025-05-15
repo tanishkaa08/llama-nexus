@@ -18,6 +18,8 @@ use tokio::sync::RwLock as TokioRwLock;
 pub static MCP_TOOLS: OnceCell<TokioRwLock<HashMap<String, McpClientName>>> = OnceCell::new();
 pub static MCP_CLIENTS: OnceCell<TokioRwLock<HashMap<McpClientName, TokioRwLock<McpClient>>>> =
     OnceCell::new();
+pub static MCP_VECTOR_SEARCH_CLIENT: OnceCell<TokioRwLock<McpClient>> = OnceCell::new();
+pub static MCP_KEYWORD_SEARCH_CLIENT: OnceCell<TokioRwLock<McpClient>> = OnceCell::new();
 
 pub type McpClient = RunningService<RoleClient, Box<dyn DynService<RoleClient>>>;
 pub type McpClientName = String;
@@ -30,8 +32,10 @@ pub struct Config {
     pub server_info_push_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server_health_push_url: Option<String>,
+    // #[serde(skip_serializing_if = "Option::is_none")]
+    // pub mcp: Option<Vec<McpServerConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub mcp: Option<Vec<McpServerConfig>>,
+    pub mcp: Option<McpConfig>,
 }
 impl Config {
     pub async fn load(path: impl AsRef<std::path::Path>) -> ServerResult<Self> {
@@ -44,18 +48,33 @@ impl Config {
                 ServerError::Operation(err_msg)
             })?;
 
+        dual_debug!("Config: {:#?}", config);
+
         let mut config = config.try_deserialize::<Self>().map_err(|e| {
             let err_msg = format!("Failed to deserialize config: {e}");
             dual_error!("{}", &err_msg);
             ServerError::Operation(err_msg)
         })?;
 
-        if let Some(mcp_servers) = config.mcp.as_mut() {
-            if !mcp_servers.is_empty() {
+        dual_debug!("RAG enabled: {}", config.rag.enable);
+
+        if let Some(mcp_config) = config.mcp.as_mut() {
+            if !mcp_config.server.tool_servers.is_empty() {
                 dual_info!("Retrieve the mcp tools from mcp servers");
 
-                for server_config in mcp_servers.iter_mut() {
-                    server_config.sync_tools().await?;
+                for server_config in mcp_config.server.tool_servers.iter_mut() {
+                    server_config.connect_mcp_server().await?;
+                }
+
+                if let Some(server_vector_search) = mcp_config.server.vector_search_server.as_mut()
+                {
+                    server_vector_search.connect_mcp_server().await?;
+                }
+
+                if let Some(server_keyword_search) =
+                    mcp_config.server.keyword_search_server.as_mut()
+                {
+                    server_keyword_search.connect_mcp_server().await?;
                 }
             }
         }
@@ -83,7 +102,6 @@ impl Default for Config {
                     limit: 1,
                     score_threshold: 0.5,
                 },
-                kw_search: KwSearchConfig::default(),
             },
             server_info_push_url: None,
             server_health_push_url: None,
@@ -101,12 +119,10 @@ pub struct ServerConfig {
 #[derive(Debug, Serialize, Clone)]
 pub struct RagConfig {
     pub enable: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub prompt: Option<String>,
     pub policy: MergeRagContextPolicy,
     pub context_window: u64,
     pub vector_db: VectorDbConfig,
-    pub kw_search: KwSearchConfig,
 }
 
 impl<'de> Deserialize<'de> for RagConfig {
@@ -116,11 +132,11 @@ impl<'de> Deserialize<'de> for RagConfig {
     {
         #[derive(Deserialize)]
         struct RagConfigHelper {
+            enable: bool,
             prompt: String,
             policy: String,
             context_window: u64,
             vector_db: VectorDbConfig,
-            kw_search: KwSearchConfig,
         }
 
         let helper = RagConfigHelper::deserialize(deserializer)?;
@@ -135,12 +151,11 @@ impl<'de> Deserialize<'de> for RagConfig {
             .map_err(|e| serde::de::Error::custom(e.to_string()))?;
 
         Ok(RagConfig {
-            enable: false,
+            enable: helper.enable,
             prompt,
             policy,
             context_window: helper.context_window,
             vector_db: helper.vector_db,
-            kw_search: helper.kw_search,
         })
     }
 }
@@ -162,16 +177,22 @@ pub struct KwSearchConfig {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct McpConfig {
-    pub mcp: McpServerList,
+    #[serde(rename = "server")]
+    pub server: McpServerConfig,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct McpServerList {
-    pub server: Vec<McpServerConfig>,
+pub struct McpServerConfig {
+    #[serde(rename = "tool")]
+    pub tool_servers: Vec<McpToolServerConfig>,
+    #[serde(rename = "vector_search")]
+    pub vector_search_server: Option<McpVectorSearchServerConfig>,
+    #[serde(rename = "keyword_search")]
+    pub keyword_search_server: Option<McpKeywordSearchServerConfig>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct McpServerConfig {
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct McpVectorSearchServerConfig {
     pub name: String,
     pub transport: Transport,
     pub url: String,
@@ -179,8 +200,167 @@ pub struct McpServerConfig {
     #[serde(skip_deserializing)]
     pub tools: Option<Vec<RmcpTool>>,
 }
-impl McpServerConfig {
-    pub async fn sync_tools(&mut self) -> ServerResult<()> {
+impl McpVectorSearchServerConfig {
+    pub async fn connect_mcp_server(&mut self) -> ServerResult<()> {
+        if self.enable {
+            match self.transport {
+                Transport::Sse => {
+                    let url = self.url.trim_end_matches('/');
+                    if !url.ends_with("/sse") {
+                        let err_msg = format!(
+                            "Invalid vector search mcp SSE URL: {}. The correct format should end with `/sse`",
+                            self.url
+                        );
+                        dual_error!("{}", err_msg);
+                        return Err(ServerError::Operation(err_msg.to_string()));
+                    }
+                    dual_debug!("Sync vector search mcp server: {}", url);
+
+                    // create a sse transport
+                    let transport = SseTransport::start(url).await.map_err(|e| {
+                        let err_msg =
+                            format!("Failed to create vector search mcp SSE transport: {e}");
+                        dual_error!("{}", &err_msg);
+                        ServerError::Operation(err_msg)
+                    })?;
+
+                    // create a mcp client
+                    let mcp_client = ()
+                        .into_dyn()
+                        .serve(transport)
+                        .await
+                        .inspect_err(|e| {
+                            tracing::error!("client error: {:?}", e);
+                        })
+                        .map_err(|e| {
+                            let err_msg = format!("Failed to create vector search mcp client: {e}");
+                            dual_error!("{}", &err_msg);
+                            ServerError::Operation(err_msg)
+                        })?;
+
+                    // add mcp client to MCP_CLIENTS
+                    match MCP_VECTOR_SEARCH_CLIENT.get() {
+                        Some(client) => {
+                            let mut locked_client = client.write().await;
+                            *locked_client = mcp_client;
+                        }
+                        None => {
+                            MCP_VECTOR_SEARCH_CLIENT
+                                .set(TokioRwLock::new(mcp_client))
+                                .map_err(|_| {
+                                    let err_msg = "Failed to set MCP_VECTOR_SEARCH_CLIENT";
+                                    dual_error!("{}", err_msg);
+                                    ServerError::Operation(err_msg.to_string())
+                                })?;
+                        }
+                    }
+                }
+                _ => {
+                    let err_msg = format!(
+                        "Unsupported vector search mcp transport: {}",
+                        self.transport
+                    );
+                    dual_error!("{}", err_msg);
+                    return Err(ServerError::Operation(err_msg.to_string()));
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize, Clone)]
+pub struct McpKeywordSearchServerConfig {
+    pub name: String,
+    pub transport: Transport,
+    pub url: String,
+    pub enable: bool,
+    #[serde(skip_deserializing)]
+    pub tools: Option<Vec<RmcpTool>>,
+}
+impl McpKeywordSearchServerConfig {
+    pub async fn connect_mcp_server(&mut self) -> ServerResult<()> {
+        if self.enable {
+            match self.transport {
+                Transport::Sse => {
+                    let url = self.url.trim_end_matches('/');
+                    if !url.ends_with("/sse") {
+                        let err_msg = format!(
+                            "Invalid sse URL: {}. The correct format should end with `/sse`",
+                            self.url
+                        );
+                        dual_error!("{}", err_msg);
+                        return Err(ServerError::Operation(err_msg.to_string()));
+                    }
+                    dual_debug!("Sync keyword search mcp server: {}", url);
+
+                    // create a sse transport
+                    let transport = SseTransport::start(url).await.map_err(|e| {
+                        let err_msg =
+                            format!("Failed to create keyword search mcp SSE transport: {e}");
+                        dual_error!("{}", &err_msg);
+                        ServerError::Operation(err_msg)
+                    })?;
+
+                    // create a mcp client
+                    let mcp_client = ()
+                        .into_dyn()
+                        .serve(transport)
+                        .await
+                        .inspect_err(|e| {
+                            tracing::error!("client error: {:?}", e);
+                        })
+                        .map_err(|e| {
+                            let err_msg =
+                                format!("Failed to create keyword search mcp client: {e}");
+                            dual_error!("{}", &err_msg);
+                            ServerError::Operation(err_msg)
+                        })?;
+
+                    // add mcp client to MCP_CLIENTS
+                    match MCP_KEYWORD_SEARCH_CLIENT.get() {
+                        Some(client) => {
+                            let mut locked_client = client.write().await;
+                            *locked_client = mcp_client;
+                        }
+                        None => {
+                            MCP_KEYWORD_SEARCH_CLIENT
+                                .set(TokioRwLock::new(mcp_client))
+                                .map_err(|_| {
+                                    let err_msg = "Failed to set MCP_KEYWORD_SEARCH_CLIENT";
+                                    dual_error!("{}", err_msg);
+                                    ServerError::Operation(err_msg.to_string())
+                                })?;
+                        }
+                    }
+                }
+                _ => {
+                    let err_msg = format!(
+                        "Unsupported keyword search mcp transport: {}",
+                        self.transport
+                    );
+                    dual_error!("{}", err_msg);
+                    return Err(ServerError::Operation(err_msg.to_string()));
+                }
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct McpToolServerConfig {
+    pub name: String,
+    pub transport: Transport,
+    pub url: String,
+    pub enable: bool,
+    #[serde(skip_deserializing)]
+    pub tools: Option<Vec<RmcpTool>>,
+}
+impl McpToolServerConfig {
+    pub async fn connect_mcp_server(&mut self) -> ServerResult<()> {
         if self.enable {
             match self.transport {
                 Transport::Sse => {

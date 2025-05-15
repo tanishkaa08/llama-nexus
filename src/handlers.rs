@@ -97,10 +97,10 @@ pub(crate) async fn chat(
     };
 
     // update the request with MCP tools
-    if let Some(config_mcp_servers) = state.config.read().await.mcp.as_ref() {
-        if !config_mcp_servers.is_empty() {
+    if let Some(mcp_config) = state.config.read().await.mcp.as_ref() {
+        if !mcp_config.server.tool_servers.is_empty() {
             let mut more_tools = Vec::new();
-            for server_config in config_mcp_servers.iter() {
+            for server_config in mcp_config.server.tool_servers.iter() {
                 if server_config.enable {
                     server_config
                         .tools
