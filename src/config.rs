@@ -48,15 +48,13 @@ impl Config {
                 ServerError::Operation(err_msg)
             })?;
 
-        dual_debug!("Config: {:#?}", config);
-
         let mut config = config.try_deserialize::<Self>().map_err(|e| {
             let err_msg = format!("Failed to deserialize config: {e}");
             dual_error!("{}", &err_msg);
             ServerError::Operation(err_msg)
         })?;
 
-        dual_debug!("RAG enabled: {}", config.rag.enable);
+        dual_debug!("config:\n{:#?}", config);
 
         if let Some(mcp_config) = config.mcp.as_mut() {
             if !mcp_config.server.tool_servers.is_empty() {
@@ -96,7 +94,7 @@ impl Default for Config {
                 prompt: None,
                 policy: MergeRagContextPolicy::SystemMessage,
                 context_window: 1,
-                vector_db: VectorDbConfig {
+                vector_search: RagVectorSearchConfig {
                     url: "http://localhost:6333".to_string(),
                     collection_name: vec!["default".to_string()],
                     limit: 1,
@@ -122,7 +120,7 @@ pub struct RagConfig {
     pub prompt: Option<String>,
     pub policy: MergeRagContextPolicy,
     pub context_window: u64,
-    pub vector_db: VectorDbConfig,
+    pub vector_search: RagVectorSearchConfig,
 }
 
 impl<'de> Deserialize<'de> for RagConfig {
@@ -136,7 +134,7 @@ impl<'de> Deserialize<'de> for RagConfig {
             prompt: String,
             policy: String,
             context_window: u64,
-            vector_db: VectorDbConfig,
+            vector_search: RagVectorSearchConfig,
         }
 
         let helper = RagConfigHelper::deserialize(deserializer)?;
@@ -155,13 +153,13 @@ impl<'de> Deserialize<'de> for RagConfig {
             prompt,
             policy,
             context_window: helper.context_window,
-            vector_db: helper.vector_db,
+            vector_search: helper.vector_search,
         })
     }
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct VectorDbConfig {
+pub struct RagVectorSearchConfig {
     pub url: String,
     pub collection_name: Vec<String>,
     pub limit: u64,

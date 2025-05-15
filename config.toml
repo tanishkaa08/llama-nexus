@@ -1,6 +1,6 @@
 [server]
 host = "0.0.0.0" # The host to listen on.
-port = 9068      # The port to listen on.
+port = 8080      # The port to listen on.
 
 
 # The following items are the configuration for the RAG service:
@@ -12,55 +12,62 @@ port = 9068      # The port to listen on.
 
 [rag]
 enable         = false
-prompt         = ""
-policy         = "system-message"
+policy         = "last-user-message"
+prompt         = "# Context\n\nPlease answer the user question based on the following retrieved information:"
 context_window = 1
 
-[rag.vector_db] # Vector database configuration.
-url             = "http://localhost:6333" # The URL of the vector database.
-collection_name = ["default"]             # The name of the collection to use.
-limit           = 10                      # The maximum number of results to return.
-score_threshold = 0.5                     # The minimum score threshold for a result to be returned.
-
-[rag.kw_search] # Keyword search configuration.
-enable     = false                   # Whether to enable keyword search.
-url        = "http://localhost:9069" # The URL of the keyword search service.
-index_name = "default"               # The name of the index to use.
-
-
-# The following items are the configuration for the MCP servers:
+# The following items are the configuration for the RAG vector search:
 #
-# mcp.name: The name of the MCP server.
-# mcp.transport: The transport protocol to use. Possible values: "sse", "stdio", "streamable-http". Note that ONLY "sse" is supported for now.
-# mcp.url: The URL of the MCP server.
-# mcp.enable: Whether to enable the MCP server.
+# url: The URL of the vector database.
+# collection_name: The name of the collection to use.
+# limit: The maximum number of results to return.
+# score_threshold: The minimum score threshold for a result to be returned.
 
-[[mcp]]
+[rag.vector_search]
+collection_name = ["paris"]
+limit           = 10
+score_threshold = 0.5
+url             = "http://localhost:6333"
+
+# [rag.kw_search] # Keyword search configuration.
+# enable     = false                   # Whether to enable keyword search.
+# url        = "http://localhost:8005" # The URL of the keyword search service.
+# index_name = "paris"                 # The name of the index to use.
+
+
+# The following items are the configuration for the MCP tool servers:
+#
+# name: The name of the MCP tool server.
+# transport: The transport protocol to use. Possible values: "sse", "stdio", "streamable-http". Note that ONLY "sse" is supported for now.
+# url: The URL of the MCP tool server.
+# enable: Whether to enable the MCP tool server.
+
+[[mcp.server.tool]]
 name      = "gaia-calculator"
 transport = "sse"
 url       = "http://127.0.0.1:8001/sse"
 enable    = false
 
-[[mcp]]
+[[mcp.server.tool]]
 name      = "gaia-weather"
 transport = "sse"
 url       = "http://127.0.0.1:8002/sse"
 enable    = false
 
-[[mcp]]
+[mcp.server.vector_search]
 name      = "gaia-qdrant"
 transport = "sse"
 url       = "http://127.0.0.1:8003/sse"
 enable    = false
 
-[[mcp]]
+[mcp.server.keyword_search]
 name      = "gaia-keyword-search"
 transport = "sse"
 url       = "http://127.0.0.1:8005/sse"
 enable    = false
 
-[[mcp]]
-name      = "gaia-elastic-search"
-transport = "sse"
-url       = "http://127.0.0.1:8006/sse"
-enable    = false
+# [[mcp]]
+# name      = "gaia-elastic-search"
+# transport = "sse"
+# url       = "http://127.0.0.1:8006/sse"
+# enable    = false

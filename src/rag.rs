@@ -445,7 +445,7 @@ async fn get_qdrant_configs(
                 request_id
             );
 
-            let vdb_config = &state.config.read().await.rag.vector_db;
+            let vdb_config = &state.config.read().await.rag.vector_search;
             let mut qdrant_config_vec = vec![];
             for cname in vdb_config.collection_name.iter() {
                 qdrant_config_vec.push(QdrantConfig {
