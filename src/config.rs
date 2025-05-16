@@ -94,12 +94,6 @@ impl Default for Config {
                 prompt: None,
                 policy: MergeRagContextPolicy::SystemMessage,
                 context_window: 1,
-                vector_search: RagVectorSearchConfig {
-                    url: "http://localhost:6333".to_string(),
-                    collection_name: vec!["default".to_string()],
-                    limit: 1,
-                    score_threshold: 0.5,
-                },
             },
             server_info_push_url: None,
             server_health_push_url: None,
@@ -120,9 +114,7 @@ pub struct RagConfig {
     pub prompt: Option<String>,
     pub policy: MergeRagContextPolicy,
     pub context_window: u64,
-    pub vector_search: RagVectorSearchConfig,
 }
-
 impl<'de> Deserialize<'de> for RagConfig {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
@@ -134,7 +126,6 @@ impl<'de> Deserialize<'de> for RagConfig {
             prompt: String,
             policy: String,
             context_window: u64,
-            vector_search: RagVectorSearchConfig,
         }
 
         let helper = RagConfigHelper::deserialize(deserializer)?;
@@ -153,7 +144,6 @@ impl<'de> Deserialize<'de> for RagConfig {
             prompt,
             policy,
             context_window: helper.context_window,
-            vector_search: helper.vector_search,
         })
     }
 }

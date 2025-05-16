@@ -5,7 +5,7 @@ port = 8080      # The port to listen on.
 
 # The following items are the configuration for the RAG service:
 #
-# rag.enable: Whether to enable RAG.
+# rag.enable: Whether to enable RAG. When it is true, the `mcp.server.vector_search` is required to be enabled. The `mcp.server.keyword_search` should also be enabled if you want to use keyword search in the retrieval phase.
 # rag.prompt: Custom rag prompt. Optional.
 # rag.policy: Strategy for merging RAG context into chat messages. Possible values: "system-message", "last-user-message". Required if enable is true.
 # rag.context_window: Maximum number of user messages used in the retrieval.
@@ -15,24 +15,6 @@ enable         = false
 policy         = "last-user-message"
 prompt         = "# Context\n\nPlease answer the user question based on the following retrieved information:"
 context_window = 1
-
-# The following items are the configuration for the RAG vector search:
-#
-# url: The URL of the vector database.
-# collection_name: The name of the collection to use.
-# limit: The maximum number of results to return.
-# score_threshold: The minimum score threshold for a result to be returned.
-
-[rag.vector_search]
-collection_name = ["paris"]
-limit           = 10
-score_threshold = 0.5
-url             = "http://localhost:6333"
-
-# [rag.kw_search] # Keyword search configuration.
-# enable     = false                   # Whether to enable keyword search.
-# url        = "http://localhost:8005" # The URL of the keyword search service.
-# index_name = "paris"                 # The name of the index to use.
 
 
 # The following items are the configuration for the MCP tool servers:
