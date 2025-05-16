@@ -127,19 +127,18 @@ pub async fn chat(
     }
 
     // qdrant config
-    let qdrant_config_vec =
-        match get_qdrant_configs(State(state.clone()), &chat_request, &request_id).await {
-            Ok(qdrant_config_vec) => qdrant_config_vec,
-            Err(e) => {
-                let err_msg = format!("Failed to get the VectorDB config: {e}");
-                dual_error!(
-                    "Failed to get the VectorDB config: {} - request_id: {}",
-                    e,
-                    request_id
-                );
-                return Err(ServerError::Operation(err_msg));
-            }
-        };
+    let qdrant_config_vec = match get_qdrant_configs(&chat_request, &request_id).await {
+        Ok(qdrant_config_vec) => qdrant_config_vec,
+        Err(e) => {
+            let err_msg = format!("Failed to get the VectorDB config: {e}");
+            dual_error!(
+                "Failed to get the VectorDB config: {} - request_id: {}",
+                e,
+                request_id
+            );
+            return Err(ServerError::Operation(err_msg));
+        }
+    };
 
     // retrieve context
     let mut retrieve_object_vec = retrieve_context_with_multiple_qdrant_configs(
@@ -383,7 +382,6 @@ pub async fn chat(
 }
 
 async fn get_qdrant_configs(
-    State(state): State<Arc<AppState>>,
     chat_request: &ChatCompletionRequest,
     request_id: impl AsRef<str>,
 ) -> Result<Vec<QdrantConfig>, ServerError> {
@@ -439,27 +437,8 @@ async fn get_qdrant_configs(
 
             Ok(qdrant_config_vec)
         }
-        (None, None, None, None) => {
-            dual_info!(
-                "Use the default VectorDB settings - request_id: {}",
-                request_id
-            );
-
-            let vdb_config = &state.config.read().await.rag.vector_search;
-            let mut qdrant_config_vec = vec![];
-            for cname in vdb_config.collection_name.iter() {
-                qdrant_config_vec.push(QdrantConfig {
-                    url: vdb_config.url.clone(),
-                    collection_name: cname.clone(),
-                    limit: vdb_config.limit,
-                    score_threshold: vdb_config.score_threshold,
-                });
-            }
-
-            Ok(qdrant_config_vec)
-        }
         _ => {
-            let err_msg = "The VectorDB settings in the request are not correct. The `url_vdb_server`, `collection_name`, `limit`, `score_threshold` fields in the request should be provided. The number of elements of `collection name`, `limit`, `score_threshold` should be same.";
+            let err_msg = "The settings for vector search in the request are not correct. The `vdb_server_url`, `vdb_collection_name`, `limit`, `score_threshold` fields in the request should be provided. Also, the number of arguments provided in `vdb_collection_name`, `limit`, `score_threshold` should be same.";
 
             dual_error!("{} - request_id: {}", err_msg, request_id);
 
