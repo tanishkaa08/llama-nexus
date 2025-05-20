@@ -17,9 +17,9 @@ endpoints = { version = "0.26.0", features = [
     "index",
 ], git = "https://github.com/LlamaEdge/LlamaEdge.git", branch = "feat-kw-fields" }
 futures-util = "0.3"
+gaia-elastic-mcp-common = { git = "https://github.com/apepkuss/mcp-examples.git", branch = "feat-elastic" }
 gaia-kwsearch-common = { git = "https://github.com/apepkuss/mcp-examples.git", branch = "feat-elastic" }
 gaia-qdrant-common = { git = "https://github.com/apepkuss/mcp-examples.git", branch = "feat-elastic" }
-gaia-elastic-mcp-common = { git = "https://github.com/apepkuss/mcp-examples.git", branch = "feat-elastic" }
 http = "1.2"
 mime_guess = "2.0.4"
 once_cell = "1.18"
