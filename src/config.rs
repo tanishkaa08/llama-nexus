@@ -1,28 +1,14 @@
 use crate::{
     dual_debug, dual_error, dual_info,
     error::{ServerError, ServerResult},
+    mcp::{McpClient, MCP_CLIENTS, MCP_KEYWORD_SEARCH_CLIENT, MCP_TOOLS, MCP_VECTOR_SEARCH_CLIENT},
 };
 use chat_prompts::MergeRagContextPolicy;
 use clap::ValueEnum;
-use once_cell::sync::OnceCell;
-use rmcp::{
-    model::Tool as RmcpTool,
-    service::{DynService, RunningService, ServiceExt},
-    transport::SseTransport,
-    RoleClient,
-};
+use rmcp::{model::Tool as RmcpTool, service::ServiceExt, transport::SseClientTransport};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::sync::RwLock as TokioRwLock;
-
-pub static MCP_TOOLS: OnceCell<TokioRwLock<HashMap<String, McpClientName>>> = OnceCell::new();
-pub static MCP_CLIENTS: OnceCell<TokioRwLock<HashMap<McpClientName, TokioRwLock<McpClient>>>> =
-    OnceCell::new();
-pub static MCP_VECTOR_SEARCH_CLIENT: OnceCell<TokioRwLock<McpClient>> = OnceCell::new();
-pub static MCP_KEYWORD_SEARCH_CLIENT: OnceCell<TokioRwLock<McpClient>> = OnceCell::new();
-
-pub type McpClient = RunningService<RoleClient, Box<dyn DynService<RoleClient>>>;
-pub type McpClientName = String;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
@@ -32,8 +18,6 @@ pub struct Config {
     pub server_info_push_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server_health_push_url: Option<String>,
-    // #[serde(skip_serializing_if = "Option::is_none")]
-    // pub mcp: Option<Vec<McpServerConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mcp: Option<McpConfig>,
 }
@@ -205,7 +189,7 @@ impl McpVectorSearchServerConfig {
                     dual_debug!("Sync vector search mcp server: {}", url);
 
                     // create a sse transport
-                    let transport = SseTransport::start(url).await.map_err(|e| {
+                    let transport = SseClientTransport::start(url).await.map_err(|e| {
                         let err_msg =
                             format!("Failed to create vector search mcp SSE transport: {e}");
                         dual_error!("{}", &err_msg);
@@ -230,11 +214,14 @@ impl McpVectorSearchServerConfig {
                     match MCP_VECTOR_SEARCH_CLIENT.get() {
                         Some(client) => {
                             let mut locked_client = client.write().await;
-                            *locked_client = mcp_client;
+                            *locked_client = McpClient::new(self.name.clone(), mcp_client);
                         }
                         None => {
                             MCP_VECTOR_SEARCH_CLIENT
-                                .set(TokioRwLock::new(mcp_client))
+                                .set(TokioRwLock::new(McpClient::new(
+                                    self.name.clone(),
+                                    mcp_client,
+                                )))
                                 .map_err(|_| {
                                     let err_msg = "Failed to set MCP_VECTOR_SEARCH_CLIENT";
                                     dual_error!("{}", err_msg);
@@ -284,7 +271,7 @@ impl McpKeywordSearchServerConfig {
                     dual_debug!("Sync keyword search mcp server: {}", url);
 
                     // create a sse transport
-                    let transport = SseTransport::start(url).await.map_err(|e| {
+                    let transport = SseClientTransport::start(url).await.map_err(|e| {
                         let err_msg =
                             format!("Failed to create keyword search mcp SSE transport: {e}");
                         dual_error!("{}", &err_msg);
@@ -310,11 +297,14 @@ impl McpKeywordSearchServerConfig {
                     match MCP_KEYWORD_SEARCH_CLIENT.get() {
                         Some(client) => {
                             let mut locked_client = client.write().await;
-                            *locked_client = mcp_client;
+                            *locked_client = McpClient::new(self.name.clone(), mcp_client);
                         }
                         None => {
                             MCP_KEYWORD_SEARCH_CLIENT
-                                .set(TokioRwLock::new(mcp_client))
+                                .set(TokioRwLock::new(McpClient::new(
+                                    self.name.clone(),
+                                    mcp_client,
+                                )))
                                 .map_err(|_| {
                                     let err_msg = "Failed to set MCP_KEYWORD_SEARCH_CLIENT";
                                     dual_error!("{}", err_msg);
@@ -364,7 +354,7 @@ impl McpToolServerConfig {
                     dual_debug!("Retrieve mcp tools from mcp server: {}", url);
 
                     // create a sse transport
-                    let transport = SseTransport::start(url).await.map_err(|e| {
+                    let transport = SseClientTransport::start(url).await.map_err(|e| {
                         let err_msg = format!("Failed to create sse transport: {e}");
                         dual_error!("{}", &err_msg);
                         ServerError::Operation(err_msg)
@@ -439,13 +429,16 @@ impl McpToolServerConfig {
                     match MCP_CLIENTS.get() {
                         Some(clients) => {
                             let mut clients = clients.write().await;
-                            clients.insert(self.name.clone(), TokioRwLock::new(mcp_client));
+                            clients.insert(
+                                self.name.clone(),
+                                TokioRwLock::new(McpClient::new(self.name.clone(), mcp_client)),
+                            );
                         }
                         None => {
                             MCP_CLIENTS
                                 .set(TokioRwLock::new(HashMap::from([(
                                     self.name.clone(),
-                                    TokioRwLock::new(mcp_client),
+                                    TokioRwLock::new(McpClient::new(self.name.clone(), mcp_client)),
                                 )])))
                                 .map_err(|_| {
                                     let err_msg = "Failed to set MCP_CLIENTS";

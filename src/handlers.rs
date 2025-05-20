@@ -1,8 +1,8 @@
 use crate::{
-    config::{MCP_CLIENTS, MCP_TOOLS},
     dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
     info::ApiServer,
+    mcp::{MCP_CLIENTS, MCP_TOOLS},
     rag,
     rag::KWSEARCH_MCP_SERVER_NAME,
     server::{RoutingPolicy, Server, ServerIdToRemove, ServerKind},
@@ -481,6 +481,7 @@ async fn call_mcp_server(
                 let res = mcp_client
                     .read()
                     .await
+                    .raw
                     .peer()
                     .call_tool(tool_sum)
                     .await
@@ -1670,6 +1671,7 @@ pub(crate) async fn create_rag_handler(
                         let tool_result = mcp_client
                             .read()
                             .await
+                            .raw
                             .peer()
                             .call_tool(request_param)
                             .await

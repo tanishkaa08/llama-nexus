@@ -2,6 +2,7 @@ mod config;
 mod error;
 mod handlers;
 mod info;
+mod mcp;
 mod rag;
 mod server;
 mod utils;
