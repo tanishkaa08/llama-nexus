@@ -1,7 +1,7 @@
 use crate::{
     dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
-    mcp::{MCP_CLIENTS, MCP_KEYWORD_SEARCH_CLIENT, MCP_VECTOR_SEARCH_CLIENT},
+    mcp::{MCP_KEYWORD_SEARCH_CLIENT, MCP_VECTOR_SEARCH_CLIENT},
     AppState,
 };
 use axum::{
@@ -32,8 +32,6 @@ use std::{
 use text_splitter::{MarkdownSplitter, TextSplitter};
 use tokio_util::sync::CancellationToken;
 
-const VDB_MCP_SERVER_NAME: &str = "gaia-qdrant";
-pub const KWSEARCH_MCP_SERVER_NAME: &str = "gaia-keyword-search";
 const DEFAULT_WEIGHT_ALPHA: f64 = 0.5;
 
 pub async fn chat(
@@ -1266,18 +1264,8 @@ pub(crate) async fn qdrant_create_collection(
         request_id
     );
 
-    match MCP_CLIENTS.get() {
-        Some(mcp_clients) => {
-            let lock_mcp_clients = mcp_clients.read().await;
-            let mcp_client = match lock_mcp_clients.get(VDB_MCP_SERVER_NAME) {
-                Some(mcp_client) => mcp_client,
-                None => {
-                    let err_msg = "No MCP client found";
-                    dual_error!("{} - request_id: {}", err_msg, request_id);
-                    return Err(ServerError::Operation(err_msg.to_string()));
-                }
-            };
-
+    match MCP_VECTOR_SEARCH_CLIENT.get() {
+        Some(mcp_client) => {
             // request param
             let request_param = match vdb_api_key.as_ref().is_empty() {
                 true => CallToolRequestParam {
@@ -1345,7 +1333,7 @@ pub(crate) async fn qdrant_create_collection(
             }
         }
         None => {
-            let err_msg = "No MCP client found";
+            let err_msg = "No vector search mcp client found";
             dual_error!("{} - request_id: {}", err_msg, request_id);
             Err(ServerError::Operation(err_msg.to_string()))
         }
@@ -1393,18 +1381,8 @@ pub(crate) async fn qdrant_persist_embeddings(
         request_id
     );
 
-    match MCP_CLIENTS.get() {
-        Some(mcp_clients) => {
-            let lock_mcp_clients = mcp_clients.read().await;
-            let mcp_client = match lock_mcp_clients.get(VDB_MCP_SERVER_NAME) {
-                Some(mcp_client) => mcp_client,
-                None => {
-                    let err_msg = "No MCP client found";
-                    dual_error!("{} - request_id: {}", err_msg, request_id);
-                    return Err(ServerError::Operation(err_msg.to_string()));
-                }
-            };
-
+    match MCP_VECTOR_SEARCH_CLIENT.get() {
+        Some(mcp_client) => {
             // request param
             let request_param = match vdb_api_key.as_ref().is_empty() {
                 true => CallToolRequestParam {
@@ -1482,7 +1460,7 @@ pub(crate) async fn qdrant_persist_embeddings(
             Ok(())
         }
         None => {
-            let err_msg = "No MCP client found";
+            let err_msg = "No vector search mcp client found";
             dual_error!("{} - request_id: {}", err_msg, request_id);
             Err(ServerError::Operation(err_msg.to_string()))
         }

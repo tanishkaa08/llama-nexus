@@ -2,9 +2,9 @@ use crate::{
     dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
     info::ApiServer,
+    mcp::MCP_KEYWORD_SEARCH_CLIENT,
     mcp::{MCP_CLIENTS, MCP_TOOLS},
     rag,
-    rag::KWSEARCH_MCP_SERVER_NAME,
     server::{RoutingPolicy, Server, ServerIdToRemove, ServerKind},
     AppState,
 };
@@ -1628,71 +1628,84 @@ pub(crate) async fn create_rag_handler(
     );
     let chunks = rag::chunk_text(&contents, extension, chunk_capacity, &request_id)?;
 
-    // create index for the chunks for keyword search
+    // * create index for the chunks for keyword search
     let mut index_response: Option<CreateIndexResponse> = None;
     match (kw_search_url.is_empty(), kw_search_index_name.is_empty()) {
         (false, false) => {
-            if let Some(mcp_clients) = MCP_CLIENTS.get() {
-                let lock_mcp_clients = mcp_clients.read().await;
-                match lock_mcp_clients.get(KWSEARCH_MCP_SERVER_NAME) {
-                    Some(mcp_client) => {
-                        let documents: Vec<KwDocumentInput> = chunks
-                            .iter()
-                            .map(|c| KwDocumentInput {
-                                content: c.to_string(),
-                                title: None,
-                            })
-                            .collect();
+            match MCP_KEYWORD_SEARCH_CLIENT.get() {
+                Some(mcp_client) => {
+                    let mcp_name = mcp_client.read().await.name.clone();
 
-                        let request_param = CallToolRequestParam {
-                            name: "create_index".into(),
-                            arguments: Some(serde_json::Map::from_iter([
-                                (
-                                    "base_url".to_string(),
-                                    serde_json::Value::from(kw_search_url),
-                                ),
-                                (
-                                    "name".to_string(),
-                                    serde_json::Value::from(kw_search_index_name),
-                                ),
-                                (
-                                    "documents".to_string(),
-                                    serde_json::Value::Array(
-                                        documents
-                                            .into_iter()
-                                            .map(|d| serde_json::to_value(d).unwrap())
-                                            .collect(),
+                    match mcp_name.as_str() {
+                        "gaia-keyword-search" => {
+                            let documents: Vec<KwDocumentInput> = chunks
+                                .iter()
+                                .map(|c| KwDocumentInput {
+                                    content: c.to_string(),
+                                    title: None,
+                                })
+                                .collect();
+
+                            // request param
+                            let request_param = CallToolRequestParam {
+                                name: "create_index".into(),
+                                arguments: Some(serde_json::Map::from_iter([
+                                    (
+                                        "base_url".to_string(),
+                                        serde_json::Value::from(kw_search_url),
                                     ),
-                                ),
-                            ])),
-                        };
+                                    (
+                                        "name".to_string(),
+                                        serde_json::Value::from(kw_search_index_name),
+                                    ),
+                                    (
+                                        "documents".to_string(),
+                                        serde_json::Value::Array(
+                                            documents
+                                                .into_iter()
+                                                .map(|d| serde_json::to_value(d).unwrap())
+                                                .collect(),
+                                        ),
+                                    ),
+                                ])),
+                            };
+                            dual_debug!(
+                                "request_param: {:#?} - request_id: {}",
+                                &request_param,
+                                request_id
+                            );
 
-                        // call the create_index tool
-                        let tool_result = mcp_client
-                            .read()
-                            .await
-                            .raw
-                            .peer()
-                            .call_tool(request_param)
-                            .await
-                            .map_err(|e| {
-                                let err_msg = format!("Failed to call the tool: {e}");
-                                dual_error!("{} - request_id: {}", err_msg, request_id);
-                                ServerError::Operation(err_msg)
-                            })?;
+                            // call the create_index tool
+                            let tool_result = mcp_client
+                                .read()
+                                .await
+                                .raw
+                                .peer()
+                                .call_tool(request_param)
+                                .await
+                                .map_err(|e| {
+                                    let err_msg = format!("Failed to call the tool: {e}");
+                                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                                    ServerError::Operation(err_msg)
+                                })?;
 
-                        let response = CreateIndexResponse::from(tool_result);
+                            let response = CreateIndexResponse::from(tool_result);
 
-                        dual_info!("Index created successfully - request_id: {}", request_id);
+                            dual_info!("Index created successfully - request_id: {}", request_id);
 
-                        index_response = Some(response);
+                            index_response = Some(response);
+                        }
+                        _ => {
+                            let err_msg =
+                                format!("Unsupported keyword search mcp server: {mcp_name}");
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                            return Err(ServerError::Operation(err_msg));
+                        }
                     }
-                    None => {
-                        let warn_msg = format!(
-                            "Not found MCP client for `{KWSEARCH_MCP_SERVER_NAME}` - request_id: {request_id}"
-                        );
-                        dual_warn!("{}", warn_msg);
-                    }
+                }
+                None => {
+                    let warn_msg = "No keyword search mcp client available";
+                    dual_warn!("{} - request_id: {}", warn_msg, request_id);
                 }
             }
         }
@@ -1810,7 +1823,7 @@ pub(crate) async fn create_rag_handler(
         request_id
     );
 
-    // create a collection in VectorDB
+    // * create a collection in VectorDB
     let dim = embeddings[0].embedding.len();
     rag::qdrant_create_collection(
         &vdb_server_url,
