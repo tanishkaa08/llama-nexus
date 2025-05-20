@@ -1,4 +1,4 @@
-# Search in RAG
+# Llama-nexus RAG Search: Configuration and Usage Guide
 
 In RAG (Retrieval-Augmented Generation) scenarios, vector search and keyword search are two common search methods. llama-nexus supports both search methods through [Qdrant](https://qdrant.tech/) and [kw-search-server](https://github.com/LlamaEdge/kw-search-server). Additionally, llama-nexus also supports keyword search through [Elasticsearch](https://www.elastic.co/).
 
