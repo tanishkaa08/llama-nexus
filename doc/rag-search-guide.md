@@ -4,9 +4,9 @@ In RAG (Retrieval-Augmented Generation) scenarios, vector search and keyword sea
 
 In this guide, we will use Qdrant and kw-search-server as examples to demonstrate:
 
-1. How to start llama-nexus in RAG mode along with related servers
-2. How to create embeddings and indexes for documents
-3. How to perform vector search and keyword search
+- How to start llama-nexus in RAG mode along with related servers
+- How to create embeddings and indexes for documents
+- How to perform vector search and keyword search
 
 ## Starting llama-nexus and Related Servers
 
