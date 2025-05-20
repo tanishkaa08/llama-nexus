@@ -1009,7 +1009,7 @@ dependencies = [
 [[package]]
 name = "gaia-elastic-mcp-common"
 version = "0.1.1"
-source = "git+https://github.com/apepkuss/mcp-examples.git?branch=feat-elastic#7bdd6b9dff8b3063f2165c2ccfd91b9454ac99ee"
+source = "git+https://github.com/apepkuss/mcp-examples.git?branch=feat-elastic#066b4b591d09bdf451cf1a13411518cf16ca08e1"
 dependencies = [
  "rmcp",
  "serde",
@@ -1019,7 +1019,7 @@ dependencies = [
 [[package]]
 name = "gaia-kwsearch-common"
 version = "0.1.0"
-source = "git+https://github.com/apepkuss/mcp-examples.git?branch=feat-elastic#7bdd6b9dff8b3063f2165c2ccfd91b9454ac99ee"
+source = "git+https://github.com/apepkuss/mcp-examples.git?branch=feat-elastic#066b4b591d09bdf451cf1a13411518cf16ca08e1"
 dependencies = [
  "anyhow",
  "endpoints",
@@ -1042,7 +1042,7 @@ dependencies = [
 [[package]]
 name = "gaia-qdrant-common"
 version = "0.1.0"
-source = "git+https://github.com/apepkuss/mcp-examples.git?branch=feat-elastic#7bdd6b9dff8b3063f2165c2ccfd91b9454ac99ee"
+source = "git+https://github.com/apepkuss/mcp-examples.git?branch=feat-elastic#066b4b591d09bdf451cf1a13411518cf16ca08e1"
 dependencies = [
  "rmcp",
  "serde",
