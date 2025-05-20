@@ -269,7 +269,7 @@ At this point, llama-nexus and related servers are successfully started. Next, w
 
 Before performing vector search and keyword search, you need to create embeddings and indexes for your documents. Embeddings will be stored in Qdrant, while indexes will be used by kw-search-server. llama-nexus provides the `/v1/create/rag` endpoint for creating embeddings and indexes for documents.
 
-> [!NOTICE]
+> [!NOTE]
 > The `/v1/create/rag` endpoint currently only supports persisting embeddings in Qdrant and creating indexes for kw-search-server. Support for Elasticsearch will be added in the near future.
 
 The CURL command below sends a request to `llama-nexus`, which performs the following tasks in sequence:
