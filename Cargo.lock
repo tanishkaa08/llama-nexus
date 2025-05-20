@@ -15,6 +15,7 @@ dependencies = [
  "config",
  "endpoints",
  "futures-util",
+ "gaia-elastic-mcp-common",
  "gaia-kwsearch-common",
  "gaia-qdrant-common",
  "http 1.3.1",
@@ -420,9 +421,9 @@ checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
 name = "cc"
-version = "1.2.22"
+version = "1.2.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "32db95edf998450acc7881c932f94cd9b05c87b4b2599e8bab064753da4acfd1"
+checksum = "5f4ac86a9e5bc1e2b3449ab9d7d3a6a405e3d1bb28d7b9be8614f55846ae3766"
 dependencies = [
  "jobserver",
  "libc",
@@ -453,9 +454,8 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chat-prompts"
-version = "0.28.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "47276610f0902d4bb6edce14480b28590695bcc8844c8632abc7384787360144"
+version = "0.30.0"
+source = "git+https://github.com/LlamaEdge/LlamaEdge.git?branch=feat-kw-fields#d58a7be135632d6605a4465b0be2a4caca23827c"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -784,8 +784,7 @@ dependencies = [
 [[package]]
 name = "endpoints"
 version = "0.26.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f4a027074eb6ffc2c3b347a7234088f725d199d5edb1fa884f8c5f67ab20054b"
+source = "git+https://github.com/LlamaEdge/LlamaEdge.git?branch=feat-kw-fields#d58a7be135632d6605a4465b0be2a4caca23827c"
 dependencies = [
  "indexmap",
  "serde",
@@ -823,9 +822,9 @@ dependencies = [
 
 [[package]]
 name = "errno"
-version = "0.3.11"
+version = "0.3.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "976dd42dc7e85965fe702eb8164f21f450704bdde31faefd6471dba214cb594e"
+checksum = "cea14ef9355e3beab063703aa9dab15afd25f0667c341310c1e5274bb1d0da18"
 dependencies = [
  "libc",
  "windows-sys 0.59.0",
@@ -1008,9 +1007,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "gaia-elastic-mcp-common"
+version = "0.1.1"
+source = "git+https://github.com/apepkuss/mcp-examples.git?branch=feat-elastic#7bdd6b9dff8b3063f2165c2ccfd91b9454ac99ee"
+dependencies = [
+ "rmcp",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "gaia-kwsearch-common"
 version = "0.1.0"
-source = "git+https://github.com/apepkuss/mcp-examples.git?branch=main#10b5d33e1bbb597373a5efcaf129a96d97c7ae0d"
+source = "git+https://github.com/apepkuss/mcp-examples.git?branch=feat-elastic#7bdd6b9dff8b3063f2165c2ccfd91b9454ac99ee"
 dependencies = [
  "anyhow",
  "endpoints",
@@ -1033,7 +1042,7 @@ dependencies = [
 [[package]]
 name = "gaia-qdrant-common"
 version = "0.1.0"
-source = "git+https://github.com/apepkuss/mcp-examples.git?branch=main#10b5d33e1bbb597373a5efcaf129a96d97c7ae0d"
+source = "git+https://github.com/apepkuss/mcp-examples.git?branch=feat-elastic#7bdd6b9dff8b3063f2165c2ccfd91b9454ac99ee"
 dependencies = [
  "rmcp",
  "serde",
@@ -1373,9 +1382,9 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.11"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "497bbc33a26fdd4af9ed9c70d63f61cf56a938375fbb32df34db9b1cd6d643f2"
+checksum = "cf9f1e950e0d9d1d3c47184416723cf29c0d1f93bd8cccf37e4beb6b44f31710"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -1488,9 +1497,9 @@ checksum = "00210d6893afc98edb752b664b8890f0ef174c8adbb8d0be9710fa66fbbf72d3"
 
 [[package]]
 name = "icu_properties"
-version = "2.0.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2549ca8c7241c82f59c80ba2a6f415d931c5b58d24fb8412caa1a1f02c49139a"
+checksum = "016c619c1eeb94efb86809b015c58f479963de65bdb6253345c1a1276f22e32b"
 dependencies = [
  "displaydoc",
  "icu_collections 2.0.0",
@@ -1504,9 +1513,9 @@ dependencies = [
 
 [[package]]
 name = "icu_properties_data"
-version = "2.0.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8197e866e47b68f8f7d95249e172903bec06004b18b2937f1095d40a0c57de04"
+checksum = "298459143998310acd25ffe6810ed544932242d3f07083eee1084d83a71bd632"
 
 [[package]]
 name = "icu_provider"
@@ -2729,11 +2738,12 @@ dependencies = [
 [[package]]
 name = "rmcp"
 version = "0.1.5"
-source = "git+https://github.com/modelcontextprotocol/rust-sdk.git?branch=main#5d92061ecefe0c7a6e514421c2f84b2d40938e39"
+source = "git+https://github.com/modelcontextprotocol/rust-sdk.git?rev=c1c4c9a0#c1c4c9a0c9afbfbbf9eb42d6f8b00d8546fbdc2c"
 dependencies = [
  "base64 0.21.7",
  "chrono",
  "futures",
+ "http 1.3.1",
  "paste",
  "pin-project-lite",
  "reqwest 0.12.15",
@@ -2744,18 +2754,19 @@ dependencies = [
  "sse-stream",
  "thiserror 2.0.12",
  "tokio",
+ "tokio-stream",
  "tokio-util",
  "tracing",
- "url",
 ]
 
 [[package]]
 name = "rmcp-macros"
 version = "0.1.5"
-source = "git+https://github.com/modelcontextprotocol/rust-sdk.git?branch=main#5d92061ecefe0c7a6e514421c2f84b2d40938e39"
+source = "git+https://github.com/modelcontextprotocol/rust-sdk.git?rev=c1c4c9a0#c1c4c9a0c9afbfbbf9eb42d6f8b00d8546fbdc2c"
 dependencies = [
  "proc-macro2",
  "quote",
+ "serde_json",
  "syn",
 ]
 
@@ -2924,6 +2935,7 @@ version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3fbf2ae1b8bc8e02df939598064d22402220cd5bbcca1c76f7d6a310974d5615"
 dependencies = [
+ "chrono",
  "dyn-clone",
  "schemars_derive",
  "serde",
@@ -3666,6 +3678,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "tokio-stream"
+version = "0.1.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eca58d7bba4a75707817a2c44174253f9236b2d5fbd055602e9d5c07c139a047"
+dependencies = [
+ "futures-core",
+ "pin-project-lite",
+ "tokio",
+]
+
+[[package]]
 name = "tokio-tungstenite"
 version = "0.26.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4246,9 +4269,9 @@ dependencies = [
 
 [[package]]
 name = "weezl"
-version = "0.1.9"
+version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "78c888f2a25014723b17ac60a626d626549f773e0d702b1320956f8d769ae1f8"
+checksum = "53a85b86a771b1c87058196170769dd264f66c0782acf1ae6cc51bfd64b39082"
 
 [[package]]
 name = "winapi"
@@ -4283,15 +4306,15 @@ checksum = "712e227841d057c1ee1cd2fb22fa7e5a5461ae8e48fa2ca79ec42cfc1931183f"
 
 [[package]]
 name = "windows-core"
-version = "0.61.0"
+version = "0.61.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4763c1de310c86d75a878046489e2e5ba02c649d185f21c67d4cf8a56d098980"
+checksum = "c0fdd3ddb90610c7638aa2b3a3ab2904fb9e5cdbecc643ddb3647212781c4ae3"
 dependencies = [
  "windows-implement",
  "windows-interface",
  "windows-link",
  "windows-result",
- "windows-strings 0.4.0",
+ "windows-strings 0.4.2",
 ]
 
 [[package]]
@@ -4335,9 +4358,9 @@ dependencies = [
 
 [[package]]
 name = "windows-result"
-version = "0.3.2"
+version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c64fd11a4fd95df68efcfee5f44a294fe71b8bc6a91993e2791938abcc712252"
+checksum = "56f42bd332cc6c8eac5af113fc0c1fd6a8fd2aa08a0119358686e5160d0586c6"
 dependencies = [
  "windows-link",
 ]
@@ -4353,9 +4376,9 @@ dependencies = [
 
 [[package]]
 name = "windows-strings"
-version = "0.4.0"
+version = "0.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a2ba9642430ee452d5a7aa78d72907ebe8cfda358e8cb7918a2050581322f97"
+checksum = "56e6c93f3a0c3b36176cb1327a4958a0353d5d166c2a35cb268ace15e91d3b57"
 dependencies = [
  "windows-link",
 ]
