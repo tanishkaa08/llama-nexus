@@ -272,7 +272,13 @@ After configuring the startup parameters, follow these steps to start llama-nexu
   }'
   ```
 
-At this point, llama-nexus and related servers are successfully started. Next, we'll create embeddings and indexes for documents.
+At this point, llama-nexus and related servers are successfully started. The topology diagram is as follows:
+
+<div align="center">
+  <img src="./images/llama-nexus-topology.jpg" width="80%" />
+</div>
+
+Next, we'll create embeddings and indexes for documents.
 
 ## Creating Embeddings and Indexes
 
