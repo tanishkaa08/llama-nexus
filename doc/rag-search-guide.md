@@ -8,7 +8,10 @@ In this guide, we will use Qdrant and kw-search-server as examples to demonstrat
 - How to create embeddings and indexes for documents
 - How to perform vector search and keyword search
 
+## Table of Contents
+
 - [Llama-nexus RAG Search: Configuration and Usage Guide](#llama-nexus-rag-search-configuration-and-usage-guide)
+  - [Table of Contents](#table-of-contents)
   - [Starting llama-nexus and Related Servers](#starting-llama-nexus-and-related-servers)
     - [Configuring llama-nexus Startup Parameters](#configuring-llama-nexus-startup-parameters)
     - [Starting llama-nexus](#starting-llama-nexus)
