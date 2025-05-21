@@ -34,7 +34,7 @@ jobs:
   test-llama-nexus-ubuntu:
     runs-on: ubuntu-latest
     env:
-      LLAMAEDGE_VERSION: "0.18.3"
+      LLAMAEDGE_VERSION: "0.19.0"
     strategy:
       matrix:
         wasmedge_version: [0.14.1]
@@ -73,20 +73,20 @@ jobs:
           cargo build --release
           cp target/release/llama-nexus ./llama-nexus
 
-      # - name: Build llama-api-server.wasm
-      #   env:
-      #     RUSTFLAGS: "--cfg wasmedge --cfg tokio_unstable"
-      #   run: |
-      #     git clone -b refactor-update-serverinfo https://github.com/LlamaEdge/LlamaEdge.git
-      #     cd LlamaEdge
-      #     cargo build --release
-      #     cp target/wasm32-wasip1/release/llama-api-server.wasm ../llama-api-server.wasm
-      #     cd -
-
-      - name: Download LlamaEdge
+      - name: Build llama-api-server.wasm
+        env:
+          RUSTFLAGS: "--cfg wasmedge --cfg tokio_unstable"
         run: |
-          curl -LO https://github.com/LlamaEdge/LlamaEdge/releases/download/${{ env.LLAMAEDGE_VERSION }}/llama-api-server.wasm
-          ls -al
+          git clone -b dev https://github.com/LlamaEdge/LlamaEdge.git
+          cd LlamaEdge
+          cargo build --release
+          cp target/wasm32-wasip1/release/llama-api-server.wasm ../llama-api-server.wasm
+          cd -
+
+      # - name: Download LlamaEdge
+      #   run: |
+      #     curl -LO https://github.com/LlamaEdge/LlamaEdge/releases/download/${{ env.LLAMAEDGE_VERSION }}/llama-api-server.wasm
+      #     ls -al
 
       - name: Deploy whisper plugin
         run: |
