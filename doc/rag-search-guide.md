@@ -247,7 +247,7 @@ After configuring the startup parameters, follow these steps to start llama-nexu
 - Start llama-nexus
 
   ```bash
-  llama-nexus
+  ./llama-nexus
   ```
 
   If started successfully, llama-nexus will run on port `8080` by default.
