@@ -13,7 +13,7 @@ dependencies = [
  "chat-prompts",
  "clap",
  "config",
- "endpoints",
+ "endpoints 0.27.0",
  "futures-util",
  "gaia-elastic-mcp-common",
  "gaia-kwsearch-common",
@@ -454,12 +454,13 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chat-prompts"
-version = "0.30.0"
-source = "git+https://github.com/LlamaEdge/LlamaEdge.git?branch=feat-kw-fields#d58a7be135632d6605a4465b0be2a4caca23827c"
+version = "0.30.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7d82680387a67489134d841be17e2327ae6bf5f88de6cbad22a2e0931d729c7f"
 dependencies = [
  "base64 0.22.1",
  "clap",
- "endpoints",
+ "endpoints 0.27.0",
  "enum_dispatch",
  "image",
  "serde",
@@ -793,6 +794,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "endpoints"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5da4b845b819cb04dcc6f3fadcf1f9ecb98f1d5355b9b5773f49aee41b7eb4e"
+dependencies = [
+ "indexmap",
+ "serde",
+ "serde_json",
+ "url",
+]
+
+[[package]]
 name = "enum_dispatch"
 version = "0.3.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1022,7 +1035,7 @@ version = "0.1.0"
 source = "git+https://github.com/apepkuss/mcp-examples.git?branch=feat-elastic#066b4b591d09bdf451cf1a13411518cf16ca08e1"
 dependencies = [
  "anyhow",
- "endpoints",
+ "endpoints 0.26.0",
  "futures",
  "hyper 1.6.0",
  "hyper-util",
