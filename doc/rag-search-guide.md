@@ -15,7 +15,21 @@ First, download the `llama-nexus` binary:
 ```bash
 export NEXUS_VERSION=0.1.0
 
-curl -LO https://github.com/LlamaEdge/LlamaEdge/releases/download/${NEXUS_VERSION}/llama-nexus
+# macOS on Apple Silicon
+curl -LO https://github.com/LlamaEdge/llama-nexus/releases/download/{$NEXUS_VERSION}/llama-nexus-apple-darwin-aarch64.tar.gz
+tar -xvzf llama-nexus-apple-darwin-aarch64.tar.gz llama-nexus config.toml
+
+# macOS on Intel
+curl -LO https://github.com/LlamaEdge/llama-nexus/releases/download/{$NEXUS_VERSION}/llama-nexus-apple-darwin-x86_64.tar.gz
+tar -xvzf llama-nexus-apple-darwin-x86_64.tar.gz llama-nexus config.toml
+
+# Linux on x86_64
+curl -LO https://github.com/LlamaEdge/llama-nexus/releases/download/{$NEXUS_VERSION}/llama-nexus-unknown-linux-gnu-x86_64.tar.gz
+tar -xvzf llama-nexus-unknown-linux-gnu-x86_64.tar.gz llama-nexus config.toml
+
+# Linux on aarch64
+curl -LO https://github.com/LlamaEdge/llama-nexus/releases/download/{$NEXUS_VERSION}/llama-nexus-unknown-linux-gnu-aarch64.tar.gz
+tar -xvzf llama-nexus-unknown-linux-gnu-aarch64.tar.gz llama-nexus config.toml
 ```
 
 The extracted files include the `llama-nexus` binary and `config.toml` configuration file. Next, we'll configure the `config.toml` file.
@@ -98,8 +112,9 @@ After configuring the startup parameters, follow these steps to start llama-nexu
   First, download `llama-api-server.wasm` and models:
 
   ```bash
-  export API_SERVER_VERSION=0.18.5
-  curl -LO https://github.com/LlamaEdge/LlamaEdge/releases/download/${API_SERVER_VERSION}/llama-api-server.wasm
+  # Download llama-api-server.wasm
+  export API_SERVER_VERSION=0.19.0
+  curl -LO https://github.com/LlamaEdge/LlamaEdge/releases/download/{$API_SERVER_VERSION}/llama-api-server.wasm
 
   # Download chat model
   curl -LO https://huggingface.co/second-state/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q5_K_M.gguf
@@ -136,36 +151,20 @@ After configuring the startup parameters, follow these steps to start llama-nexu
   export GAIA_MCP_VERSION=0.1.2
 
   # macOS on Apple Silicon
-  curl -LO https://github.com/apepkuss/mcp-examples/releases/download/{GAIA_MCP_VERSION}/gaia-mcp-servers-apple-darwin-aarch64.tar.gz
-  tar -xzf gaia-mcp-servers-apple-darwin-aarch64.tar.gz \
-    --strip-components=1 \
-    -C . \
-    gaia-qdrant-mcp-server-sse \
-    gaia-kwsearch-mcp-server-sse
+  curl -LO https://github.com/apepkuss/mcp-examples/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-apple-darwin-aarch64.tar.gz
+  tar -xvzf gaia-mcp-servers-apple-darwin-aarch64.tar.gz gaia-qdrant-mcp-server-sse gaia-kwsearch-mcp-server-sse
 
   # macOS on Intel
-  curl -LO https://github.com/apepkuss/mcp-examples/releases/download/{GAIA_MCP_VERSION}/gaia-mcp-servers-apple-darwin-x86_64.tar.gz
-  tar -xvzf gaia-mcp-servers-apple-darwin-x86_64.tar.gz \
-    --strip-components=1 \
-    -C . \
-    gaia-qdrant-mcp-server-sse \
-    gaia-kwsearch-mcp-server-sse
+  curl -LO https://github.com/apepkuss/mcp-examples/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-apple-darwin-x86_64.tar.gz
+  tar -xvzf gaia-mcp-servers-apple-darwin-x86_64.tar.gz gaia-qdrant-mcp-server-sse gaia-kwsearch-mcp-server-sse
 
   # Linux on x86_64
-  curl -LO https://github.com/apepkuss/mcp-examples/releases/download/{GAIA_MCP_VERSION}/gaia-mcp-servers-unknown-linux-gnu-aarch64.tar.gz
-  tar -xvzf gaia-mcp-servers-unknown-linux-gnu-aarch64.tar.gz \
-    --strip-components=1 \
-    -C . \
-    gaia-qdrant-mcp-server-sse \
-    gaia-kwsearch-mcp-server-sse
+  curl -LO https://github.com/apepkuss/mcp-examples/releases/download/{$GAIA_MCP_VERSION }/gaia-mcp-servers-unknown-linux-gnu-x86_64.tar.gz
+  tar -xvzf gaia-mcp-servers-unknown-linux-gnu-x86_64.tar.gz gaia-qdrant-mcp-server-sse gaia-kwsearch-mcp-server-sse
 
   # Linux on aarch64
-  curl -LO https://github.com/apepkuss/mcp-examples/releases/download/{GAIA_MCP_VERSION }/gaia-mcp-servers-unknown-linux-gnu-x86_64.tar.gz
-  tar -xvzf gaia-mcp-servers-unknown-linux-gnu-x86_64.tar.gz \
-    --strip-components=1 \
-    -C . \
-    gaia-qdrant-mcp-server-sse \
-    gaia-kwsearch-mcp-server-sse
+  curl -LO https://github.com/apepkuss/mcp-examples/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-unknown-linux-gnu-aarch64.tar.gz
+  tar -xvzf gaia-mcp-servers-unknown-linux-gnu-aarch64.tar.gz gaia-qdrant-mcp-server-sse gaia-kwsearch-mcp-server-sse
   ```
 
   Then, start the MCP servers:
@@ -205,30 +204,30 @@ After configuring the startup parameters, follow these steps to start llama-nexu
     First, download the `kw-search-server` binary:
 
     ```bash
-    export KW_SERVER=0.1.1
+    export KW_SERVER_VERSION=0.1.1
 
     # macOS on Apple Silicon
-    curl -LO https://github.com/LlamaEdge/kw-search-server/releases/download/${KW_SERVER}/kw-search-server-aarch64-apple-darwin.tar.gz
-    tar -xvzf kw-search-server-aarch64-apple-darwin.tar.gz
+    curl -LO https://github.com/LlamaEdge/kw-search-server/releases/download/{$KW_SERVER_VERSION}/kw-search-server-aarch64-apple-darwin.tar.gz
+    tar -xvzf kw-search-server-aarch64-apple-darwin.tar.gz kw-search-server
 
     # macOS on Intel
-    curl -LO https://github.com/LlamaEdge/kw-search-server/releases/download/${KW_SERVER}/kw-search-server-x86_64-apple-darwin.tar.gz
-    tar -xvzf kw-search-server-x86_64-apple-darwin.tar.gz
+    curl -LO https://github.com/LlamaEdge/kw-search-server/releases/download/{$KW_SERVER_VERSION}/kw-search-server-x86_64-apple-darwin.tar.gz
+    tar -xvzf kw-search-server-x86_64-apple-darwin.tar.gz kw-search-server
 
     # Linux on x86_64
-    curl -LO https://github.com/LlamaEdge/kw-search-server/releases/download/${KW_SERVER}/kw-search-server-x86_64-unknown-linux-gnu.tar.gz
-    tar -xvzf kw-search-server-x86_64-unknown-linux-gnu.tar.gz
+    curl -LO https://github.com/LlamaEdge/kw-search-server/releases/download/{$KW_SERVER_VERSION}/kw-search-server-x86_64-unknown-linux-gnu.tar.gz
+    tar -xvzf kw-search-server-x86_64-unknown-linux-gnu.tar.gz kw-search-server
 
     # Linux on aarch64
-    curl -LO https://github.com/LlamaEdge/kw-search-server/releases/download/${KW_SERVER}/kw-search-server-aarch64-unknown-linux-gnu.tar.gz
-    tar -xvzf kw-search-server-aarch64-unknown-linux-gnu.tar.gz
+    curl -LO https://github.com/LlamaEdge/kw-search-server/releases/download/{$KW_SERVER_VERSION}/kw-search-server-aarch64-unknown-linux-gnu.tar.gz
+    tar -xvzf kw-search-server-aarch64-unknown-linux-gnu.tar.gz kw-search-server
     ```
 
     Then, run the service:
 
     ```bash
     # Run
-    ./kw-search-server
+    kw-search-server
     ```
 
     If started successfully, kw-search-server will run on port `12306` by default.
