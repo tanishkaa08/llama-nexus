@@ -100,9 +100,9 @@ jobs:
       - name: Start llama-api-server
         run: |
           curl -LO https://huggingface.co/second-state/Llama-3.2-1B-Instruct-GGUF/resolve/main/Llama-3.2-1B-Instruct-Q4_0.gguf
-          nohup $HOME/.wasmedge/bin/wasmedge --dir .:. --nn-preload default:GGML:AUTO:Llama-3.2-1B-Instruct-Q4_0.gguf llama-api-server.wasm --model-name Llama-3.2-1B --prompt-template llama-3-chat --ctx-size 4096 --port 9068 > ./start-llamaedge.log 2>&1 &
+          nohup $HOME/.wasmedge/bin/wasmedge --dir .:. --nn-preload default:GGML:AUTO:Llama-3.2-1B-Instruct-Q4_0.gguf llama-api-server.wasm --model-name Llama-3.2-1B --prompt-template llama-3-chat --ctx-size 4096 --port 9068 > ./chat-server.log 2>&1 &
           sleep 15
-          cat start-llamaedge.log
+          cat chat-server.log
 
       - name: Start whisper-api-server
         run: |
@@ -138,6 +138,11 @@ jobs:
         run: |
           hurl --test --jobs 1 ./tests/test_chat.hurl
 
+      - name: Print chat-server.log
+        if: failure()
+        run: |
+          cat chat-server.log
+
       - name: Run test_transcribe.hurl
         if: always()
         run: |
@@ -145,7 +150,7 @@ jobs:
           hurl --test --jobs 1 ./tests/test_transcribe.hurl
 
       - name: Print whisper logs on failure
-        if: always()
+        if: failure()
         run: |
           echo "Whisper server logs:"
           cat ./start-whisper.log
@@ -157,7 +162,7 @@ jobs:
           hurl --test --jobs 1 ./tests/test_translate.hurl
 
       - name: Print whisper logs on failure
-        if: always()
+        if: failure()
         run: |
           echo "Whisper server logs:"
           cat ./start-whisper.log
