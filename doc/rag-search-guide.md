@@ -264,7 +264,7 @@ After configuring the startup parameters, follow these steps to start llama-nexu
   }'
 
   # Register embedding server
-  curl --location 'http://localhost:10086/admin/servers/register' \
+  curl --location 'http://localhost:8080/admin/servers/register' \
   --header 'Content-Type: application/json' \
   --data '{
       "url": "http://localhost:9069",
@@ -295,7 +295,7 @@ The CURL command below sends a request to `llama-nexus`, which performs the foll
 
 ```bash
 # Create embeddings and index
-curl --location 'http://localhost:10086/v1/create/rag' \
+curl --location 'http://localhost:8080/v1/create/rag' \
 --header 'Content-Type: multipart/form-data' \
 --form 'file=@"paris.txt"' \
 --form 'chunk_capacity="150"' \
