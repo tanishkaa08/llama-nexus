@@ -76,35 +76,36 @@ printf "Step 1: Downloading llama-nexus...\n"
 curl -LO "https://github.com/LlamaEdge/llama-nexus/releases/download/${NEXUS_VERSION}/llama-nexus-${PLATFORM}.tar.gz"
 tar -xvzf llama-nexus-${PLATFORM}.tar.gz llama-nexus config.toml
 rm llama-nexus-${PLATFORM}.tar.gz
-info "\n        👍 Done!"
+info "\n👍 Done!"
 
 # 2. Install WasmEdge Runtime
 printf "Step 2: Installing WasmEdge Runtime...\n"
 curl -sSf https://raw.githubusercontent.com/WasmEdge/WasmEdge/master/utils/install_v2.sh | bash -s -- -v $WASMEDGE_VERSION --ggmlbn=$GGML_PLUGIN
 source $HOME/.wasmedge/env
-info "\n        👍 Done!"
+info "\n👍 Done!"
 
 # 3. Download llama-api-server and models
 printf "Step 3: Downloading llama-api-server...\n"
 curl -LO "https://github.com/LlamaEdge/LlamaEdge/releases/download/${API_SERVER_VERSION}/llama-api-server.wasm"
-info "\n        👍 Done!"
+info "\n👍 Done!"
 
 # 4. Download Qwen3-4B-Q5_K_M.gguf
 printf "Step 4: Downloading Qwen3-4B-Q5_K_M.gguf...\n"
 if [ ! -f "Qwen3-4B-Q5_K_M.gguf" ]; then
     curl -LO "https://huggingface.co/second-state/Qwen3-4B-GGUF/resolve/main/Qwen3-4B-Q5_K_M.gguf"
-    info "\n        👍 Done!"
+    info "\n👍 Done!"
 else
-    echo "Qwen3-4B-Q5_K_M.gguf already exists"
+    printf "${YELLOW}Qwen3-4B-Q5_K_M.gguf already exists${NC}\n"
 fi
 
 # 5. Download nomic-embed-text-v1.5-f16.gguf
 printf "Step 5: Downloading nomic-embed-text-v1.5-f16.gguf...\n"
 if [ ! -f "nomic-embed-text-v1.5-f16.gguf" ]; then
     curl -LO "https://huggingface.co/second-state/nomic-embed-text-v1.5-GGUF/resolve/main/nomic-embed-text-v1.5-f16.gguf"
-    info "\n        👍 Done!"
+    info "\n👍 Done!"
 else
-    echo "nomic-embed-text-v1.5-f16.gguf already exists"
+    printf "${YELLOW}nomic-embed-text-v1.5-f16.gguf already exists${NC}\n"
+
 fi
 
 # 6. Download MCP servers
@@ -112,7 +113,7 @@ printf "Step 6: Downloading MCP servers...\n"
 curl -LO "https://github.com/apepkuss/mcp-examples/releases/download/${GAIA_MCP_VERSION}/gaia-mcp-servers-${PLATFORM}.tar.gz"
 tar -xvzf gaia-mcp-servers-${PLATFORM}.tar.gz gaia-qdrant-mcp-server-sse gaia-kwsearch-mcp-server-sse
 rm gaia-mcp-servers-${PLATFORM}.tar.gz
-info "\n        👍 Done!"
+info "\n👍 Done!"
 
 # 7. Start services
 printf "Step 7: Starting services...\n"
