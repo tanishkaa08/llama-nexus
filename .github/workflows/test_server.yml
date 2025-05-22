@@ -108,9 +108,9 @@ jobs:
         run: |
           curl -LO https://github.com/LlamaEdge/whisper-api-server/releases/download/${{ matrix.whisper_api_server_version }}/whisper-api-server.wasm
           curl -LO https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v2-q5_0.bin
-          nohup env WASMEDGE_PLUGIN_PATH=$HOME/whisper/plugin $HOME/.wasmedge/bin/wasmedge --dir .:. whisper-api-server.wasm -m ggml-large-v2-q5_0.bin --port 9069 > ./start-whisper.log 2>&1 &
+          nohup env WASMEDGE_PLUGIN_PATH=$HOME/whisper/plugin $HOME/.wasmedge/bin/wasmedge --dir .:. whisper-api-server.wasm -m ggml-large-v2-q5_0.bin --port 9069 > ./whisper-server.log 2>&1 &
           sleep 15
-          cat start-whisper.log
+          cat whisper-server.log
 
       - name: Start LlamaEdge-Nexus
         run: |
@@ -149,11 +149,11 @@ jobs:
           cp ./tests/assets/test.wav ./tests/test.wav
           hurl --test --jobs 1 ./tests/test_transcribe.hurl
 
-      - name: Print whisper logs on failure
+      - name: Print whisper-server.log on failure
         if: failure()
         run: |
           echo "Whisper server logs:"
-          cat ./start-whisper.log
+          cat ./whisper-server.log
 
       - name: Run test_translate.hurl
         if: always()
@@ -161,11 +161,11 @@ jobs:
           cp ./tests/assets/test_cn.wav ./tests/test_cn.wav
           hurl --test --jobs 1 ./tests/test_translate.hurl
 
-      - name: Print whisper logs on failure
+      - name: Print whisper-server.log on failure
         if: failure()
         run: |
           echo "Whisper server logs:"
-          cat ./start-whisper.log
+          cat ./whisper-server.log
 
       - name: Stop LlamaEdge-Nexus
         run: |
