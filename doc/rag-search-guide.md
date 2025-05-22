@@ -250,13 +250,13 @@ After configuring the startup parameters, follow these steps to start llama-nexu
   ./llama-nexus
   ```
 
-  If started successfully, llama-nexus will run on port `8080` by default.
+  If started successfully, llama-nexus will run on port `3389` by default.
 
 - Register chat and embedding servers
 
   ```bash
   # Register chat server
-  curl --location 'http://localhost:8080/admin/servers/register' \
+  curl --location 'http://localhost:3389/admin/servers/register' \
   --header 'Content-Type: application/json' \
   --data '{
       "url": "http://localhost:9068",
@@ -264,7 +264,7 @@ After configuring the startup parameters, follow these steps to start llama-nexu
   }'
 
   # Register embedding server
-  curl --location 'http://localhost:8080/admin/servers/register' \
+  curl --location 'http://localhost:3389/admin/servers/register' \
   --header 'Content-Type: application/json' \
   --data '{
       "url": "http://localhost:9069",
@@ -295,7 +295,7 @@ The CURL command below sends a request to `llama-nexus`, which performs the foll
 
 ```bash
 # Create embeddings and index
-curl --location 'http://localhost:8080/v1/create/rag' \
+curl --location 'http://localhost:3389/v1/create/rag' \
 --header 'Content-Type: multipart/form-data' \
 --form 'file=@"paris.txt"' \
 --form 'chunk_capacity="150"' \
@@ -391,10 +391,10 @@ At this point, we have created embeddings and indexes for the documents. Next, w
 
 When llama-nexus is running in RAG mode with `gaia-qdrant` and `gaia-keyword-search` MCP servers enabled, sending a chat completion request will trigger vector search and keyword search.
 
-The CURL command below sends a chat completion request to `llama-nexus`. Note: If your llama-nexus is running on a port other than `8080`, please update the port number in the request.
+The CURL command below sends a chat completion request to `llama-nexus`. Note: If your llama-nexus is running on a port other than `3389`, please update the port number in the request.
 
 ```bash
-curl --location 'http://localhost:8080/v1/chat/completions' \
+curl --location 'http://localhost:3389/v1/chat/completions' \
 --header 'Content-Type: application/json' \
 --data '{
     "messages": [

@@ -1,6 +1,6 @@
 [server]
 host = "127.0.0.1" # The host to listen on.
-port = 8080        # The port to listen on.
+port = 3389        # The port to listen on.
 
 
 # Section 1: MCP Tool Servers

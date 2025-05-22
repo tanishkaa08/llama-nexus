@@ -66,7 +66,7 @@ Llama-Nexus is a gateway service for managing and orchestrating LlamaEdge API se
   Run the following command to start Llama-Nexus:
 
   ```bash
-  # Start Llama-Nexus with the default config file at default port 9069
+  # Start Llama-Nexus with the default config file at default port 3389
   llama-nexus --config config.toml
   ```
 
@@ -92,7 +92,7 @@ Llama-Nexus is a gateway service for managing and orchestrating LlamaEdge API se
   Then, register the LlamaEdge API Servers to Llama-Nexus:
 
   ```bash
-  curl --location 'http://localhost:9068/admin/servers/register' \
+  curl --location 'http://localhost:3389/admin/servers/register' \
   --header 'Content-Type: application/json' \
   --data '{
       "url": "http://localhost:10010",
@@ -112,10 +112,10 @@ Llama-Nexus is a gateway service for managing and orchestrating LlamaEdge API se
 
 ## Usage
 
-If you finish registering a chat server into Llama-Nexus, you can send a chat-completion request to the port Llama-Nexus is listening on. For example, you can use the following command to send a chat-completion request to the port 9068:
+If you finish registering a chat server into Llama-Nexus, you can send a chat-completion request to the port Llama-Nexus is listening on. For example, you can use the following command to send a chat-completion request to the port `3389`:
 
 ```bash
-curl --location 'http://localhost:9068/v1/chat/completions' \
+curl --location 'http://localhost:3389/v1/chat/completions' \
 --header 'Content-Type: application/json' \
 --data '{
     "model": "Llama-3.2-3b",
