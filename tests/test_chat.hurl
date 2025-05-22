@@ -1,6 +1,5 @@
-
 # test /v1/chat/completions endpoint
-POST http://localhost:10010/v1/chat/completions
+POST http://localhost:3389/v1/chat/completions
 Accept: application/json
 Content-Type: application/json
 ```json
