@@ -119,15 +119,17 @@ pub(crate) async fn chat(
                 }
             }
 
-            if let Some(tools) = &mut request.tools {
-                tools.extend(more_tools);
-            } else {
-                request.tools = Some(more_tools);
-            }
+            if !more_tools.is_empty() {
+                if let Some(tools) = &mut request.tools {
+                    tools.extend(more_tools);
+                } else {
+                    request.tools = Some(more_tools);
+                }
 
-            // set the tool choice to auto
-            if let Some(ToolChoice::None) | None = request.tool_choice {
-                request.tool_choice = Some(ToolChoice::Auto);
+                // set the tool choice to auto
+                if let Some(ToolChoice::None) | None = request.tool_choice {
+                    request.tool_choice = Some(ToolChoice::Auto);
+                }
             }
         }
     }
@@ -367,6 +369,13 @@ pub(crate) async fn chat(
             if let Some(value) = headers.get("requires-tool-call") {
                 // convert the value to a boolean
                 let requires_tool_call: bool = value.to_str().unwrap().parse().unwrap();
+
+                dual_debug!(
+                    "requires_tool_call: {} - request_id: {}",
+                    requires_tool_call,
+                    request_id
+                );
+
                 if requires_tool_call {
                     let chat_completion: ChatCompletionObject = match serde_json::from_slice(&bytes)
                     {
