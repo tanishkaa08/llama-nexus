@@ -129,7 +129,7 @@ jobs:
           sleep 5
 
       - name: Print LlamaEdge-Nexus logs on failure
-        if: always()
+        if: failure()
         run: |
           echo "LlamaEdge-Nexus logs:"
           cat start-llama-nexus.log
