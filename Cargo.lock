@@ -13,7 +13,7 @@ dependencies = [
  "chat-prompts",
  "clap",
  "config",
- "endpoints 0.27.0",
+ "endpoints 0.28.0",
  "futures-util",
  "gaia-elastic-mcp-common",
  "gaia-kwsearch-common",
@@ -454,13 +454,13 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chat-prompts"
-version = "0.30.1"
+version = "0.30.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7d82680387a67489134d841be17e2327ae6bf5f88de6cbad22a2e0931d729c7f"
+checksum = "b687e48697bfeada75f46bc0d64ebe08197ba239ec760197c6defcffd76ef8fd"
 dependencies = [
  "base64 0.22.1",
  "clap",
- "endpoints 0.27.0",
+ "endpoints 0.28.0",
  "enum_dispatch",
  "image",
  "serde",
@@ -784,8 +784,9 @@ dependencies = [
 
 [[package]]
 name = "endpoints"
-version = "0.26.0"
-source = "git+https://github.com/LlamaEdge/LlamaEdge.git?branch=feat-kw-fields#d58a7be135632d6605a4465b0be2a4caca23827c"
+version = "0.27.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d5da4b845b819cb04dcc6f3fadcf1f9ecb98f1d5355b9b5773f49aee41b7eb4e"
 dependencies = [
  "indexmap",
  "serde",
@@ -795,9 +796,9 @@ dependencies = [
 
 [[package]]
 name = "endpoints"
-version = "0.27.0"
+version = "0.28.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d5da4b845b819cb04dcc6f3fadcf1f9ecb98f1d5355b9b5773f49aee41b7eb4e"
+checksum = "d9923f4039fd33480d1d7ba1ba194b785b89faec4c58ea31ec6044cb00fc86fa"
 dependencies = [
  "indexmap",
  "serde",
@@ -1021,8 +1022,8 @@ dependencies = [
 
 [[package]]
 name = "gaia-elastic-mcp-common"
-version = "0.1.1"
-source = "git+https://github.com/apepkuss/mcp-examples.git?branch=feat-elastic#066b4b591d09bdf451cf1a13411518cf16ca08e1"
+version = "0.1.2"
+source = "git+https://github.com/apepkuss/mcp-examples.git?branch=main#864966f0d205c23957beb324d9ec4847c9455935"
 dependencies = [
  "rmcp",
  "serde",
@@ -1032,10 +1033,10 @@ dependencies = [
 [[package]]
 name = "gaia-kwsearch-common"
 version = "0.1.0"
-source = "git+https://github.com/apepkuss/mcp-examples.git?branch=feat-elastic#066b4b591d09bdf451cf1a13411518cf16ca08e1"
+source = "git+https://github.com/apepkuss/mcp-examples.git?branch=main#864966f0d205c23957beb324d9ec4847c9455935"
 dependencies = [
  "anyhow",
- "endpoints 0.26.0",
+ "endpoints 0.27.0",
  "futures",
  "hyper 1.6.0",
  "hyper-util",
@@ -1055,7 +1056,7 @@ dependencies = [
 [[package]]
 name = "gaia-qdrant-common"
 version = "0.1.0"
-source = "git+https://github.com/apepkuss/mcp-examples.git?branch=feat-elastic#066b4b591d09bdf451cf1a13411518cf16ca08e1"
+source = "git+https://github.com/apepkuss/mcp-examples.git?branch=main#864966f0d205c23957beb324d9ec4847c9455935"
 dependencies = [
  "rmcp",
  "serde",
