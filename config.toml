@@ -88,3 +88,9 @@ enable    = false
 # transport = "sse"
 # url       = "http://127.0.0.1:8006/sse"
 # enable    = false
+
+# [mcp.server.keyword_search]
+# name      = "gaia-tidb-search"
+# transport = "sse"
+# url       = "http://127.0.0.1:8007/sse"
+# enable    = false

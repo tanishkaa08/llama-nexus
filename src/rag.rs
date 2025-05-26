@@ -20,6 +20,7 @@ use gaia_kwsearch_common::{KwSearchHit, SearchDocumentsResponse};
 use gaia_qdrant_common::{
     CreateCollectionResponse, Point, ScoredPoint, SearchPointsResponse, UpsertPointsResponse,
 };
+use gaia_tidb_mcp_common::TidbSearchResponse;
 use rmcp::model::CallToolRequestParam;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -80,7 +81,7 @@ pub async fn chat(
     );
 
     // * perform keyword search
-    let mut kw_hits = Vec::new();
+    let mut kw_hits: Vec<KwSearchHit> = Vec::new();
     match chat_request.messages.last() {
         Some(ChatCompletionRequestMessage::User(user_message)) => {
             match user_message.content() {
@@ -298,33 +299,31 @@ pub async fn chat(
                                     // parse tool result
                                     let search_response = SearchResponse::from(tool_result);
 
-                                    {
-                                        if !search_response.hits.hits.is_empty() {
-                                            for hit in search_response.hits.hits.iter() {
-                                                let score = hit.score;
-                                                let title = hit
-                                                    .source
-                                                    .get("title")
-                                                    .unwrap()
-                                                    .as_str()
-                                                    .unwrap()
-                                                    .to_string();
-                                                let content = hit
-                                                    .source
-                                                    .get("content")
-                                                    .unwrap()
-                                                    .as_str()
-                                                    .unwrap()
-                                                    .to_string();
+                                    if !search_response.hits.hits.is_empty() {
+                                        for hit in search_response.hits.hits.iter() {
+                                            let score = hit.score;
+                                            let title = hit
+                                                .source
+                                                .get("title")
+                                                .unwrap()
+                                                .as_str()
+                                                .unwrap()
+                                                .to_string();
+                                            let content = hit
+                                                .source
+                                                .get("content")
+                                                .unwrap()
+                                                .as_str()
+                                                .unwrap()
+                                                .to_string();
 
-                                                let kw_hit = KwSearchHit {
-                                                    title,
-                                                    content,
-                                                    score,
-                                                };
+                                            let kw_hit = KwSearchHit {
+                                                title,
+                                                content,
+                                                score,
+                                            };
 
-                                                kw_hits.push(kw_hit);
-                                            }
+                                            kw_hits.push(kw_hit);
                                         }
                                     }
 
@@ -333,6 +332,172 @@ pub async fn chat(
                                         kw_hits.len(),
                                         request_id
                                     );
+                                }
+                                "gaia-tidb-search" => {
+                                    let tidb_host = match chat_request.tidb_search_host.as_ref() {
+                                        Some(host) if !host.is_empty() => host.to_string(),
+                                        _ => {
+                                            let err_msg = "Not found `tidb_search_host` field in the request. `tidb_search_host` field is required for tidb-search-server. ";
+
+                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                                            return Err(ServerError::BadRequest(
+                                                err_msg.to_string(),
+                                            ));
+                                        }
+                                    };
+
+                                    let tidb_port = match chat_request.tidb_search_port {
+                                        Some(port) => port,
+                                        None => {
+                                            let err_msg = "Not found `tidb_search_port` field in the request. `tidb_search_port` field is required for tidb-search-server. ";
+
+                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                                            return Err(ServerError::BadRequest(
+                                                err_msg.to_string(),
+                                            ));
+                                        }
+                                    };
+
+                                    let tidb_username = match chat_request
+                                        .tidb_search_username
+                                        .as_ref()
+                                    {
+                                        Some(username) if !username.is_empty() => {
+                                            username.to_string()
+                                        }
+                                        _ => {
+                                            let err_msg = "Not found `tidb_search_username` field in the request. `tidb_search_username` field is required for tidb-search-server. ";
+
+                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                                            return Err(ServerError::BadRequest(
+                                                err_msg.to_string(),
+                                            ));
+                                        }
+                                    };
+
+                                    let tidb_password = match chat_request
+                                        .tidb_search_password
+                                        .as_ref()
+                                    {
+                                        Some(password) if !password.is_empty() => {
+                                            password.to_string()
+                                        }
+                                        _ => {
+                                            let err_msg = "Not found `tidb_search_password` field in the request. `tidb_search_password` field is required for tidb-search-server. ";
+
+                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                                            return Err(ServerError::BadRequest(
+                                                err_msg.to_string(),
+                                            ));
+                                        }
+                                    };
+
+                                    let tidb_database = match chat_request
+                                        .tidb_search_database
+                                        .as_ref()
+                                    {
+                                        Some(database) if !database.is_empty() => {
+                                            database.to_string()
+                                        }
+                                        _ => {
+                                            let err_msg = "Not found `tidb_search_database` field in the request. `tidb_search_database` field is required for tidb-search-server. ";
+
+                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                                            return Err(ServerError::BadRequest(
+                                                err_msg.to_string(),
+                                            ));
+                                        }
+                                    };
+
+                                    let tidb_table_name = match chat_request
+                                        .tidb_search_table
+                                        .as_ref()
+                                    {
+                                        Some(table_name) if !table_name.is_empty() => {
+                                            table_name.to_string()
+                                        }
+                                        _ => {
+                                            let err_msg = "Not found `tidb_search_table` field in the request. `tidb_search_table` field is required for tidb-search-server. ";
+
+                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                                            return Err(ServerError::BadRequest(
+                                                err_msg.to_string(),
+                                            ));
+                                        }
+                                    };
+
+                                    // request param
+                                    let request_param = CallToolRequestParam {
+                                        name: "search".into(),
+                                        arguments: Some(serde_json::Map::from_iter([
+                                            (
+                                                "host".to_string(),
+                                                serde_json::Value::String(tidb_host),
+                                            ),
+                                            (
+                                                "port".to_string(),
+                                                serde_json::Value::from(tidb_port),
+                                            ),
+                                            (
+                                                "username".to_string(),
+                                                serde_json::Value::from(tidb_username),
+                                            ),
+                                            (
+                                                "password".to_string(),
+                                                serde_json::Value::from(tidb_password),
+                                            ),
+                                            (
+                                                "database".to_string(),
+                                                serde_json::Value::from(tidb_database),
+                                            ),
+                                            (
+                                                "table_name".to_string(),
+                                                serde_json::Value::from(tidb_table_name),
+                                            ),
+                                            (
+                                                "limit".to_string(),
+                                                serde_json::Value::from(filter_limit),
+                                            ),
+                                            (
+                                                "query".to_string(),
+                                                serde_json::Value::from(text.to_string()),
+                                            ),
+                                        ])),
+                                    };
+
+                                    let tool_result = mcp_client
+                                        .read()
+                                        .await
+                                        .raw
+                                        .peer()
+                                        .call_tool(request_param)
+                                        .await
+                                        .map_err(|e| {
+                                            let err_msg = format!("Failed to call the tool: {e}");
+                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                                            ServerError::Operation(err_msg)
+                                        })?;
+
+                                    // parse tool result
+                                    let search_response = TidbSearchResponse::from(tool_result);
+
+                                    if !search_response.hits.is_empty() {
+                                        for hit in search_response.hits.iter() {
+                                            let kw_hit = KwSearchHit {
+                                                title: hit.title.clone(),
+                                                content: hit.content.clone(),
+                                                score: 0.0,
+                                            };
+
+                                            kw_hits.push(kw_hit);
+                                        }
+                                    }
                                 }
                                 _ => {
                                     let err_msg = format!(
