@@ -13,7 +13,7 @@ use chat_prompts::{error as ChatPromptsError, MergeRagContext, MergeRagContextPo
 use endpoints::{
     chat::{ChatCompletionRequest, ChatCompletionRequestMessage, ChatCompletionUserMessageContent},
     embeddings::{EmbeddingObject, EmbeddingRequest, EmbeddingsResponse, InputText},
-    rag::{RagScoredPoint, RetrieveObject},
+    rag::vector_search::{DataFrom, RagScoredPoint, RetrieveObject},
 };
 use gaia_elastic_mcp_common::SearchResponse;
 use gaia_kwsearch_common::{KwSearchHit, SearchDocumentsResponse};
@@ -32,7 +32,9 @@ use std::{
 use text_splitter::{MarkdownSplitter, TextSplitter};
 use tokio_util::sync::CancellationToken;
 
-const DEFAULT_WEIGHT_ALPHA: f64 = 0.5;
+const DEFAULT_FILTER_LIMIT: u64 = 10;
+const DEFAULT_FILTER_SCORE_THRESHOLD: f32 = 0.5;
+const DEFAULT_FILTER_WEIGHTED_ALPHA: f64 = 0.5;
 
 pub async fn chat(
     State(state): State<Arc<AppState>>,
@@ -48,240 +50,328 @@ pub async fn chat(
 
     dual_info!("Received a new chat request - request_id: {}", request_id);
 
-    // perform kw-search
+    // * filter parameters
+    let filter_limit = match chat_request.limit {
+        Some(limit) => limit,
+        None => DEFAULT_FILTER_LIMIT,
+    };
+    dual_debug!(
+        "filter_limit: {} - request_id: {}",
+        filter_limit,
+        request_id
+    );
+    let filter_score_threshold = match chat_request.score_threshold {
+        Some(score_threshold) => score_threshold,
+        None => DEFAULT_FILTER_SCORE_THRESHOLD,
+    };
+    dual_debug!(
+        "filter_score_threshold: {} - request_id: {}",
+        filter_score_threshold,
+        request_id
+    );
+    let weighted_alpha = match chat_request.weighted_alpha {
+        Some(weighted_alpha) => weighted_alpha,
+        None => DEFAULT_FILTER_WEIGHTED_ALPHA,
+    };
+    dual_debug!(
+        "weighted_alpha: {} - request_id: {}",
+        weighted_alpha,
+        request_id
+    );
+
+    // * perform keyword search
     let mut kw_hits = Vec::new();
-    if let Some(kw_search_url) = &chat_request.kw_search_url {
-        if !kw_search_url.is_empty() {
-            let kw_search_url = kw_search_url.trim_end_matches('/');
-            dual_info!(
-                "URL to the kw-search mcp-server: {} - request_id: {}",
-                &kw_search_url,
-                request_id
-            );
+    match chat_request.messages.last() {
+        Some(ChatCompletionRequestMessage::User(user_message)) => {
+            match user_message.content() {
+                ChatCompletionUserMessageContent::Text(text) => {
+                    match MCP_KEYWORD_SEARCH_CLIENT.get() {
+                        Some(mcp_client) => {
+                            let mcp_name = mcp_client.read().await.name.clone();
 
-            if let Some(index_name) = &chat_request.kw_search_index {
-                if !index_name.is_empty() {
-                    if let Some(ChatCompletionRequestMessage::User(user_message)) =
-                        chat_request.messages.last()
-                    {
-                        if let ChatCompletionUserMessageContent::Text(text) = user_message.content()
-                        {
-                            match MCP_KEYWORD_SEARCH_CLIENT.get() {
-                                Some(mcp_client) => {
-                                    let mcp_name = mcp_client.read().await.name.clone();
-
-                                    match mcp_name.as_str() {
-                                        "gaia-keyword-search" => {
-                                            // request param
-                                            let request_param = CallToolRequestParam {
-                                                name: "search_documents".into(),
-                                                arguments: Some(serde_json::Map::from_iter([
-                                                    (
-                                                        "base_url".to_string(),
-                                                        Value::from(kw_search_url),
-                                                    ),
-                                                    (
-                                                        "index_name".to_string(),
-                                                        Value::from(index_name.to_string()),
-                                                    ),
-                                                    (
-                                                        "query".to_string(),
-                                                        Value::from(text.to_string()),
-                                                    ),
-                                                    (
-                                                        "limit".to_string(),
-                                                        Value::from(
-                                                            chat_request.kw_search_limit.unwrap(),
-                                                        ),
-                                                    ),
-                                                ])),
-                                            };
-                                            dual_debug!(
-                                                "request_param: {:#?} - request_id: {}",
-                                                &request_param,
-                                                request_id
-                                            );
-
-                                            // call the search_documents tool
-                                            let tool_result = mcp_client
-                                                .read()
-                                                .await
-                                                .raw
-                                                .peer()
-                                                .call_tool(request_param)
-                                                .await
-                                                .map_err(|e| {
-                                                    let err_msg =
-                                                        format!("Failed to call the tool: {e}");
-                                                    dual_error!(
-                                                        "{} - request_id: {}",
-                                                        err_msg,
-                                                        request_id
-                                                    );
-                                                    ServerError::Operation(err_msg)
-                                                })?;
-
-                                            let search_response =
-                                                SearchDocumentsResponse::from(tool_result);
-                                            kw_hits = search_response.hits;
+                            match mcp_name.as_str() {
+                                "gaia-keyword-search" => {
+                                    let kw_search_url = match chat_request.kw_search_url.as_ref() {
+                                        Some(url) if !url.is_empty() => {
+                                            let url = url.trim_end_matches('/');
 
                                             dual_info!(
-                                                "Got {} kw-search hits - request_id: {}",
-                                                kw_hits.len(),
-                                                request_id
-                                            );
-                                        }
-                                        "gaia-elastic-search" => {
-                                            dual_info!(
-                                                "elastic search url: {} - request_id: {}",
-                                                &kw_search_url,
-                                                request_id
-                                            );
+                                                    "URL to the kw-search mcp-server: {} - request_id: {}",
+                                                    url,
+                                                    request_id
+                                                );
 
-                                            // parse api key
-                                            let api_key = match &chat_request.kw_api_key {
-                                                Some(api_key) => api_key.clone(),
-                                                None => {
-                                                    let err_msg =
-                                                        "No elastic search api key provided";
-                                                    dual_error!(
-                                                        "{} - request_id: {}",
-                                                        err_msg,
-                                                        request_id
-                                                    );
-                                                    return Err(ServerError::BadRequest(
-                                                        err_msg.to_string(),
-                                                    ));
-                                                }
-                                            };
-
-                                            // parse fields to search
-                                            let fields: Vec<Value> = match &chat_request
-                                                .kw_search_fields
-                                            {
-                                                Some(fields) => fields
-                                                    .iter()
-                                                    .map(|f| serde_json::Value::String(f.clone()))
-                                                    .collect(),
-                                                None => {
-                                                    let err_msg =
-                                                        "No fields provided for elastic search";
-                                                    dual_error!(
-                                                        "{} - request_id: {}",
-                                                        err_msg,
-                                                        request_id
-                                                    );
-                                                    return Err(ServerError::BadRequest(
-                                                        err_msg.to_string(),
-                                                    ));
-                                                }
-                                            };
-
-                                            // request param
-                                            let request_param = CallToolRequestParam {
-                                                name: "search".into(),
-                                                arguments: Some(serde_json::Map::from_iter([
-                                                    (
-                                                        "base_url".to_string(),
-                                                        Value::from(kw_search_url),
-                                                    ),
-                                                    (
-                                                        "index".to_string(),
-                                                        Value::from(index_name.to_string()),
-                                                    ),
-                                                    (
-                                                        "query".to_string(),
-                                                        Value::from(text.to_string()),
-                                                    ),
-                                                    ("fields".to_string(), Value::Array(fields)),
-                                                    (
-                                                        "api_key".to_string(),
-                                                        serde_json::Value::String(api_key),
-                                                    ),
-                                                ])),
-                                            };
-
-                                            // call tool
-                                            let tool_result = mcp_client
-                                                .read()
-                                                .await
-                                                .raw
-                                                .peer()
-                                                .call_tool(request_param)
-                                                .await
-                                                .map_err(|e| {
-                                                    let err_msg =
-                                                        format!("Failed to call the tool: {e}");
-                                                    dual_error!(
-                                                        "{} - request_id: {}",
-                                                        err_msg,
-                                                        request_id
-                                                    );
-                                                    ServerError::Operation(err_msg)
-                                                })?;
-
-                                            // parse tool result
-                                            let search_response = SearchResponse::from(tool_result);
-
-                                            {
-                                                if !search_response.hits.hits.is_empty() {
-                                                    for hit in search_response.hits.hits.iter() {
-                                                        let score = hit.score;
-                                                        let title = hit
-                                                            .source
-                                                            .get("title")
-                                                            .unwrap()
-                                                            .as_str()
-                                                            .unwrap()
-                                                            .to_string();
-                                                        let content = hit
-                                                            .source
-                                                            .get("content")
-                                                            .unwrap()
-                                                            .as_str()
-                                                            .unwrap()
-                                                            .to_string();
-
-                                                        let kw_hit = KwSearchHit {
-                                                            title,
-                                                            content,
-                                                            score,
-                                                        };
-
-                                                        kw_hits.push(kw_hit);
-                                                    }
-                                                }
-                                            }
-
-                                            dual_info!(
-                                                "Got {} kw-search hits - request_id: {}",
-                                                kw_hits.len(),
-                                                request_id
-                                            );
+                                            url.to_string()
                                         }
                                         _ => {
-                                            let err_msg = format!(
-                                                "Unsupported keyword search mcp server: {mcp_name}"
-                                            );
+                                            let err_msg = "Not found `kw_search_url` field in the request. `kw_search_url` field is required for kw-search-server. ";
+
                                             dual_error!("{} - request_id: {}", err_msg, request_id);
-                                            return Err(ServerError::Operation(err_msg));
+
+                                            return Err(ServerError::BadRequest(
+                                                err_msg.to_string(),
+                                            ));
+                                        }
+                                    };
+
+                                    let kw_search_index = match chat_request
+                                        .kw_search_index
+                                        .as_ref()
+                                    {
+                                        Some(index) if !index.is_empty() => index.to_string(),
+                                        _ => {
+                                            let err_msg = "Not found `kw_search_index` field in the request. `kw_search_index` field is required for kw-search-server. ";
+
+                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                                            return Err(ServerError::BadRequest(
+                                                err_msg.to_string(),
+                                            ));
+                                        }
+                                    };
+
+                                    // request param
+                                    let request_param = CallToolRequestParam {
+                                        name: "search_documents".into(),
+                                        arguments: Some(serde_json::Map::from_iter([
+                                            ("base_url".to_string(), Value::from(kw_search_url)),
+                                            (
+                                                "index_name".to_string(),
+                                                Value::from(kw_search_index),
+                                            ),
+                                            ("query".to_string(), Value::from(text.to_string())),
+                                            ("limit".to_string(), Value::from(filter_limit)),
+                                        ])),
+                                    };
+                                    dual_debug!(
+                                        "request_param: {:#?} - request_id: {}",
+                                        &request_param,
+                                        request_id
+                                    );
+
+                                    // call the search_documents tool
+                                    let tool_result = mcp_client
+                                        .read()
+                                        .await
+                                        .raw
+                                        .peer()
+                                        .call_tool(request_param)
+                                        .await
+                                        .map_err(|e| {
+                                            let err_msg = format!("Failed to call the tool: {e}");
+                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                                            ServerError::Operation(err_msg)
+                                        })?;
+
+                                    let search_response =
+                                        SearchDocumentsResponse::from(tool_result);
+                                    kw_hits = search_response.hits;
+
+                                    dual_info!(
+                                        "Got {} kw-search hits - request_id: {}",
+                                        kw_hits.len(),
+                                        request_id
+                                    );
+                                }
+                                "gaia-elastic-search" => {
+                                    let es_search_url = match chat_request.es_search_url.as_ref() {
+                                        Some(url) if !url.is_empty() => {
+                                            let url = url.trim_end_matches('/');
+
+                                            dual_info!(
+                                                    "URL to the es-search mcp-server: {} - request_id: {}",
+                                                    url,
+                                                    request_id
+                                                );
+
+                                            url.to_string()
+                                        }
+                                        _ => {
+                                            let err_msg = "Not found `es_search_url` field in the request. `es_search_url` field is required for Elasticsearch server. ";
+
+                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                                            return Err(ServerError::BadRequest(
+                                                err_msg.to_string(),
+                                            ));
+                                        }
+                                    };
+
+                                    let es_search_index = match chat_request
+                                        .es_search_index
+                                        .as_ref()
+                                    {
+                                        Some(index) if !index.is_empty() => {
+                                            let index = index.clone();
+
+                                            dual_info!(
+                                                "Index name: {} - request_id: {}",
+                                                &index,
+                                                request_id
+                                            );
+
+                                            index
+                                        }
+                                        _ => {
+                                            let err_msg = "Not found `es_search_index` field in the request. `es_search_index` field is required for Elasticsearch server. ";
+
+                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                                            return Err(ServerError::BadRequest(
+                                                err_msg.to_string(),
+                                            ));
+                                        }
+                                    };
+
+                                    // parse api key
+                                    let api_key = match &chat_request.es_api_key {
+                                        Some(api_key) => api_key.clone(),
+                                        None => {
+                                            let err_msg = "No elastic search api key provided";
+                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                                            return Err(ServerError::BadRequest(
+                                                err_msg.to_string(),
+                                            ));
+                                        }
+                                    };
+
+                                    // parse fields to search
+                                    let es_search_fields: Vec<Value> = match chat_request
+                                        .es_search_fields
+                                        .as_ref()
+                                    {
+                                        Some(fields) if !fields.is_empty() => {
+                                            let fields = fields
+                                                .iter()
+                                                .map(|f| serde_json::Value::String(f.clone()))
+                                                .collect();
+
+                                            dual_info!(
+                                                "Fields to search: {:?} - request_id: {}",
+                                                &fields,
+                                                request_id
+                                            );
+
+                                            fields
+                                        }
+                                        _ => {
+                                            let err_msg = "Not found `es_search_fields` field in the request. `es_search_fields` field is required for Elasticsearch server. ";
+
+                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                                            return Err(ServerError::BadRequest(
+                                                err_msg.to_string(),
+                                            ));
+                                        }
+                                    };
+
+                                    // request param
+                                    let request_param = CallToolRequestParam {
+                                        name: "search".into(),
+                                        arguments: Some(serde_json::Map::from_iter([
+                                            ("base_url".to_string(), Value::from(es_search_url)),
+                                            ("index".to_string(), Value::from(es_search_index)),
+                                            ("query".to_string(), Value::from(text.to_string())),
+                                            ("fields".to_string(), Value::Array(es_search_fields)),
+                                            ("size".to_string(), Value::from(filter_limit)),
+                                            (
+                                                "api_key".to_string(),
+                                                serde_json::Value::String(api_key),
+                                            ),
+                                        ])),
+                                    };
+
+                                    // call tool
+                                    let tool_result = mcp_client
+                                        .read()
+                                        .await
+                                        .raw
+                                        .peer()
+                                        .call_tool(request_param)
+                                        .await
+                                        .map_err(|e| {
+                                            let err_msg = format!("Failed to call the tool: {e}");
+                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                                            ServerError::Operation(err_msg)
+                                        })?;
+
+                                    // parse tool result
+                                    let search_response = SearchResponse::from(tool_result);
+
+                                    {
+                                        if !search_response.hits.hits.is_empty() {
+                                            for hit in search_response.hits.hits.iter() {
+                                                let score = hit.score;
+                                                let title = hit
+                                                    .source
+                                                    .get("title")
+                                                    .unwrap()
+                                                    .as_str()
+                                                    .unwrap()
+                                                    .to_string();
+                                                let content = hit
+                                                    .source
+                                                    .get("content")
+                                                    .unwrap()
+                                                    .as_str()
+                                                    .unwrap()
+                                                    .to_string();
+
+                                                let kw_hit = KwSearchHit {
+                                                    title,
+                                                    content,
+                                                    score,
+                                                };
+
+                                                kw_hits.push(kw_hit);
+                                            }
                                         }
                                     }
+
+                                    dual_info!(
+                                        "Got {} kw-search hits - request_id: {}",
+                                        kw_hits.len(),
+                                        request_id
+                                    );
                                 }
-                                None => {
-                                    let warn_msg = "No keyword search mcp client available";
-                                    dual_warn!("{} - request_id: {}", warn_msg, request_id);
+                                _ => {
+                                    let err_msg = format!(
+                                        "Unsupported keyword search mcp server: {mcp_name}"
+                                    );
+                                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                                    return Err(ServerError::Operation(err_msg));
                                 }
                             }
                         }
+                        None => {
+                            let warn_msg = "No keyword search mcp server connected";
+                            dual_warn!("{} - request_id: {}", warn_msg, request_id);
+                        }
                     }
                 }
+                _ => {
+                    let err_msg = "The last message in the request is not a text-only user message";
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    return Err(ServerError::BadRequest(err_msg.to_string()));
+                }
             }
+        }
+        _ => {
+            let err_msg = "The last message in the request is not a user message";
+            dual_error!("{} - request_id: {}", err_msg, request_id);
+            return Err(ServerError::BadRequest(err_msg.to_string()));
         }
     }
 
     // qdrant config
-    let qdrant_config_vec = match get_qdrant_configs(&chat_request, &request_id).await {
+    let qdrant_config_vec = match get_qdrant_configs(
+        &chat_request,
+        filter_limit,
+        filter_score_threshold,
+        &request_id,
+    )
+    .await
+    {
         Ok(qdrant_config_vec) => qdrant_config_vec,
         Err(e) => {
             let err_msg = format!("Failed to get the VectorDB config: {e}");
@@ -294,7 +384,7 @@ pub async fn chat(
         }
     };
 
-    // retrieve context
+    // * perform vector search
     let mut retrieve_object_vec = retrieve_context_with_multiple_qdrant_configs(
         State(state.clone()),
         Extension(cancel_token.clone()),
@@ -312,40 +402,12 @@ pub async fn chat(
         serde_json::to_string_pretty(&retrieve_object_vec).unwrap()
     );
 
-    // fuse kw-search and embedding-search results
-    if !kw_hits.is_empty()
-        && !retrieve_object_vec.is_empty()
-        && retrieve_object_vec[0].points.is_some()
-    {
-        let points = retrieve_object_vec[0].points.as_ref().unwrap().clone();
-        if !points.is_empty() {
-            let limit = retrieve_object_vec[0].limit;
-            let score_threshold = retrieve_object_vec[0].score_threshold;
-
-            // create a hash map from retrieve_object_vec: key is the hash value of the source of the point, value is the point
-            let mut em_hits_map = HashMap::new();
-            let mut em_scores = HashMap::new();
-
-            for point in points {
-                let hash_value = calculate_hash(&point.source);
-                em_scores.insert(hash_value, point.score);
-                em_hits_map.insert(hash_value, point);
-            }
-
-            dual_info!(
-                "em_hits_map: {:#?} - request_id: {}",
-                &em_hits_map,
-                request_id
-            );
-
-            // normalize the em_scores
-            let em_scores = normalize(&em_scores);
-
-            dual_info!("em_scores: {:#?} - request_id: {}", &em_scores, request_id);
-
-            // create a hash map from kw_hits: key is the hash value of the content of the hit, value is the hit
-            let mut kw_hits_map = HashMap::new();
-            let mut kw_scores = HashMap::new();
+    // * rerank
+    retrieve_object_vec = {
+        // create a hash map from kw_hits: key is the hash value of the content of the hit, value is the hit
+        let mut kw_hits_map = HashMap::new();
+        let mut kw_scores = HashMap::new();
+        if !kw_hits.is_empty() {
             for hit in kw_hits {
                 let hash_value = calculate_hash(&hit.content);
                 kw_scores.insert(hash_value, hit.score);
@@ -362,117 +424,155 @@ pub async fn chat(
             let kw_scores = normalize(&kw_scores);
 
             dual_info!("kw_scores: {:#?} - request_id: {}", &kw_scores, request_id);
+        }
 
-            // Set weight alpha
-            let alpha = chat_request.weighted_alpha.unwrap_or(DEFAULT_WEIGHT_ALPHA);
-            dual_debug!("alpha: {} - request_id: {}", alpha, request_id);
+        // create a hash map from retrieve_object_vec: key is the hash value of the source of the point, value is the point
+        let mut em_hits_map = HashMap::new();
+        let mut em_scores = HashMap::new();
+        if !retrieve_object_vec.is_empty() {
+            let points = retrieve_object_vec[0].points.as_ref().unwrap().clone();
+            if !points.is_empty() {
+                for point in points {
+                    let hash_value = calculate_hash(&point.source);
+                    em_scores.insert(hash_value, point.score);
+                    em_hits_map.insert(hash_value, point);
+                }
 
-            // fuse the two hash maps
-            let final_scores = weighted_fusion(kw_scores, em_scores, alpha);
+                dual_info!(
+                    "em_hits_map: {:#?} - request_id: {}",
+                    &em_hits_map,
+                    request_id
+                );
 
-            dual_info!(
-                "final_scores: {:#?} - request_id: {}",
-                &final_scores,
-                request_id
-            );
+                // normalize the em_scores
+                let em_scores = normalize(&em_scores);
 
-            // Sort by score from high to low
-            let mut final_ranking: Vec<(u64, f64)> = final_scores.into_iter().collect();
-            final_ranking.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+                dual_info!("em_scores: {:#?} - request_id: {}", &em_scores, request_id);
+            }
+        }
 
-            // Print final ranking
-            dual_info!(
-                "final_ranking: {:#?} - request_id: {}",
-                &final_ranking,
-                request_id
-            );
+        // fuse the two hash maps
+        let fused_scores = weighted_fusion(kw_scores, em_scores, weighted_alpha);
 
-            let mut retrieved = Vec::new();
-            for (hash_value, score) in final_ranking {
-                let mut doc = RagScoredPoint {
-                    source: String::new(),
-                    score,
-                };
-                if kw_hits_map.contains_key(&hash_value) {
-                    doc.source = kw_hits_map[&hash_value].content.clone();
-                    retrieved.push(doc);
-                } else if em_hits_map.contains_key(&hash_value) {
-                    doc.source = em_hits_map[&hash_value].source.clone();
-                    retrieved.push(doc);
+        dual_info!(
+            "final_scores: {:#?} - request_id: {}",
+            &fused_scores,
+            request_id
+        );
+
+        // Sort by score from high to low
+        let mut final_ranking: Vec<(u64, f64)> = fused_scores.into_iter().collect();
+        final_ranking.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+
+        // Print final ranking
+        dual_info!(
+            "final_ranking: {:#?} - request_id: {}",
+            &final_ranking,
+            request_id
+        );
+
+        let mut retrieved = Vec::new();
+        for (hash_value, score) in final_ranking.iter() {
+            if kw_hits_map.contains_key(hash_value) {
+                retrieved.push(RagScoredPoint {
+                    source: kw_hits_map[hash_value].content.clone(),
+                    score: *score,
+                    from: DataFrom::KeywordSearch,
+                });
+            } else if em_hits_map.contains_key(hash_value) {
+                retrieved.push(RagScoredPoint {
+                    source: em_hits_map[hash_value].source.clone(),
+                    score: *score,
+                    from: DataFrom::VectorSearch,
+                });
+            }
+        }
+
+        // filter the retrieved points by the score threshold
+        let mut retrieved = Vec::new();
+        for (hash_value, score) in final_ranking.iter() {
+            if *score >= filter_score_threshold as f64 {
+                if kw_hits_map.contains_key(hash_value) {
+                    retrieved.push(RagScoredPoint {
+                        source: kw_hits_map[hash_value].content.clone(),
+                        score: *score,
+                        from: DataFrom::KeywordSearch,
+                    });
+                } else if em_hits_map.contains_key(hash_value) {
+                    retrieved.push(RagScoredPoint {
+                        source: em_hits_map[hash_value].source.clone(),
+                        score: *score,
+                        from: DataFrom::VectorSearch,
+                    });
                 }
             }
-
-            // // filter the retrieved points by the score threshold
-            // let mut retrieved = Vec::new();
-            // for (hash_value, score) in final_ranking {
-            //     if score >= score_threshold {
-            //         let mut doc = RagScoredPoint {
-            //             source: String::new(),
-            //             score,
-            //         };
-            //         if kw_hits_map.contains_key(&hash_value) {
-            //             doc.source = kw_hits_map[&hash_value].content.clone();
-            //             retrieved.push(doc);
-            //         } else if em_hits_map.contains_key(&hash_value) {
-            //             doc.source = em_hits_map[&hash_value].source.clone();
-            //             retrieved.push(doc);
-            //         }
-            //     }
-            // }
-
-            // // truncate the retrieved points to the limit
-            // if retrieved.len() > limit {
-            //     retrieved.truncate(limit);
-            // }
-
-            dual_info!("retrieved: {:#?} - request_id: {}", &retrieved, request_id);
-
-            let retrieve_object = RetrieveObject {
-                limit,
-                score_threshold,
-                points: Some(retrieved),
-            };
-
-            retrieve_object_vec = vec![retrieve_object];
         }
-    }
 
-    // extract the context from retrieved objects
+        // truncate the retrieved points to the limit
+        if retrieved.len() > filter_limit as usize {
+            retrieved.truncate(filter_limit as usize);
+            dual_info!(
+                "Keep {} retrieved points - request_id: {}",
+                filter_limit,
+                request_id
+            );
+        } else {
+            dual_info!(
+                "Keep {} retrieved points - request_id: {}",
+                retrieved.len(),
+                request_id
+            );
+        }
+
+        dual_info!("retrieved: {:#?} - request_id: {}", &retrieved, request_id);
+
+        let retrieve_object = RetrieveObject {
+            limit: retrieved.len(),
+            score_threshold: filter_score_threshold,
+            points: Some(retrieved),
+        };
+
+        vec![retrieve_object]
+    };
+
+    // * generate context
     let mut context = String::new();
-    for (idx, retrieve_object) in retrieve_object_vec.iter().enumerate() {
-        match retrieve_object.points.as_ref() {
-            Some(scored_points) => {
-                match scored_points.is_empty() {
-                    false => {
-                        for (idx, point) in scored_points.iter().enumerate() {
-                            // log
-                            dual_debug!(
-                                "request_id: {} - Point-{}, score: {}, source: {}",
-                                request_id,
-                                idx,
-                                point.score,
-                                &point.source
-                            );
+    if !retrieve_object_vec.is_empty() {
+        for (idx, retrieve_object) in retrieve_object_vec.iter().enumerate() {
+            match retrieve_object.points.as_ref() {
+                Some(scored_points) => {
+                    match scored_points.is_empty() {
+                        false => {
+                            for (idx, point) in scored_points.iter().enumerate() {
+                                // log
+                                dual_debug!(
+                                    "request_id: {} - Point-{}, score: {}, source: {}",
+                                    request_id,
+                                    idx,
+                                    point.score,
+                                    &point.source
+                                );
 
-                            context.push_str(&point.source);
-                            context.push_str("\n\n");
+                                context.push_str(&point.source);
+                                context.push_str("\n\n");
+                            }
+                        }
+                        true => {
+                            // log
+                            dual_warn!("No point retrieved from the collection `{}` (score < threshold {}) - request_id: {}", qdrant_config_vec[idx].collection_name, qdrant_config_vec[idx].score_threshold, request_id);
                         }
                     }
-                    true => {
-                        // log
-                        dual_warn!("No point retrieved from the collection `{}` (score < threshold {}) - request_id: {}", qdrant_config_vec[idx].collection_name, qdrant_config_vec[idx].score_threshold, request_id);
-                    }
+                }
+                None => {
+                    // log
+                    dual_warn!("No point retrieved from the collection `{}` (score < threshold {}) - request_id: {}", qdrant_config_vec[idx].collection_name, qdrant_config_vec[idx].score_threshold, request_id);
                 }
             }
-            None => {
-                // log
-                dual_warn!("No point retrieved from the collection `{}` (score < threshold {}) - request_id: {}", qdrant_config_vec[idx].collection_name, qdrant_config_vec[idx].score_threshold, request_id);
-            }
         }
+        dual_debug!("request_id: {} - context:\n{}", request_id, context);
     }
-    dual_debug!("request_id: {} - context:\n{}", request_id, context);
 
-    // merge context into chat request
+    // * merge context into chat request
     if !context.is_empty() {
         if chat_request.messages.is_empty() {
             let err_msg = "Found empty chat messages";
@@ -525,7 +625,7 @@ pub async fn chat(
         }
     }
 
-    // perform chat completion
+    // * perform chat completion
     crate::handlers::chat(
         State(state.clone()),
         Extension(cancel_token.clone()),
@@ -537,6 +637,8 @@ pub async fn chat(
 
 async fn get_qdrant_configs(
     chat_request: &ChatCompletionRequest,
+    limit: u64,
+    score_threshold: f32,
     request_id: impl AsRef<str>,
 ) -> Result<Vec<QdrantConfig>, ServerError> {
     let request_id = request_id.as_ref();
@@ -544,55 +646,36 @@ async fn get_qdrant_configs(
     match (
         chat_request.vdb_server_url.as_deref(),
         chat_request.vdb_collection_name.as_deref(),
-        chat_request.limit.as_deref(),
-        chat_request.score_threshold.as_deref(),
     ) {
-        (Some(url), Some(collection_name), Some(limit), Some(score_threshold)) => {
-            // check if the length of collection name, limit, score_threshold are same
-            if collection_name.len() != limit.len()
-                || collection_name.len() != score_threshold.len()
-            {
-                let err_msg =
-                    "The number of elements of `collection name`, `limit`, `score_threshold` in the request should be same.";
-
-                // log
-                dual_error!("{} - request_id: {}", err_msg, request_id);
-
-                return Err(ServerError::Operation(err_msg.into()));
-            }
-
+        (Some(url), Some(collection_name)) => {
             dual_info!(
                 "Use the VectorDB settings from the request - request_id: {}",
                 request_id
             );
 
             let collection_name_str = collection_name.join(",");
-            let limit_str = limit
-                .iter()
-                .map(|l| l.to_string())
-                .collect::<Vec<String>>()
-                .join(",");
-            let score_threshold_str = score_threshold
-                .iter()
-                .map(|s| s.to_string())
-                .collect::<Vec<String>>()
-                .join(",");
-            dual_info!("qdrant url: {}, collection name: {}, limit: {}, score threshold: {} - request_id: {}", url, collection_name_str, limit_str, score_threshold_str, request_id);
+
+            dual_info!(
+                "qdrant url: {}, collection name: {} - request_id: {}",
+                url,
+                collection_name_str,
+                request_id
+            );
 
             let mut qdrant_config_vec = vec![];
-            for (idx, col_name) in collection_name.iter().enumerate() {
+            for col_name in collection_name.iter() {
                 qdrant_config_vec.push(QdrantConfig {
                     url: url.to_string(),
                     collection_name: col_name.to_string(),
-                    limit: limit[idx],
-                    score_threshold: score_threshold[idx],
+                    limit,
+                    score_threshold,
                 });
             }
 
             Ok(qdrant_config_vec)
         }
         _ => {
-            let err_msg = "The settings for vector search in the request are not correct. The `vdb_server_url`, `vdb_collection_name`, `limit`, `score_threshold` fields in the request should be provided. Also, the number of arguments provided in `vdb_collection_name`, `limit`, `score_threshold` should be same.";
+            let err_msg = "The settings for vector search in the request are not correct. The `vdb_server_url` and `vdb_collection_name` fields in the request should be provided.";
 
             dual_error!("{} - request_id: {}", err_msg, request_id);
 
@@ -831,9 +914,9 @@ async fn retrieve_context_with_single_qdrant_config(
         query_embedding.as_slice(),
         &qdrant_config.url,
         &qdrant_config.collection_name,
+        vdb_api_key,
         qdrant_config.limit as usize,
         Some(qdrant_config.score_threshold),
-        vdb_api_key,
         request_id,
     )
     .await
@@ -866,9 +949,9 @@ async fn retrieve_context(
     query_embedding: &[f32],
     vdb_server_url: impl AsRef<str>,
     vdb_collection_name: impl AsRef<str>,
+    vdb_api_key: Option<String>,
     limit: usize,
     score_threshold: Option<f32>,
-    vdb_api_key: Option<String>,
     request_id: impl AsRef<str>,
 ) -> Result<RetrieveObject, ServerError> {
     let request_id = request_id.as_ref();
@@ -998,6 +1081,7 @@ async fn retrieve_context(
                     points.push(RagScoredPoint {
                         source: source.to_string(),
                         score: point.score,
+                        from: DataFrom::VectorSearch,
                     })
                 }
 
@@ -1473,9 +1557,21 @@ fn calculate_hash(s: &str) -> u64 {
     hasher.finish()
 }
 
+/// Normalize scores with min-max normalization
 fn normalize(scores: &HashMap<u64, f64>) -> HashMap<u64, f64> {
+    if scores.is_empty() {
+        return scores.clone();
+    }
+
     let min_score = scores.values().cloned().fold(f64::INFINITY, f64::min);
     let max_score = scores.values().cloned().fold(f64::NEG_INFINITY, f64::max);
+
+    dual_debug!(
+        "Normalize scores: min_score: {}, max_score: {}",
+        min_score,
+        max_score
+    );
+
     scores
         .iter()
         .map(|(&doc_id, &score)| {
@@ -1484,35 +1580,67 @@ fn normalize(scores: &HashMap<u64, f64>) -> HashMap<u64, f64> {
             } else {
                 0.0
             };
+
+            dual_debug!(
+                "Normalize score: doc_id: {}, score: {}, normalized_score: {}",
+                doc_id,
+                score,
+                normalized_score
+            );
+
             (doc_id, normalized_score)
         })
         .collect()
 }
 
+/// Fuse keyword search and vector search scores with min-max normalization and weighted fusion
 fn weighted_fusion(
-    bm25_scores: HashMap<u64, f64>,
-    embedding_scores: HashMap<u64, f64>,
+    kw_search_scores: HashMap<u64, f64>,
+    vector_search_scores: HashMap<u64, f64>,
     alpha: f64,
 ) -> HashMap<u64, f64> {
-    // Normalize BM25 and Embedding scores
-    let bm25_normalized = normalize(&bm25_scores);
-    let embedding_normalized = normalize(&embedding_scores);
+    match (kw_search_scores.is_empty(), vector_search_scores.is_empty()) {
+        (false, false) => {
+            dual_info!("Fusing keyword search and vector search scores");
 
-    // Get the union of all document IDs
-    let all_doc_ids: HashSet<u64> = bm25_scores
-        .keys()
-        .chain(embedding_scores.keys())
-        .cloned()
-        .collect();
+            // Normalize keyword search scores
+            let kw_normalized = normalize(&kw_search_scores);
+            // Normalize vector search scores
+            let vector_normalized = normalize(&vector_search_scores);
 
-    // Calculate fusion scores
-    all_doc_ids
-        .into_iter()
-        .map(|doc_id| {
-            let bm25_score = *bm25_normalized.get(&doc_id).unwrap_or(&0.0);
-            let embedding_score = *embedding_normalized.get(&doc_id).unwrap_or(&0.0);
-            let final_score = alpha * bm25_score + (1.0 - alpha) * embedding_score;
-            (doc_id, final_score)
-        })
-        .collect()
+            // filter out duplicates
+            let all_doc_ids: HashSet<u64> = kw_search_scores
+                .keys()
+                .chain(vector_search_scores.keys())
+                .cloned()
+                .collect();
+
+            // Calculate fusion scores
+            all_doc_ids
+                .into_iter()
+                .map(|doc_id| {
+                    let k_score = *kw_normalized.get(&doc_id).unwrap_or(&0.0);
+                    let v_score = *vector_normalized.get(&doc_id).unwrap_or(&0.0);
+                    let fused_score = alpha * k_score + (1.0 - alpha) * v_score;
+                    (doc_id, fused_score)
+                })
+                .collect()
+        }
+        (false, true) => {
+            dual_info!("Only keyword search scores are available in the fusion");
+
+            // Normalize keyword search scores
+            normalize(&kw_search_scores)
+        }
+        (true, false) => {
+            dual_info!("Only vector search scores are available in the fusion");
+
+            // Normalize vector search scores
+            normalize(&vector_search_scores)
+        }
+        (true, true) => {
+            // Return empty HashMap
+            HashMap::new()
+        }
+    }
 }
