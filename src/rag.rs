@@ -2,6 +2,7 @@ use crate::{
     dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
     mcp::{MCP_KEYWORD_SEARCH_CLIENT, MCP_VECTOR_SEARCH_CLIENT},
+    server::{RoutingPolicy, ServerKind},
     AppState,
 };
 use axum::{
@@ -11,7 +12,10 @@ use axum::{
 };
 use chat_prompts::{error as ChatPromptsError, MergeRagContext, MergeRagContextPolicy};
 use endpoints::{
-    chat::{ChatCompletionRequest, ChatCompletionRequestMessage, ChatCompletionUserMessageContent},
+    chat::{
+        ChatCompletionObject, ChatCompletionRequest, ChatCompletionRequestBuilder,
+        ChatCompletionRequestMessage, ChatCompletionUserMessageContent,
+    },
     embeddings::{EmbeddingObject, EmbeddingRequest, EmbeddingsResponse, InputText},
     rag::vector_search::{DataFrom, RagScoredPoint, RetrieveObject},
 };
@@ -32,6 +36,7 @@ use std::{
 };
 use text_splitter::{MarkdownSplitter, TextSplitter};
 use tokio_util::sync::CancellationToken;
+use tracing::info;
 
 const DEFAULT_FILTER_LIMIT: u64 = 10;
 const DEFAULT_FILTER_SCORE_THRESHOLD: f32 = 0.5;
@@ -92,6 +97,16 @@ pub async fn chat(
 
                             match mcp_name.as_str() {
                                 "gaia-keyword-search" => {
+                                    // extract keywords from the user message
+                                    let keywords = extract_keywords_by_llm(
+                                        State(state.clone()),
+                                        text,
+                                        &request_id,
+                                    )
+                                    .await?;
+
+                                    info!("Extracted keywords: {}", &keywords);
+
                                     let kw_search_url = match chat_request.kw_search_url.as_ref() {
                                         Some(url) if !url.is_empty() => {
                                             let url = url.trim_end_matches('/');
@@ -140,7 +155,7 @@ pub async fn chat(
                                                 "index_name".to_string(),
                                                 Value::from(kw_search_index),
                                             ),
-                                            ("query".to_string(), Value::from(text.to_string())),
+                                            ("query".to_string(), Value::from(keywords)),
                                             ("limit".to_string(), Value::from(filter_limit)),
                                         ])),
                                     };
@@ -334,6 +349,15 @@ pub async fn chat(
                                     );
                                 }
                                 "gaia-tidb-search" => {
+                                    let keywords = extract_keywords_by_llm(
+                                        State(state.clone()),
+                                        text,
+                                        &request_id,
+                                    )
+                                    .await?;
+
+                                    info!("Extracted keywords: {}", &keywords);
+
                                     let tidb_host = match chat_request.tidb_search_host.as_ref() {
                                         Some(host) if !host.is_empty() => host.to_string(),
                                         _ => {
@@ -466,7 +490,7 @@ pub async fn chat(
                                             ),
                                             (
                                                 "query".to_string(),
-                                                serde_json::Value::from(text.to_string()),
+                                                serde_json::Value::from(keywords),
                                             ),
                                         ])),
                                     };
@@ -586,7 +610,7 @@ pub async fn chat(
             );
 
             // normalize the kw_scores
-            let kw_scores = normalize(&kw_scores);
+            let kw_scores = min_max_normalize(&kw_scores);
 
             dual_info!("kw_scores: {:#?} - request_id: {}", &kw_scores, request_id);
         }
@@ -610,7 +634,7 @@ pub async fn chat(
                 );
 
                 // normalize the em_scores
-                let em_scores = normalize(&em_scores);
+                let em_scores = min_max_normalize(&em_scores);
 
                 dual_info!("em_scores: {:#?} - request_id: {}", &em_scores, request_id);
             }
@@ -628,6 +652,9 @@ pub async fn chat(
         // Sort by score from high to low
         let mut final_ranking: Vec<(u64, f64)> = fused_scores.into_iter().collect();
         final_ranking.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+        if final_ranking.len() > filter_limit as usize {
+            final_ranking.truncate(filter_limit as usize);
+        }
 
         // Print final ranking
         dual_info!(
@@ -651,42 +678,6 @@ pub async fn chat(
                     from: DataFrom::VectorSearch,
                 });
             }
-        }
-
-        // filter the retrieved points by the score threshold
-        let mut retrieved = Vec::new();
-        for (hash_value, score) in final_ranking.iter() {
-            if *score >= filter_score_threshold as f64 {
-                if kw_hits_map.contains_key(hash_value) {
-                    retrieved.push(RagScoredPoint {
-                        source: kw_hits_map[hash_value].content.clone(),
-                        score: *score,
-                        from: DataFrom::KeywordSearch,
-                    });
-                } else if em_hits_map.contains_key(hash_value) {
-                    retrieved.push(RagScoredPoint {
-                        source: em_hits_map[hash_value].source.clone(),
-                        score: *score,
-                        from: DataFrom::VectorSearch,
-                    });
-                }
-            }
-        }
-
-        // truncate the retrieved points to the limit
-        if retrieved.len() > filter_limit as usize {
-            retrieved.truncate(filter_limit as usize);
-            dual_info!(
-                "Keep {} retrieved points - request_id: {}",
-                filter_limit,
-                request_id
-            );
-        } else {
-            dual_info!(
-                "Keep {} retrieved points - request_id: {}",
-                retrieved.len(),
-                request_id
-            );
         }
 
         dual_info!("retrieved: {:#?} - request_id: {}", &retrieved, request_id);
@@ -1723,7 +1714,7 @@ fn calculate_hash(s: &str) -> u64 {
 }
 
 /// Normalize scores with min-max normalization
-fn normalize(scores: &HashMap<u64, f64>) -> HashMap<u64, f64> {
+fn min_max_normalize(scores: &HashMap<u64, f64>) -> HashMap<u64, f64> {
     if scores.is_empty() {
         return scores.clone();
     }
@@ -1758,6 +1749,54 @@ fn normalize(scores: &HashMap<u64, f64>) -> HashMap<u64, f64> {
         .collect()
 }
 
+/// Normalize scores with z-score normalization and map to [0,1] using sigmoid
+fn _z_score_normalize(scores: &HashMap<u64, f64>) -> HashMap<u64, f64> {
+    if scores.is_empty() {
+        return scores.clone();
+    }
+
+    // Calculate mean
+    let mean = scores.values().sum::<f64>() / scores.len() as f64;
+
+    // Calculate standard deviation
+    let variance = scores
+        .values()
+        .map(|&score| {
+            let diff = score - mean;
+            diff * diff
+        })
+        .sum::<f64>()
+        / scores.len() as f64;
+    let std_dev = variance.sqrt();
+
+    dual_debug!("Z-score normalize: mean: {}, std_dev: {}", mean, std_dev);
+
+    scores
+        .iter()
+        .map(|(&doc_id, &score)| {
+            let z_score = if std_dev > 0.0 {
+                (score - mean) / std_dev
+            } else {
+                0.0
+            };
+
+            // Apply sigmoid function to map z-score to [0,1]
+            // sigmoid(x) = 1 / (1 + e^(-x))
+            let normalized_score = 1.0 / (1.0 + (-z_score).exp());
+
+            dual_debug!(
+                "Z-score normalize: doc_id: {}, score: {}, z_score: {}, normalized_score: {}",
+                doc_id,
+                score,
+                z_score,
+                normalized_score
+            );
+
+            (doc_id, normalized_score)
+        })
+        .collect()
+}
+
 /// Fuse keyword search and vector search scores with min-max normalization and weighted fusion
 fn weighted_fusion(
     kw_search_scores: HashMap<u64, f64>,
@@ -1769,9 +1808,9 @@ fn weighted_fusion(
             dual_info!("Fusing keyword search and vector search scores");
 
             // Normalize keyword search scores
-            let kw_normalized = normalize(&kw_search_scores);
+            let kw_normalized = min_max_normalize(&kw_search_scores);
             // Normalize vector search scores
-            let vector_normalized = normalize(&vector_search_scores);
+            let vector_normalized = min_max_normalize(&vector_search_scores);
 
             // filter out duplicates
             let all_doc_ids: HashSet<u64> = kw_search_scores
@@ -1795,17 +1834,103 @@ fn weighted_fusion(
             dual_info!("Only keyword search scores are available in the fusion");
 
             // Normalize keyword search scores
-            normalize(&kw_search_scores)
+            min_max_normalize(&kw_search_scores)
         }
         (true, false) => {
             dual_info!("Only vector search scores are available in the fusion");
 
             // Normalize vector search scores
-            normalize(&vector_search_scores)
+            min_max_normalize(&vector_search_scores)
         }
         (true, true) => {
             // Return empty HashMap
             HashMap::new()
         }
     }
+}
+
+async fn extract_keywords_by_llm(
+    State(state): State<Arc<AppState>>,
+    text: impl AsRef<str>,
+    request_id: impl AsRef<str>,
+) -> ServerResult<String> {
+    let request_id = request_id.as_ref();
+    let text = text.as_ref();
+    let prompt = format!(
+        "Extract the keywords from the following text. The keywords should be separated by spaces.\n\nText: {text:#?}",
+    );
+
+    info!("prompt for getting keywords: {}", prompt);
+
+    let user_message = ChatCompletionRequestMessage::new_user_message(
+        ChatCompletionUserMessageContent::Text(prompt),
+        None,
+    );
+
+    // create a request
+    let request = ChatCompletionRequestBuilder::new(&[user_message]).build();
+
+    info!(
+        "request for getting keywords:\n{}",
+        serde_json::to_string_pretty(&request).unwrap()
+    );
+
+    // get the chat server
+    let target_server_info = {
+        let servers = state.server_group.read().await;
+        let chat_servers = match servers.get(&ServerKind::chat) {
+            Some(servers) => servers,
+            None => {
+                let err_msg = "No chat server available";
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                return Err(ServerError::Operation(err_msg.to_string()));
+            }
+        };
+
+        match chat_servers.next().await {
+            Ok(target_server_info) => target_server_info,
+            Err(e) => {
+                let err_msg = format!("Failed to get the chat server: {e}");
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                return Err(ServerError::Operation(err_msg));
+            }
+        }
+    };
+
+    let chat_service_url = format!(
+        "{}/v1/chat/completions",
+        target_server_info.url.trim_end_matches('/')
+    );
+    dual_info!(
+        "Forward the chat request to {} - request_id: {}",
+        chat_service_url,
+        request_id
+    );
+
+    // Create a request client that can be cancelled
+    let response = reqwest::Client::new()
+        .post(&chat_service_url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .json(&request)
+        .send()
+        .await
+        .map_err(|e| {
+            let err_msg = format!("Failed to send the chat request: {e}");
+            dual_error!("{} - request_id: {}", err_msg, request_id);
+            ServerError::Operation(err_msg)
+        })?;
+
+    let chat_completion_object = response.json::<ChatCompletionObject>().await.map_err(|e| {
+        let err_msg = format!("Failed to parse the chat response: {e}");
+        dual_error!("{} - request_id: {}", err_msg, request_id);
+        ServerError::Operation(err_msg)
+    })?;
+
+    let content = chat_completion_object.choices[0]
+        .message
+        .content
+        .as_ref()
+        .unwrap();
+
+    Ok(content.to_string())
 }
