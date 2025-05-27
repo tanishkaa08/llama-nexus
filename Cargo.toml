@@ -8,14 +8,14 @@ anyhow = "1.0"
 async-trait = "0.1.82"
 axum = { version = "^0.8", features = ["tokio", "http2", "multipart"] }
 bitflags = "2.8.0"
-chat-prompts = { version = "0.30.2", git = "https://github.com/LlamaEdge/LlamaEdge.git", branch = "refactor-improve-rag" }
+chat-prompts = { version = "0.30.2", git = "https://github.com/LlamaEdge/LlamaEdge.git", branch = "dev" }
 clap = { version = "^4.5", features = ["cargo", "derive"] }
 config = { version = "^0.15", features = ["toml"] }
 endpoints = { version = "0.28.0", features = [
     "whisper",
     "rag",
     "index",
-], git = "https://github.com/LlamaEdge/LlamaEdge.git", branch = "refactor-improve-rag" }
+], git = "https://github.com/LlamaEdge/LlamaEdge.git", branch = "dev" }
 futures-util = "0.3"
 gaia-elastic-mcp-common = { git = "https://github.com/apepkuss/mcp-examples.git", branch = "dev" }
 gaia-kwsearch-common = { git = "https://github.com/apepkuss/mcp-examples.git", branch = "dev" }

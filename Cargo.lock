@@ -471,7 +471,7 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 [[package]]
 name = "chat-prompts"
 version = "0.30.2"
-source = "git+https://github.com/LlamaEdge/LlamaEdge.git?branch=refactor-improve-rag#5730c7ec8f28df356406d780d9f7bd660a64011c"
+source = "git+https://github.com/LlamaEdge/LlamaEdge.git?branch=dev#6d20a7e0c08a6b29f3ef7e96325798ec60e38baf"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -853,7 +853,7 @@ dependencies = [
 [[package]]
 name = "endpoints"
 version = "0.28.0"
-source = "git+https://github.com/LlamaEdge/LlamaEdge.git?branch=refactor-improve-rag#5730c7ec8f28df356406d780d9f7bd660a64011c"
+source = "git+https://github.com/LlamaEdge/LlamaEdge.git?branch=dev#6d20a7e0c08a6b29f3ef7e96325798ec60e38baf"
 dependencies = [
  "indexmap",
  "serde",
@@ -1079,7 +1079,7 @@ dependencies = [
 [[package]]
 name = "gaia-elastic-mcp-common"
 version = "0.1.2"
-source = "git+https://github.com/apepkuss/mcp-examples.git?branch=dev#1f103e8f661111ae8bd96a3f670fe419db2ddafa"
+source = "git+https://github.com/apepkuss/mcp-examples.git?branch=dev#09e251a5a3e5fd2598b7cb138321f7c35ff3630d"
 dependencies = [
  "rmcp",
  "serde",
@@ -1089,7 +1089,7 @@ dependencies = [
 [[package]]
 name = "gaia-kwsearch-common"
 version = "0.1.0"
-source = "git+https://github.com/apepkuss/mcp-examples.git?branch=dev#1f103e8f661111ae8bd96a3f670fe419db2ddafa"
+source = "git+https://github.com/apepkuss/mcp-examples.git?branch=dev#09e251a5a3e5fd2598b7cb138321f7c35ff3630d"
 dependencies = [
  "anyhow",
  "endpoints",
@@ -1112,7 +1112,7 @@ dependencies = [
 [[package]]
 name = "gaia-qdrant-common"
 version = "0.1.0"
-source = "git+https://github.com/apepkuss/mcp-examples.git?branch=dev#1f103e8f661111ae8bd96a3f670fe419db2ddafa"
+source = "git+https://github.com/apepkuss/mcp-examples.git?branch=dev#09e251a5a3e5fd2598b7cb138321f7c35ff3630d"
 dependencies = [
  "rmcp",
  "serde",
@@ -1122,7 +1122,7 @@ dependencies = [
 [[package]]
 name = "gaia-tidb-mcp-common"
 version = "0.1.2"
-source = "git+https://github.com/apepkuss/mcp-examples.git?branch=dev#1f103e8f661111ae8bd96a3f670fe419db2ddafa"
+source = "git+https://github.com/apepkuss/mcp-examples.git?branch=dev#09e251a5a3e5fd2598b7cb138321f7c35ff3630d"
 dependencies = [
  "endpoints",
  "mysql",
@@ -3417,9 +3417,9 @@ checksum = "8917285742e9f3e1683f0a9c4e6b57960b7314d0b08d30d1ecd426713ee2eee9"
 
 [[package]]
 name = "socket2"
-version = "0.5.9"
+version = "0.5.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4f5fd57c80058a56cf5c777ab8a126398ece8e442983605d280a44ce79d0edef"
+checksum = "e22376abed350d73dd1cd119b57ffccad95b4e585a7cda43e286245ce23c0678"
 dependencies = [
  "libc",
  "windows-sys 0.52.0",
