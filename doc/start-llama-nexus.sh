@@ -38,7 +38,7 @@ download_and_extract() {
 # Set versions
 NEXUS_VERSION="0.1.0"
 API_SERVER_VERSION="0.19.0"
-GAIA_MCP_VERSION="0.1.2"
+GAIA_MCP_VERSION="0.1.3"
 WASMEDGE_VERSION="0.14.1"
 GGML_PLUGIN="b5361"
 
@@ -110,7 +110,7 @@ fi
 
 # 6. Download MCP servers
 printf "Step 6: Downloading MCP servers...\n"
-curl -LO "https://github.com/apepkuss/mcp-examples/releases/download/${GAIA_MCP_VERSION}/gaia-mcp-servers-${PLATFORM}.tar.gz"
+curl -LO "https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/${GAIA_MCP_VERSION}/gaia-mcp-servers-${PLATFORM}.tar.gz"
 tar -xvzf gaia-mcp-servers-${PLATFORM}.tar.gz gaia-qdrant-mcp-server-sse gaia-kwsearch-mcp-server-sse
 rm gaia-mcp-servers-${PLATFORM}.tar.gz
 info "\n👍 Done!"
