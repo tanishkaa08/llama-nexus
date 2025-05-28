@@ -23,7 +23,7 @@ dependencies = [
  "mime_guess",
  "once_cell",
  "qdrant_rest_client",
- "reqwest 0.12.15",
+ "reqwest 0.12.16",
  "rmcp",
  "serde",
  "serde_json",
@@ -470,8 +470,9 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chat-prompts"
-version = "0.30.2"
-source = "git+https://github.com/LlamaEdge/LlamaEdge.git?branch=dev#6d20a7e0c08a6b29f3ef7e96325798ec60e38baf"
+version = "0.31.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c10c2f3c8d332096f61afcabe1078547dc27cfa24a66910a52e9098e406c8aad"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -523,9 +524,9 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.5.38"
+version = "4.5.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed93b9805f8ba930df42c2590f05453d5ec36cbb85d018868a5b24d31f6ac000"
+checksum = "fd60e63e9be68e5fb56422e397cf9baddded06dae1d2e523401542383bc72a9f"
 dependencies = [
  "clap_builder",
  "clap_derive",
@@ -533,9 +534,9 @@ dependencies = [
 
 [[package]]
 name = "clap_builder"
-version = "4.5.38"
+version = "4.5.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "379026ff283facf611b0ea629334361c4211d1b12ee01024eec1591133b04120"
+checksum = "89cc6392a1f72bbeb820d71f32108f61fdaf18bc526e1d23954168a67759ef51"
 dependencies = [
  "anstream",
  "anstyle",
@@ -852,8 +853,9 @@ dependencies = [
 
 [[package]]
 name = "endpoints"
-version = "0.28.0"
-source = "git+https://github.com/LlamaEdge/LlamaEdge.git?branch=dev#6d20a7e0c08a6b29f3ef7e96325798ec60e38baf"
+version = "0.29.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1718655b869a7e4e63b8c6cdcf6d1e6ae825162c23fa31fbceb10028a2bda53"
 dependencies = [
  "indexmap",
  "serde",
@@ -1078,8 +1080,8 @@ dependencies = [
 
 [[package]]
 name = "gaia-elastic-mcp-common"
-version = "0.1.2"
-source = "git+https://github.com/apepkuss/mcp-examples.git?branch=dev#09e251a5a3e5fd2598b7cb138321f7c35ff3630d"
+version = "0.1.3"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=main#5b262f2ab9bef5d0a2afdf8b1ff66b5de04d2058"
 dependencies = [
  "rmcp",
  "serde",
@@ -1089,7 +1091,7 @@ dependencies = [
 [[package]]
 name = "gaia-kwsearch-common"
 version = "0.1.0"
-source = "git+https://github.com/apepkuss/mcp-examples.git?branch=dev#09e251a5a3e5fd2598b7cb138321f7c35ff3630d"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=main#5b262f2ab9bef5d0a2afdf8b1ff66b5de04d2058"
 dependencies = [
  "anyhow",
  "endpoints",
@@ -1098,7 +1100,7 @@ dependencies = [
  "hyper-util",
  "pin-project-lite",
  "rand 0.8.5",
- "reqwest 0.12.15",
+ "reqwest 0.12.16",
  "rmcp",
  "schemars",
  "serde",
@@ -1112,7 +1114,7 @@ dependencies = [
 [[package]]
 name = "gaia-qdrant-common"
 version = "0.1.0"
-source = "git+https://github.com/apepkuss/mcp-examples.git?branch=dev#09e251a5a3e5fd2598b7cb138321f7c35ff3630d"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=main#5b262f2ab9bef5d0a2afdf8b1ff66b5de04d2058"
 dependencies = [
  "rmcp",
  "serde",
@@ -1121,8 +1123,8 @@ dependencies = [
 
 [[package]]
 name = "gaia-tidb-mcp-common"
-version = "0.1.2"
-source = "git+https://github.com/apepkuss/mcp-examples.git?branch=dev#09e251a5a3e5fd2598b7cb138321f7c35ff3630d"
+version = "0.1.3"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=main#5b262f2ab9bef5d0a2afdf8b1ff66b5de04d2058"
 dependencies = [
  "endpoints",
  "mysql",
@@ -1463,22 +1465,28 @@ dependencies = [
 
 [[package]]
 name = "hyper-util"
-version = "0.1.12"
+version = "0.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf9f1e950e0d9d1d3c47184416723cf29c0d1f93bd8cccf37e4beb6b44f31710"
+checksum = "b1c293b6b3d21eca78250dc7dbebd6b9210ec5530e038cbfe0661b5c47ab06e8"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
  "futures-channel",
+ "futures-core",
  "futures-util",
  "http 1.3.1",
  "http-body 1.0.1",
  "hyper 1.6.0",
+ "ipnet",
  "libc",
+ "percent-encoding",
  "pin-project-lite",
  "socket2",
+ "system-configuration 0.6.1",
  "tokio",
  "tower-service",
  "tracing",
+ "windows-registry",
 ]
 
 [[package]]
@@ -1783,6 +1791,16 @@ name = "ipnet"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "469fb0b9cefa57e3ef31275ee7cacb78f2fdca44e4765491884a2b119d4eb130"
+
+[[package]]
+name = "iri-string"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbc5ebe9c3a1a7a5127f920a418f7585e9e758e911d0466ed004f393b0e380b2"
+dependencies = [
+ "memchr",
+ "serde",
+]
 
 [[package]]
 name = "is_terminal_polyfill"
@@ -2885,7 +2903,7 @@ dependencies = [
  "percent-encoding",
  "pin-project-lite",
  "rustls 0.21.12",
- "rustls-pemfile 1.0.4",
+ "rustls-pemfile",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -2904,9 +2922,9 @@ dependencies = [
 
 [[package]]
 name = "reqwest"
-version = "0.12.15"
+version = "0.12.16"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d19c46a6fdd48bc4dab94b6103fccc55d34c67cc0ad04653aad4ea2a07cd7bbb"
+checksum = "2bf597b113be201cb2269b4c39b39a804d01b99ee95a4278f0ed04e45cff1c71"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -2931,26 +2949,24 @@ dependencies = [
  "pin-project-lite",
  "quinn",
  "rustls 0.23.27",
- "rustls-pemfile 2.2.0",
  "rustls-pki-types",
  "serde",
  "serde_json",
  "serde_urlencoded",
  "sync_wrapper 1.0.2",
- "system-configuration 0.6.1",
  "tokio",
  "tokio-native-tls",
  "tokio-rustls 0.26.2",
  "tokio-util",
  "tower",
+ "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "wasm-streams",
  "web-sys",
- "webpki-roots 0.26.11",
- "windows-registry",
+ "webpki-roots 1.0.0",
 ]
 
 [[package]]
@@ -2987,7 +3003,7 @@ dependencies = [
  "http 1.3.1",
  "paste",
  "pin-project-lite",
- "reqwest 0.12.15",
+ "reqwest 0.12.16",
  "rmcp-macros",
  "schemars",
  "serde",
@@ -3098,15 +3114,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c74cae0a4cf6ccbbf5f359f08efdf8ee7e1dc532573bf0db71968cb56b1448c"
 dependencies = [
  "base64 0.21.7",
-]
-
-[[package]]
-name = "rustls-pemfile"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
-dependencies = [
- "rustls-pki-types",
 ]
 
 [[package]]
@@ -4043,12 +4050,14 @@ dependencies = [
  "http-body-util",
  "http-range-header",
  "httpdate",
+ "iri-string",
  "mime",
  "mime_guess",
  "percent-encoding",
  "pin-project-lite",
  "tokio",
  "tokio-util",
+ "tower",
  "tower-layer",
  "tower-service",
  "tracing",
@@ -4522,15 +4531,6 @@ name = "webpki-roots"
 version = "0.25.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5f20c57d8d7db6d3b86154206ae5d8fba62dd39573114de97c2cb0578251f8e1"
-
-[[package]]
-name = "webpki-roots"
-version = "0.26.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "521bc38abb08001b01866da9f51eb7c5d647a19260e00054a8c7fd5f9e57f7a9"
-dependencies = [
- "webpki-roots 1.0.0",
-]
 
 [[package]]
 name = "webpki-roots"
