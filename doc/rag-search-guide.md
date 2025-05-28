@@ -17,6 +17,10 @@ In this guide, we will use Qdrant and kw-search-server as examples to demonstrat
     - [Starting llama-nexus](#starting-llama-nexus)
   - [Creating Embeddings and Indices](#creating-embeddings-and-indices)
   - [Executing Search](#executing-search)
+  - [Request Parameters for RAG Search](#request-parameters-for-rag-search)
+    - [Parameters for Vector Search](#parameters-for-vector-search)
+    - [Parameters for Keyword Search](#parameters-for-keyword-search)
+    - [Additional Parameters](#additional-parameters)
 
 ## Starting llama-nexus and Related Servers
 
@@ -376,6 +380,9 @@ If the request is processed successfully, a response similar to the following wi
             },
             {
                 "status": "indexed"
+            },
+            {
+                "status": "indexed"
             }
         ]
     },
@@ -628,6 +635,155 @@ For centuries Paris has been one of the world's most important and attractive ci
 2025-05-20T09:25:14.674433Z  INFO ThreadId(04) src/rag.rs:1131: Merge RAG context into last user message.
 
 (more logs)
+```
+
+</details>
+
+## Request Parameters for RAG Search
+
+In addition to parameters compatible with the OpenAI API such as `model` and `messages`, the `/v1/chat/completions` endpoint includes the following parameters for controlling RAG search:
+
+### Parameters for Vector Search
+
+- `vdb_server_url`: URL of the Qdrant server used for vector search
+- `vdb_collection_name`: Name of the Qdrant collection used for vector search
+
+<details><summary>Expand to view example request</summary>
+
+```bash
+curl --location 'http://localhost:3389/v1/chat/completions' \
+--header 'Content-Type: application/json' \
+--data '{
+    "messages": [
+        {
+            "role": "user",
+            "content": "What is the location of Paris, France along the Seine river?"
+        }
+    ],
+    "vdb_server_url": "http://localhost:6333",
+    "vdb_collection_name": ["dummy-vector-search-index-name"],
+    "model": "Qwen3-4B",
+}'
+```
+
+</details>
+
+### Parameters for Keyword Search
+
+- Parameters for [kw-search-server](https://github.com/LlamaEdge/kw-search-server)
+
+  - `kw_search_url`: URL of the kw-search server used for keyword search
+  - `kw_search_index`: Name of the kw-search index used for keyword search
+
+  <details><summary>Expand to view example request</summary>
+
+  ```bash
+  curl --location 'http://localhost:3389/v1/chat/completions' \
+  --header 'Content-Type: application/json' \
+  --data '{
+      "messages": [
+          {
+              "role": "user",
+              "content": "What is the location of Paris, France along the Seine river?"
+          }
+      ],
+      "kw_search_url": "http://localhost:12306",
+      "kw_search_index": "dummy-kw-search-index-name",
+      "model": "Qwen3-4B",
+  }'
+  ```
+
+  </details>
+
+- Parameters for Elasticsearch
+
+  - `es_search_url`: URL of the Elasticsearch server used for keyword search
+  - `es_search_index`: Name of the Elasticsearch index used for keyword search
+  - `es_search_fields`: Names of the Elasticsearch fields used for keyword search
+  - `es_api_key`: API key for the Elasticsearch server
+
+  <details><summary>Expand to view example request</summary>
+
+  ```bash
+  curl --location 'http://localhost:3389/v1/chat/completions' \
+  --header 'Content-Type: application/json' \
+  --data '{
+      "messages": [
+          {
+              "role": "user",
+              "content": "What is the location of Paris, France along the Seine river?"
+          }
+      ],
+      "es_search_url": "http://localhost:9200",
+      "es_search_index": "dummy-es-search-index-name",
+      "es_search_fields": ["title", "content"],
+      "es_api_key": "ApiKey <your-api-key>",
+      "model": "Qwen3-4B",
+  }'
+  ```
+
+  </details>
+
+- Parameters for TiDB
+
+  - `tidb_search_host`: Host of the TiDB server used for keyword search
+  - `tidb_search_port`: Port of the TiDB server used for keyword search
+  - `tidb_search_username`: Username for the TiDB server
+  - `tidb_search_password`: Password for the TiDB server
+  - `tidb_search_database`: Name of the TiDB database used for keyword search
+  - `tidb_search_table`: Name of the TiDB table used for keyword search
+
+  ```bash
+  curl --location 'http://localhost:3389/v1/chat/completions' \
+  --header 'Content-Type: application/json' \
+  --data '{
+      "messages": [
+          {
+              "role": "user",
+              "content": "What is the location of Paris, France along the Seine river?"
+          }
+      ],
+      "tidb_search_host": "<your-tidb-host>",
+      "tidb_search_port": <your-tidb-port>,
+      "tidb_search_username": "<your-username>",
+      "tidb_search_password": "<your-password>",
+      "tidb_search_database": "dummy-tidb-search-database-name",
+      "tidb_search_table": "dummy-tidb-search-table-name",
+      "model": "Qwen3-4B",
+  }'
+  ```
+
+### Additional Parameters
+
+- `limit`: The maximum number of results to return.
+- `score_threshold`: The score threshold for vector search and keyword search results.
+- `weighted_alpha`: When vector search and keyword search find the same result, this parameter is used to weight their respective scores to obtain the final score for that result. The value range of `weighted_alpha` is `[0, 1]`, with a default value of `0.5`. The calculation formula is:
+
+  ```text
+  final_score = weighted_alpha * keyword_score + (1 - weighted_alpha) * vector_score
+  ```
+
+<details><summary>Expand to view example request</summary>
+
+```bash
+curl --location 'http://localhost:3389/v1/chat/completions' \
+--header 'Content-Type: application/json' \
+--data '{
+    "messages": [
+        {
+            "role": "user",
+            "content": "What is the location of Paris, France along the Seine river?"
+        }
+    ],
+    "vdb_server_url": "http://localhost:6333",
+    "vdb_collection_name": ["dummy-vector-search-index-name"],
+    "kw_search_url": "http://localhost:12306",
+    "kw_search_index": "dummy-kw-search-index-name",
+    "limit": 5,
+    "score_threshold": 0.5,
+    "weighted_alpha": 0.3,
+    "model": "Qwen3-4B",
+}'
 ```
 
 </details>
