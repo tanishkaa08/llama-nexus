@@ -85,474 +85,24 @@ pub async fn chat(
         request_id
     );
 
-    // * perform keyword search
-    let mut kw_hits: Vec<KwSearchHit> = Vec::new();
-    match chat_request.messages.last() {
-        Some(ChatCompletionRequestMessage::User(user_message)) => {
-            match user_message.content() {
-                ChatCompletionUserMessageContent::Text(text) => {
-                    match MCP_KEYWORD_SEARCH_CLIENT.get() {
-                        Some(mcp_client) => {
-                            let mcp_name = mcp_client.read().await.name.clone();
-
-                            match mcp_name.as_str() {
-                                "gaia-keyword-search" => {
-                                    // extract keywords from the user message
-                                    let keywords = extract_keywords_by_llm(
-                                        State(state.clone()),
-                                        text,
-                                        &request_id,
-                                    )
-                                    .await?;
-
-                                    info!("Extracted keywords: {}", &keywords);
-
-                                    let kw_search_url = match chat_request.kw_search_url.as_ref() {
-                                        Some(url) if !url.is_empty() => {
-                                            let url = url.trim_end_matches('/');
-
-                                            dual_info!(
-                                                    "URL to the kw-search mcp-server: {} - request_id: {}",
-                                                    url,
-                                                    request_id
-                                                );
-
-                                            url.to_string()
-                                        }
-                                        _ => {
-                                            let err_msg = "Not found `kw_search_url` field in the request. `kw_search_url` field is required for kw-search-server. ";
-
-                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-
-                                            return Err(ServerError::BadRequest(
-                                                err_msg.to_string(),
-                                            ));
-                                        }
-                                    };
-
-                                    let kw_search_index = match chat_request
-                                        .kw_search_index
-                                        .as_ref()
-                                    {
-                                        Some(index) if !index.is_empty() => index.to_string(),
-                                        _ => {
-                                            let err_msg = "Not found `kw_search_index` field in the request. `kw_search_index` field is required for kw-search-server. ";
-
-                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-
-                                            return Err(ServerError::BadRequest(
-                                                err_msg.to_string(),
-                                            ));
-                                        }
-                                    };
-
-                                    // request param
-                                    let request_param = CallToolRequestParam {
-                                        name: "search_documents".into(),
-                                        arguments: Some(serde_json::Map::from_iter([
-                                            ("base_url".to_string(), Value::from(kw_search_url)),
-                                            (
-                                                "index_name".to_string(),
-                                                Value::from(kw_search_index),
-                                            ),
-                                            ("query".to_string(), Value::from(keywords)),
-                                            ("limit".to_string(), Value::from(filter_limit)),
-                                        ])),
-                                    };
-                                    dual_debug!(
-                                        "request_param: {:#?} - request_id: {}",
-                                        &request_param,
-                                        request_id
-                                    );
-
-                                    // call the search_documents tool
-                                    let tool_result = mcp_client
-                                        .read()
-                                        .await
-                                        .raw
-                                        .peer()
-                                        .call_tool(request_param)
-                                        .await
-                                        .map_err(|e| {
-                                            let err_msg = format!("Failed to call the tool: {e}");
-                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-                                            ServerError::Operation(err_msg)
-                                        })?;
-
-                                    let search_response =
-                                        SearchDocumentsResponse::from(tool_result);
-                                    kw_hits = search_response.hits;
-
-                                    dual_info!(
-                                        "Got {} kw-search hits - request_id: {}",
-                                        kw_hits.len(),
-                                        request_id
-                                    );
-                                }
-                                "gaia-elastic-search" => {
-                                    let es_search_url = match chat_request.es_search_url.as_ref() {
-                                        Some(url) if !url.is_empty() => {
-                                            let url = url.trim_end_matches('/');
-
-                                            dual_info!(
-                                                    "URL to the es-search mcp-server: {} - request_id: {}",
-                                                    url,
-                                                    request_id
-                                                );
-
-                                            url.to_string()
-                                        }
-                                        _ => {
-                                            let err_msg = "Not found `es_search_url` field in the request. `es_search_url` field is required for Elasticsearch server. ";
-
-                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-
-                                            return Err(ServerError::BadRequest(
-                                                err_msg.to_string(),
-                                            ));
-                                        }
-                                    };
-
-                                    let es_search_index = match chat_request
-                                        .es_search_index
-                                        .as_ref()
-                                    {
-                                        Some(index) if !index.is_empty() => {
-                                            let index = index.clone();
-
-                                            dual_info!(
-                                                "Index name: {} - request_id: {}",
-                                                &index,
-                                                request_id
-                                            );
-
-                                            index
-                                        }
-                                        _ => {
-                                            let err_msg = "Not found `es_search_index` field in the request. `es_search_index` field is required for Elasticsearch server. ";
-
-                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-
-                                            return Err(ServerError::BadRequest(
-                                                err_msg.to_string(),
-                                            ));
-                                        }
-                                    };
-
-                                    // parse api key
-                                    let api_key = match &chat_request.es_api_key {
-                                        Some(api_key) => api_key.clone(),
-                                        None => {
-                                            let err_msg = "No elastic search api key provided";
-                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-                                            return Err(ServerError::BadRequest(
-                                                err_msg.to_string(),
-                                            ));
-                                        }
-                                    };
-
-                                    // parse fields to search
-                                    let es_search_fields: Vec<Value> = match chat_request
-                                        .es_search_fields
-                                        .as_ref()
-                                    {
-                                        Some(fields) if !fields.is_empty() => {
-                                            let fields = fields
-                                                .iter()
-                                                .map(|f| serde_json::Value::String(f.clone()))
-                                                .collect();
-
-                                            dual_info!(
-                                                "Fields to search: {:?} - request_id: {}",
-                                                &fields,
-                                                request_id
-                                            );
-
-                                            fields
-                                        }
-                                        _ => {
-                                            let err_msg = "Not found `es_search_fields` field in the request. `es_search_fields` field is required for Elasticsearch server. ";
-
-                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-
-                                            return Err(ServerError::BadRequest(
-                                                err_msg.to_string(),
-                                            ));
-                                        }
-                                    };
-
-                                    // request param
-                                    let request_param = CallToolRequestParam {
-                                        name: "search".into(),
-                                        arguments: Some(serde_json::Map::from_iter([
-                                            ("base_url".to_string(), Value::from(es_search_url)),
-                                            ("index".to_string(), Value::from(es_search_index)),
-                                            ("query".to_string(), Value::from(text.to_string())),
-                                            ("fields".to_string(), Value::Array(es_search_fields)),
-                                            ("size".to_string(), Value::from(filter_limit)),
-                                            (
-                                                "api_key".to_string(),
-                                                serde_json::Value::String(api_key),
-                                            ),
-                                        ])),
-                                    };
-
-                                    // call tool
-                                    let tool_result = mcp_client
-                                        .read()
-                                        .await
-                                        .raw
-                                        .peer()
-                                        .call_tool(request_param)
-                                        .await
-                                        .map_err(|e| {
-                                            let err_msg = format!("Failed to call the tool: {e}");
-                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-                                            ServerError::Operation(err_msg)
-                                        })?;
-
-                                    // parse tool result
-                                    let search_response = SearchResponse::from(tool_result);
-
-                                    if !search_response.hits.hits.is_empty() {
-                                        for hit in search_response.hits.hits.iter() {
-                                            let score = hit.score;
-                                            let title = hit
-                                                .source
-                                                .get("title")
-                                                .unwrap()
-                                                .as_str()
-                                                .unwrap()
-                                                .to_string();
-                                            let content = hit
-                                                .source
-                                                .get("content")
-                                                .unwrap()
-                                                .as_str()
-                                                .unwrap()
-                                                .to_string();
-
-                                            let kw_hit = KwSearchHit {
-                                                title,
-                                                content,
-                                                score,
-                                            };
-
-                                            kw_hits.push(kw_hit);
-                                        }
-                                    }
-
-                                    dual_info!(
-                                        "Got {} kw-search hits - request_id: {}",
-                                        kw_hits.len(),
-                                        request_id
-                                    );
-                                }
-                                "gaia-tidb-search" => {
-                                    let keywords = extract_keywords_by_llm(
-                                        State(state.clone()),
-                                        text,
-                                        &request_id,
-                                    )
-                                    .await?;
-
-                                    info!("Extracted keywords: {}", &keywords);
-
-                                    let tidb_host = match chat_request.tidb_search_host.as_ref() {
-                                        Some(host) if !host.is_empty() => host.to_string(),
-                                        _ => {
-                                            let err_msg = "Not found `tidb_search_host` field in the request. `tidb_search_host` field is required for tidb-search-server. ";
-
-                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-
-                                            return Err(ServerError::BadRequest(
-                                                err_msg.to_string(),
-                                            ));
-                                        }
-                                    };
-
-                                    let tidb_port = match chat_request.tidb_search_port {
-                                        Some(port) => port,
-                                        None => {
-                                            let err_msg = "Not found `tidb_search_port` field in the request. `tidb_search_port` field is required for tidb-search-server. ";
-
-                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-
-                                            return Err(ServerError::BadRequest(
-                                                err_msg.to_string(),
-                                            ));
-                                        }
-                                    };
-
-                                    let tidb_username = match chat_request
-                                        .tidb_search_username
-                                        .as_ref()
-                                    {
-                                        Some(username) if !username.is_empty() => {
-                                            username.to_string()
-                                        }
-                                        _ => {
-                                            let err_msg = "Not found `tidb_search_username` field in the request. `tidb_search_username` field is required for tidb-search-server. ";
-
-                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-
-                                            return Err(ServerError::BadRequest(
-                                                err_msg.to_string(),
-                                            ));
-                                        }
-                                    };
-
-                                    let tidb_password = match chat_request
-                                        .tidb_search_password
-                                        .as_ref()
-                                    {
-                                        Some(password) if !password.is_empty() => {
-                                            password.to_string()
-                                        }
-                                        _ => {
-                                            let err_msg = "Not found `tidb_search_password` field in the request. `tidb_search_password` field is required for tidb-search-server. ";
-
-                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-
-                                            return Err(ServerError::BadRequest(
-                                                err_msg.to_string(),
-                                            ));
-                                        }
-                                    };
-
-                                    let tidb_database = match chat_request
-                                        .tidb_search_database
-                                        .as_ref()
-                                    {
-                                        Some(database) if !database.is_empty() => {
-                                            database.to_string()
-                                        }
-                                        _ => {
-                                            let err_msg = "Not found `tidb_search_database` field in the request. `tidb_search_database` field is required for tidb-search-server. ";
-
-                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-
-                                            return Err(ServerError::BadRequest(
-                                                err_msg.to_string(),
-                                            ));
-                                        }
-                                    };
-
-                                    let tidb_table_name = match chat_request
-                                        .tidb_search_table
-                                        .as_ref()
-                                    {
-                                        Some(table_name) if !table_name.is_empty() => {
-                                            table_name.to_string()
-                                        }
-                                        _ => {
-                                            let err_msg = "Not found `tidb_search_table` field in the request. `tidb_search_table` field is required for tidb-search-server. ";
-
-                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-
-                                            return Err(ServerError::BadRequest(
-                                                err_msg.to_string(),
-                                            ));
-                                        }
-                                    };
-
-                                    // request param
-                                    let request_param = CallToolRequestParam {
-                                        name: "search".into(),
-                                        arguments: Some(serde_json::Map::from_iter([
-                                            (
-                                                "host".to_string(),
-                                                serde_json::Value::String(tidb_host),
-                                            ),
-                                            (
-                                                "port".to_string(),
-                                                serde_json::Value::from(tidb_port),
-                                            ),
-                                            (
-                                                "username".to_string(),
-                                                serde_json::Value::from(tidb_username),
-                                            ),
-                                            (
-                                                "password".to_string(),
-                                                serde_json::Value::from(tidb_password),
-                                            ),
-                                            (
-                                                "database".to_string(),
-                                                serde_json::Value::from(tidb_database),
-                                            ),
-                                            (
-                                                "table_name".to_string(),
-                                                serde_json::Value::from(tidb_table_name),
-                                            ),
-                                            (
-                                                "limit".to_string(),
-                                                serde_json::Value::from(filter_limit),
-                                            ),
-                                            (
-                                                "query".to_string(),
-                                                serde_json::Value::from(keywords),
-                                            ),
-                                        ])),
-                                    };
-
-                                    let tool_result = mcp_client
-                                        .read()
-                                        .await
-                                        .raw
-                                        .peer()
-                                        .call_tool(request_param)
-                                        .await
-                                        .map_err(|e| {
-                                            let err_msg = format!("Failed to call the tool: {e}");
-                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-                                            ServerError::Operation(err_msg)
-                                        })?;
-
-                                    // parse tool result
-                                    let search_response = TidbSearchResponse::from(tool_result);
-
-                                    if !search_response.hits.is_empty() {
-                                        for hit in search_response.hits.iter() {
-                                            let kw_hit = KwSearchHit {
-                                                title: hit.title.clone(),
-                                                content: hit.content.clone(),
-                                                score: 0.0,
-                                            };
-
-                                            kw_hits.push(kw_hit);
-                                        }
-                                    }
-                                }
-                                _ => {
-                                    let err_msg = format!(
-                                        "Unsupported keyword search mcp server: {mcp_name}"
-                                    );
-                                    dual_error!("{} - request_id: {}", err_msg, request_id);
-                                    return Err(ServerError::Operation(err_msg));
-                                }
-                            }
-                        }
-                        None => {
-                            let warn_msg = "No keyword search mcp server connected";
-                            dual_warn!("{} - request_id: {}", warn_msg, request_id);
-                        }
-                    }
-                }
-                _ => {
-                    let err_msg = "The last message in the request is not a text-only user message";
-                    dual_error!("{} - request_id: {}", err_msg, request_id);
-                    return Err(ServerError::BadRequest(err_msg.to_string()));
-                }
+    // Get the last user message text
+    let query_text = match chat_request.messages.last() {
+        Some(ChatCompletionRequestMessage::User(user_message)) => match user_message.content() {
+            ChatCompletionUserMessageContent::Text(text) => text.clone(),
+            _ => {
+                let err_msg = "The last message in the request is not a text-only user message";
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                return Err(ServerError::BadRequest(err_msg.to_string()));
             }
-        }
+        },
         _ => {
             let err_msg = "The last message in the request is not a user message";
             dual_error!("{} - request_id: {}", err_msg, request_id);
             return Err(ServerError::BadRequest(err_msg.to_string()));
         }
-    }
+    };
 
-    // qdrant config
+    // Get qdrant configs
     let qdrant_config_vec = match get_qdrant_configs(
         &chat_request,
         filter_limit,
@@ -561,7 +111,7 @@ pub async fn chat(
     )
     .await
     {
-        Ok(qdrant_config_vec) => qdrant_config_vec,
+        Ok(configs) => configs,
         Err(e) => {
             let err_msg = format!("Failed to get the VectorDB config: {e}");
             dual_error!(
@@ -573,26 +123,31 @@ pub async fn chat(
         }
     };
 
-    // * perform vector search
-    let mut retrieve_object_vec = retrieve_context_with_multiple_qdrant_configs(
-        State(state.clone()),
-        Extension(cancel_token.clone()),
-        headers.clone(),
-        &request_id,
-        &chat_request,
-        &qdrant_config_vec,
-    )
-    .await?;
-
-    // log retrieve object
-    dual_debug!(
-        "request_id: {} - retrieve_object_vec:\n{}",
-        request_id,
-        serde_json::to_string_pretty(&retrieve_object_vec).unwrap()
+    // Parallel execution of keyword search and vector search
+    let (res_kw_search, res_vector_search) = tokio::join!(
+        perform_keyword_search(
+            State(state.clone()),
+            &query_text,
+            &chat_request,
+            filter_limit,
+            &request_id
+        ),
+        perform_vector_search(
+            State(state.clone()),
+            Extension(cancel_token.clone()),
+            headers.clone(),
+            &chat_request,
+            &qdrant_config_vec,
+            &request_id
+        )
     );
 
+    // Handle results
+    let kw_hits = res_kw_search?;
+    let vector_hits = res_vector_search?;
+
     // * rerank
-    retrieve_object_vec = {
+    let hits = {
         // create a hash map from kw_hits: key is the hash value of the content of the hit, value is the hit
         let mut kw_hits_map = HashMap::new();
         let mut kw_scores = HashMap::new();
@@ -618,8 +173,8 @@ pub async fn chat(
         // create a hash map from retrieve_object_vec: key is the hash value of the source of the point, value is the point
         let mut em_hits_map = HashMap::new();
         let mut em_scores = HashMap::new();
-        if !retrieve_object_vec.is_empty() {
-            let points = retrieve_object_vec[0].points.as_ref().unwrap().clone();
+        if !vector_hits.is_empty() {
+            let points = vector_hits[0].points.as_ref().unwrap().clone();
             if !points.is_empty() {
                 for point in points {
                     let hash_value = calculate_hash(&point.source);
@@ -643,7 +198,7 @@ pub async fn chat(
         // fuse the two hash maps
         let fused_scores = weighted_fusion(kw_scores, em_scores, weighted_alpha);
 
-        dual_info!(
+        dual_debug!(
             "final_scores: {:#?} - request_id: {}",
             &fused_scores,
             request_id
@@ -657,7 +212,7 @@ pub async fn chat(
         }
 
         // Print final ranking
-        dual_info!(
+        dual_debug!(
             "final_ranking: {:#?} - request_id: {}",
             &final_ranking,
             request_id
@@ -693,8 +248,8 @@ pub async fn chat(
 
     // * generate context
     let mut context = String::new();
-    if !retrieve_object_vec.is_empty() {
-        for (idx, retrieve_object) in retrieve_object_vec.iter().enumerate() {
+    if !hits.is_empty() {
+        for (idx, retrieve_object) in hits.iter().enumerate() {
             match retrieve_object.points.as_ref() {
                 Some(scored_points) => {
                     match scored_points.is_empty() {
@@ -787,6 +342,376 @@ pub async fn chat(
         Extension(cancel_token.clone()),
         headers,
         Json(chat_request),
+    )
+    .await
+}
+
+async fn perform_keyword_search(
+    State(state): State<Arc<AppState>>,
+    text: &str,
+    chat_request: &ChatCompletionRequest,
+    filter_limit: u64,
+    request_id: &str,
+) -> ServerResult<Vec<KwSearchHit>> {
+    let mut kw_hits: Vec<KwSearchHit> = Vec::new();
+
+    match MCP_KEYWORD_SEARCH_CLIENT.get() {
+        Some(mcp_client) => {
+            let mcp_name = mcp_client.read().await.name.clone();
+
+            match mcp_name.as_str() {
+                "gaia-keyword-search" => {
+                    // extract keywords from the user message
+                    let keywords =
+                        extract_keywords_by_llm(State(state.clone()), text, request_id).await?;
+
+                    info!("Extracted keywords: {}", &keywords);
+
+                    let kw_search_url = match chat_request.kw_search_url.as_ref() {
+                        Some(url) if !url.is_empty() => {
+                            let url = url.trim_end_matches('/');
+                            dual_info!(
+                                "URL to the kw-search mcp-server: {} - request_id: {}",
+                                url,
+                                request_id
+                            );
+                            url.to_string()
+                        }
+                        _ => {
+                            let err_msg = "Not found `kw_search_url` field in the request. `kw_search_url` field is required for kw-search-server. ";
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                            return Err(ServerError::BadRequest(err_msg.to_string()));
+                        }
+                    };
+
+                    let kw_search_index = match chat_request.kw_search_index.as_ref() {
+                        Some(index) if !index.is_empty() => index.to_string(),
+                        _ => {
+                            let err_msg = "Not found `kw_search_index` field in the request. `kw_search_index` field is required for kw-search-server. ";
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                            return Err(ServerError::BadRequest(err_msg.to_string()));
+                        }
+                    };
+
+                    // request param
+                    let request_param = CallToolRequestParam {
+                        name: "search_documents".into(),
+                        arguments: Some(serde_json::Map::from_iter([
+                            ("base_url".to_string(), Value::from(kw_search_url)),
+                            ("index_name".to_string(), Value::from(kw_search_index)),
+                            ("query".to_string(), Value::from(keywords)),
+                            ("limit".to_string(), Value::from(filter_limit)),
+                        ])),
+                    };
+
+                    // call the search_documents tool
+                    let tool_result = mcp_client
+                        .read()
+                        .await
+                        .raw
+                        .peer()
+                        .call_tool(request_param)
+                        .await
+                        .map_err(|e| {
+                            let err_msg = format!("Failed to call the tool: {e}");
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                            ServerError::Operation(err_msg)
+                        })?;
+
+                    let search_response = SearchDocumentsResponse::from(tool_result);
+                    kw_hits = search_response.hits;
+                }
+                "gaia-elastic-search" => {
+                    let es_search_url = match chat_request.es_search_url.as_ref() {
+                        Some(url) if !url.is_empty() => {
+                            let url = url.trim_end_matches('/');
+
+                            dual_info!(
+                                "URL to the es-search mcp-server: {} - request_id: {}",
+                                url,
+                                request_id
+                            );
+
+                            url.to_string()
+                        }
+                        _ => {
+                            let err_msg = "Not found `es_search_url` field in the request. `es_search_url` field is required for Elasticsearch server. ";
+
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                            return Err(ServerError::BadRequest(err_msg.to_string()));
+                        }
+                    };
+
+                    let es_search_index = match chat_request.es_search_index.as_ref() {
+                        Some(index) if !index.is_empty() => {
+                            let index = index.clone();
+
+                            dual_info!("Index name: {} - request_id: {}", &index, request_id);
+
+                            index
+                        }
+                        _ => {
+                            let err_msg = "Not found `es_search_index` field in the request. `es_search_index` field is required for Elasticsearch server. ";
+
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                            return Err(ServerError::BadRequest(err_msg.to_string()));
+                        }
+                    };
+
+                    // parse api key
+                    let api_key = match &chat_request.es_api_key {
+                        Some(api_key) => api_key.clone(),
+                        None => {
+                            let err_msg = "No elastic search api key provided";
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                            return Err(ServerError::BadRequest(err_msg.to_string()));
+                        }
+                    };
+
+                    // parse fields to search
+                    let es_search_fields: Vec<Value> = match chat_request.es_search_fields.as_ref()
+                    {
+                        Some(fields) if !fields.is_empty() => {
+                            let fields = fields
+                                .iter()
+                                .map(|f| serde_json::Value::String(f.clone()))
+                                .collect();
+
+                            dual_info!(
+                                "Fields to search: {:?} - request_id: {}",
+                                &fields,
+                                request_id
+                            );
+
+                            fields
+                        }
+                        _ => {
+                            let err_msg = "Not found `es_search_fields` field in the request. `es_search_fields` field is required for Elasticsearch server. ";
+
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                            return Err(ServerError::BadRequest(err_msg.to_string()));
+                        }
+                    };
+
+                    // request param
+                    let request_param = CallToolRequestParam {
+                        name: "search".into(),
+                        arguments: Some(serde_json::Map::from_iter([
+                            ("base_url".to_string(), Value::from(es_search_url)),
+                            ("index".to_string(), Value::from(es_search_index)),
+                            ("query".to_string(), Value::from(text.to_string())),
+                            ("fields".to_string(), Value::Array(es_search_fields)),
+                            ("size".to_string(), Value::from(filter_limit)),
+                            ("api_key".to_string(), serde_json::Value::String(api_key)),
+                        ])),
+                    };
+
+                    // call tool
+                    let tool_result = mcp_client
+                        .read()
+                        .await
+                        .raw
+                        .peer()
+                        .call_tool(request_param)
+                        .await
+                        .map_err(|e| {
+                            let err_msg = format!("Failed to call the tool: {e}");
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                            ServerError::Operation(err_msg)
+                        })?;
+
+                    // parse tool result
+                    let search_response = SearchResponse::from(tool_result);
+
+                    if !search_response.hits.hits.is_empty() {
+                        for hit in search_response.hits.hits.iter() {
+                            let score = hit.score;
+                            let title = hit
+                                .source
+                                .get("title")
+                                .unwrap()
+                                .as_str()
+                                .unwrap()
+                                .to_string();
+                            let content = hit
+                                .source
+                                .get("content")
+                                .unwrap()
+                                .as_str()
+                                .unwrap()
+                                .to_string();
+
+                            let kw_hit = KwSearchHit {
+                                title,
+                                content,
+                                score,
+                            };
+
+                            kw_hits.push(kw_hit);
+                        }
+                    }
+                }
+                "gaia-tidb-search" => {
+                    let keywords =
+                        extract_keywords_by_llm(State(state.clone()), text, request_id).await?;
+
+                    info!("Extracted keywords: {}", &keywords);
+
+                    let tidb_host = match chat_request.tidb_search_host.as_ref() {
+                        Some(host) if !host.is_empty() => host.to_string(),
+                        _ => {
+                            let err_msg = "Not found `tidb_search_host` field in the request. `tidb_search_host` field is required for tidb-search-server. ";
+
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                            return Err(ServerError::BadRequest(err_msg.to_string()));
+                        }
+                    };
+
+                    let tidb_port = match chat_request.tidb_search_port {
+                        Some(port) => port,
+                        None => {
+                            let err_msg = "Not found `tidb_search_port` field in the request. `tidb_search_port` field is required for tidb-search-server. ";
+
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                            return Err(ServerError::BadRequest(err_msg.to_string()));
+                        }
+                    };
+
+                    let tidb_username = match chat_request.tidb_search_username.as_ref() {
+                        Some(username) if !username.is_empty() => username.to_string(),
+                        _ => {
+                            let err_msg = "Not found `tidb_search_username` field in the request. `tidb_search_username` field is required for tidb-search-server. ";
+
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                            return Err(ServerError::BadRequest(err_msg.to_string()));
+                        }
+                    };
+
+                    let tidb_password = match chat_request.tidb_search_password.as_ref() {
+                        Some(password) if !password.is_empty() => password.to_string(),
+                        _ => {
+                            let err_msg = "Not found `tidb_search_password` field in the request. `tidb_search_password` field is required for tidb-search-server. ";
+
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                            return Err(ServerError::BadRequest(err_msg.to_string()));
+                        }
+                    };
+
+                    let tidb_database = match chat_request.tidb_search_database.as_ref() {
+                        Some(database) if !database.is_empty() => database.to_string(),
+                        _ => {
+                            let err_msg = "Not found `tidb_search_database` field in the request. `tidb_search_database` field is required for tidb-search-server. ";
+
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                            return Err(ServerError::BadRequest(err_msg.to_string()));
+                        }
+                    };
+
+                    let tidb_table_name = match chat_request.tidb_search_table.as_ref() {
+                        Some(table_name) if !table_name.is_empty() => table_name.to_string(),
+                        _ => {
+                            let err_msg = "Not found `tidb_search_table` field in the request. `tidb_search_table` field is required for tidb-search-server. ";
+
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+                            return Err(ServerError::BadRequest(err_msg.to_string()));
+                        }
+                    };
+
+                    // request param
+                    let request_param = CallToolRequestParam {
+                        name: "search".into(),
+                        arguments: Some(serde_json::Map::from_iter([
+                            ("host".to_string(), serde_json::Value::String(tidb_host)),
+                            ("port".to_string(), serde_json::Value::from(tidb_port)),
+                            (
+                                "username".to_string(),
+                                serde_json::Value::from(tidb_username),
+                            ),
+                            (
+                                "password".to_string(),
+                                serde_json::Value::from(tidb_password),
+                            ),
+                            (
+                                "database".to_string(),
+                                serde_json::Value::from(tidb_database),
+                            ),
+                            (
+                                "table_name".to_string(),
+                                serde_json::Value::from(tidb_table_name),
+                            ),
+                            ("limit".to_string(), serde_json::Value::from(filter_limit)),
+                            ("query".to_string(), serde_json::Value::from(keywords)),
+                        ])),
+                    };
+
+                    let tool_result = mcp_client
+                        .read()
+                        .await
+                        .raw
+                        .peer()
+                        .call_tool(request_param)
+                        .await
+                        .map_err(|e| {
+                            let err_msg = format!("Failed to call the tool: {e}");
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                            ServerError::Operation(err_msg)
+                        })?;
+
+                    // parse tool result
+                    let search_response = TidbSearchResponse::from(tool_result);
+
+                    if !search_response.hits.is_empty() {
+                        for hit in search_response.hits.iter() {
+                            let kw_hit = KwSearchHit {
+                                title: hit.title.clone(),
+                                content: hit.content.clone(),
+                                score: 0.0,
+                            };
+
+                            kw_hits.push(kw_hit);
+                        }
+                    }
+                }
+                _ => {
+                    let err_msg = format!("Unsupported keyword search mcp server: {mcp_name}");
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    return Err(ServerError::Operation(err_msg));
+                }
+            }
+        }
+        None => {
+            let warn_msg = "No keyword search mcp server connected";
+            dual_warn!("{} - request_id: {}", warn_msg, request_id);
+        }
+    }
+
+    Ok(kw_hits)
+}
+
+async fn perform_vector_search(
+    State(state): State<Arc<AppState>>,
+    Extension(cancel_token): Extension<CancellationToken>,
+    headers: HeaderMap,
+    chat_request: &ChatCompletionRequest,
+    qdrant_config_vec: &[QdrantConfig],
+    request_id: &str,
+) -> ServerResult<Vec<RetrieveObject>> {
+    retrieve_context_with_multiple_qdrant_configs(
+        State(state),
+        Extension(cancel_token),
+        headers,
+        request_id,
+        chat_request,
+        qdrant_config_vec,
     )
     .await
 }
