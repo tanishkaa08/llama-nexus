@@ -1753,10 +1753,33 @@ fn weighted_fusion(
 
                     if k_score > 0.0 && v_score > 0.0 {
                         let fused_score = alpha * k_score + (1.0 - alpha) * v_score;
+
+                        dual_debug!(
+                            "Fusing scores: doc_id: {}, k_score: {}, v_score: {}, fused_score: {}",
+                            doc_id,
+                            k_score,
+                            v_score,
+                            fused_score
+                        );
+
                         (doc_id, fused_score)
                     } else if k_score > 0.0 {
+                        dual_debug!(
+                            "Fusing scores: doc_id: {}, k_score: {}, v_score: {}",
+                            doc_id,
+                            k_score,
+                            v_score,
+                        );
+
                         (doc_id, k_score)
                     } else {
+                        dual_debug!(
+                            "Fusing scores: doc_id: {}, k_score: {}, v_score: {}",
+                            doc_id,
+                            k_score,
+                            v_score,
+                        );
+
                         (doc_id, v_score)
                     }
                 })
