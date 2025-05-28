@@ -1750,8 +1750,15 @@ fn weighted_fusion(
                 .map(|doc_id| {
                     let k_score = *kw_normalized.get(&doc_id).unwrap_or(&0.0);
                     let v_score = *vector_normalized.get(&doc_id).unwrap_or(&0.0);
-                    let fused_score = alpha * k_score + (1.0 - alpha) * v_score;
-                    (doc_id, fused_score)
+
+                    if k_score > 0.0 && v_score > 0.0 {
+                        let fused_score = alpha * k_score + (1.0 - alpha) * v_score;
+                        (doc_id, fused_score)
+                    } else if k_score > 0.0 {
+                        (doc_id, k_score)
+                    } else {
+                        (doc_id, v_score)
+                    }
                 })
                 .collect()
         }
