@@ -733,6 +733,8 @@ curl --location 'http://localhost:3389/v1/chat/completions' \
   - `tidb_search_database`: Name of the TiDB database used for keyword search
   - `tidb_search_table`: Name of the TiDB table used for keyword search
 
+  <details><summary>Expand to view example request</summary>
+
   ```bash
   curl --location 'http://localhost:3389/v1/chat/completions' \
   --header 'Content-Type: application/json' \
@@ -752,6 +754,8 @@ curl --location 'http://localhost:3389/v1/chat/completions' \
       "model": "Qwen3-4B",
   }'
   ```
+
+  </details>
 
 ### Additional Parameters
 
