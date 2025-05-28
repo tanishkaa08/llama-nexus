@@ -158,22 +158,22 @@ After configuring the startup parameters, follow these steps to start llama-nexu
   First, download `gaia-qdrant-mcp-server-sse` and `gaia-kwsearch-mcp-server-sse` binaries:
 
   ```bash
-  export GAIA_MCP_VERSION=0.1.2
+  export GAIA_MCP_VERSION=0.1.3
 
   # macOS on Apple Silicon
-  curl -LO https://github.com/apepkuss/mcp-examples/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-apple-darwin-aarch64.tar.gz
+  curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-apple-darwin-aarch64.tar.gz
   tar -xvzf gaia-mcp-servers-apple-darwin-aarch64.tar.gz gaia-qdrant-mcp-server-sse gaia-kwsearch-mcp-server-sse
 
   # macOS on Intel
-  curl -LO https://github.com/apepkuss/mcp-examples/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-apple-darwin-x86_64.tar.gz
+  curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-apple-darwin-x86_64.tar.gz
   tar -xvzf gaia-mcp-servers-apple-darwin-x86_64.tar.gz gaia-qdrant-mcp-server-sse gaia-kwsearch-mcp-server-sse
 
   # Linux on x86_64
-  curl -LO https://github.com/apepkuss/mcp-examples/releases/download/{$GAIA_MCP_VERSION }/gaia-mcp-servers-unknown-linux-gnu-x86_64.tar.gz
+  curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION }/gaia-mcp-servers-unknown-linux-gnu-x86_64.tar.gz
   tar -xvzf gaia-mcp-servers-unknown-linux-gnu-x86_64.tar.gz gaia-qdrant-mcp-server-sse gaia-kwsearch-mcp-server-sse
 
   # Linux on aarch64
-  curl -LO https://github.com/apepkuss/mcp-examples/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-unknown-linux-gnu-aarch64.tar.gz
+  curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-unknown-linux-gnu-aarch64.tar.gz
   tar -xvzf gaia-mcp-servers-unknown-linux-gnu-aarch64.tar.gz gaia-qdrant-mcp-server-sse gaia-kwsearch-mcp-server-sse
   ```
 
@@ -397,6 +397,7 @@ The CURL command below sends a chat completion request to `llama-nexus`. Note: I
 curl --location 'http://localhost:3389/v1/chat/completions' \
 --header 'Content-Type: application/json' \
 --data '{
+    "model": "Qwen3-4B",
     "messages": [
         {
             "role": "system",
@@ -407,17 +408,12 @@ curl --location 'http://localhost:3389/v1/chat/completions' \
             "content": "What is the location of Paris, France along the Seine river?"
         }
     ],
-
     "vdb_server_url": "http://localhost:6333",
     "vdb_collection_name": ["paris-01"],
-    "limit": [5],
-    "score_threshold": [0.5],
-
     "kw_search_url": "http://localhost:12306",
     "kw_search_index": "paris-index-01",
-    "kw_search_limit": 5,
-    "model": "Qwen3-4B",
-    "stream": false
+    "limit": 5,
+    "score_threshold": 0.5,
 }'
 ```
 
