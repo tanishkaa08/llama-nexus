@@ -5,7 +5,11 @@ use crate::{
 };
 use chat_prompts::MergeRagContextPolicy;
 use clap::ValueEnum;
-use rmcp::{model::Tool as RmcpTool, service::ServiceExt, transport::SseClientTransport};
+use rmcp::{
+    model::{ClientCapabilities, ClientInfo, Implementation, Tool as RmcpTool},
+    service::ServiceExt,
+    transport::{SseClientTransport, StreamableHttpClientTransport},
+};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use tokio::sync::RwLock as TokioRwLock;
@@ -196,7 +200,7 @@ impl McpVectorSearchServerConfig {
                         ServerError::Operation(err_msg)
                     })?;
 
-                    // create a mcp client
+                    // create a SSE mcp client
                     let mcp_client = ()
                         .into_dyn()
                         .serve(transport)
@@ -205,6 +209,56 @@ impl McpVectorSearchServerConfig {
                             tracing::error!("client error: {:?}", e);
                         })
                         .map_err(|e| {
+                            let err_msg = format!("Failed to create vector search mcp client: {e}");
+                            dual_error!("{}", &err_msg);
+                            ServerError::Operation(err_msg)
+                        })?;
+
+                    // add mcp client to MCP_CLIENTS
+                    match MCP_VECTOR_SEARCH_CLIENT.get() {
+                        Some(client) => {
+                            let mut locked_client = client.write().await;
+                            *locked_client = McpClient::new(self.name.clone(), mcp_client);
+                        }
+                        None => {
+                            MCP_VECTOR_SEARCH_CLIENT
+                                .set(TokioRwLock::new(McpClient::new(
+                                    self.name.clone(),
+                                    mcp_client,
+                                )))
+                                .map_err(|_| {
+                                    let err_msg = "Failed to set MCP_VECTOR_SEARCH_CLIENT";
+                                    dual_error!("{}", err_msg);
+                                    ServerError::Operation(err_msg.to_string())
+                                })?;
+                        }
+                    }
+                }
+                Transport::StreamHttp => {
+                    let url = self.url.trim_end_matches('/');
+                    if !url.ends_with("/mcp") {
+                        let err_msg = format!(
+                            "Invalid vector search mcp stream-http URL: {}. The correct format should end with `/mcp`",
+                            self.url
+                        );
+                        dual_error!("{}", err_msg);
+                        return Err(ServerError::Operation(err_msg.to_string()));
+                    }
+                    dual_debug!("Sync vector search mcp server: {}", url);
+
+                    // create a stream-http transport
+                    let transport = StreamableHttpClientTransport::from_uri(url);
+
+                    let client_info = ClientInfo {
+                        protocol_version: Default::default(),
+                        capabilities: ClientCapabilities::default(),
+                        client_info: Implementation {
+                            name: "test stream-http client".to_string(),
+                            version: "0.0.1".to_string(),
+                        },
+                    };
+                    let mcp_client =
+                        client_info.into_dyn().serve(transport).await.map_err(|e| {
                             let err_msg = format!("Failed to create vector search mcp client: {e}");
                             dual_error!("{}", &err_msg);
                             ServerError::Operation(err_msg)
@@ -287,6 +341,57 @@ impl McpKeywordSearchServerConfig {
                             tracing::error!("client error: {:?}", e);
                         })
                         .map_err(|e| {
+                            let err_msg =
+                                format!("Failed to create keyword search mcp client: {e}");
+                            dual_error!("{}", &err_msg);
+                            ServerError::Operation(err_msg)
+                        })?;
+
+                    // add mcp client to MCP_CLIENTS
+                    match MCP_KEYWORD_SEARCH_CLIENT.get() {
+                        Some(client) => {
+                            let mut locked_client = client.write().await;
+                            *locked_client = McpClient::new(self.name.clone(), mcp_client);
+                        }
+                        None => {
+                            MCP_KEYWORD_SEARCH_CLIENT
+                                .set(TokioRwLock::new(McpClient::new(
+                                    self.name.clone(),
+                                    mcp_client,
+                                )))
+                                .map_err(|_| {
+                                    let err_msg = "Failed to set MCP_KEYWORD_SEARCH_CLIENT";
+                                    dual_error!("{}", err_msg);
+                                    ServerError::Operation(err_msg.to_string())
+                                })?;
+                        }
+                    }
+                }
+                Transport::StreamHttp => {
+                    let url = self.url.trim_end_matches('/');
+                    if !url.ends_with("/mcp") {
+                        let err_msg = format!(
+                            "Invalid keyword search mcp stream-http URL: {}. The correct format should end with `/mcp`",
+                            self.url
+                        );
+                        dual_error!("{}", err_msg);
+                        return Err(ServerError::Operation(err_msg.to_string()));
+                    }
+                    dual_debug!("Sync keyword search mcp server: {}", url);
+
+                    // create a stream-http transport
+                    let transport = StreamableHttpClientTransport::from_uri(url);
+
+                    let client_info = ClientInfo {
+                        protocol_version: Default::default(),
+                        capabilities: ClientCapabilities::default(),
+                        client_info: Implementation {
+                            name: "test stream-http client".to_string(),
+                            version: "0.0.1".to_string(),
+                        },
+                    };
+                    let mcp_client =
+                        client_info.into_dyn().serve(transport).await.map_err(|e| {
                             let err_msg =
                                 format!("Failed to create keyword search mcp client: {e}");
                             dual_error!("{}", &err_msg);
@@ -466,15 +571,15 @@ pub enum Transport {
     Sse,
     #[serde(rename = "stdio")]
     Stdio,
-    #[serde(rename = "streamable-http")]
-    StreamableHttp,
+    #[serde(rename = "stream-http")]
+    StreamHttp,
 }
 impl std::fmt::Display for Transport {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Transport::Sse => write!(f, "sse"),
             Transport::Stdio => write!(f, "stdio"),
-            Transport::StreamableHttp => write!(f, "streamable-http"),
+            Transport::StreamHttp => write!(f, "streamable-http"),
         }
     }
 }
