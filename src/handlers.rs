@@ -1,4 +1,5 @@
 use crate::{
+    config::McpToolServerConfig,
     dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
     info::ApiServer,
@@ -37,6 +38,40 @@ pub(crate) async fn chat_handler(
     headers: HeaderMap,
     Json(request): Json<ChatCompletionRequest>,
 ) -> ServerResult<axum::response::Response> {
+    // load mcp tools from the request
+    if let Some(mcp_tools) = &request.mcp_tools {
+        if !mcp_tools.is_empty() {
+            dual_info!("Load MCP tools from the request");
+
+            for mcp_tool in mcp_tools {
+                dual_debug!("mcp_tool: {:?}", mcp_tool);
+
+                let mut mcp_server_config = McpToolServerConfig {
+                    name: mcp_tool.server_label.clone(),
+                    transport: mcp_tool.transport,
+                    url: mcp_tool.server_url.clone(),
+                    enable: true,
+                    tools: None,
+                };
+
+                // connect the mcp server
+                mcp_server_config.connect_mcp_server().await?;
+
+                // add the mcp server config to the config
+                state
+                    .config
+                    .write()
+                    .await
+                    .mcp
+                    .as_mut()
+                    .unwrap()
+                    .server
+                    .tool_servers
+                    .push(mcp_server_config);
+            }
+        }
+    }
+
     let enable_rag = state.config.read().await.rag.enable;
     match enable_rag {
         true => {

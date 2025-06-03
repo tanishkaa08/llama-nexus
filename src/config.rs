@@ -5,6 +5,7 @@ use crate::{
 };
 use chat_prompts::MergeRagContextPolicy;
 use clap::ValueEnum;
+use endpoints::chat::McpTransport;
 use rmcp::{
     model::{ClientCapabilities, ClientInfo, Implementation, Tool as RmcpTool},
     service::ServiceExt,
@@ -170,7 +171,7 @@ pub struct McpServerConfig {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct McpVectorSearchServerConfig {
     pub name: String,
-    pub transport: Transport,
+    pub transport: McpTransport,
     pub url: String,
     pub enable: bool,
     #[serde(skip_deserializing)]
@@ -180,7 +181,7 @@ impl McpVectorSearchServerConfig {
     pub async fn connect_mcp_server(&mut self) -> ServerResult<()> {
         if self.enable {
             match self.transport {
-                Transport::Sse => {
+                McpTransport::Sse => {
                     let url = self.url.trim_end_matches('/');
                     if !url.ends_with("/sse") {
                         let err_msg = format!(
@@ -234,7 +235,7 @@ impl McpVectorSearchServerConfig {
                         }
                     }
                 }
-                Transport::StreamHttp => {
+                McpTransport::StreamHttp => {
                     let url = self.url.trim_end_matches('/');
                     if !url.ends_with("/mcp") {
                         let err_msg = format!(
@@ -302,7 +303,7 @@ impl McpVectorSearchServerConfig {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct McpKeywordSearchServerConfig {
     pub name: String,
-    pub transport: Transport,
+    pub transport: McpTransport,
     pub url: String,
     pub enable: bool,
     #[serde(skip_deserializing)]
@@ -312,7 +313,7 @@ impl McpKeywordSearchServerConfig {
     pub async fn connect_mcp_server(&mut self) -> ServerResult<()> {
         if self.enable {
             match self.transport {
-                Transport::Sse => {
+                McpTransport::Sse => {
                     let url = self.url.trim_end_matches('/');
                     if !url.ends_with("/sse") {
                         let err_msg = format!(
@@ -367,7 +368,7 @@ impl McpKeywordSearchServerConfig {
                         }
                     }
                 }
-                Transport::StreamHttp => {
+                McpTransport::StreamHttp => {
                     let url = self.url.trim_end_matches('/');
                     if !url.ends_with("/mcp") {
                         let err_msg = format!(
@@ -436,7 +437,7 @@ impl McpKeywordSearchServerConfig {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct McpToolServerConfig {
     pub name: String,
-    pub transport: Transport,
+    pub transport: McpTransport,
     pub url: String,
     pub enable: bool,
     #[serde(skip_deserializing)]
@@ -446,7 +447,7 @@ impl McpToolServerConfig {
     pub async fn connect_mcp_server(&mut self) -> ServerResult<()> {
         if self.enable {
             match self.transport {
-                Transport::Sse => {
+                McpTransport::Sse => {
                     let url = self.url.trim_end_matches('/');
                     if !url.ends_with("/sse") {
                         let err_msg = format!(
@@ -466,18 +467,11 @@ impl McpToolServerConfig {
                     })?;
 
                     // create a mcp client
-                    let mcp_client = ()
-                        .into_dyn()
-                        .serve(transport)
-                        .await
-                        .inspect_err(|e| {
-                            tracing::error!("client error: {:?}", e);
-                        })
-                        .map_err(|e| {
-                            let err_msg = format!("Failed to create mcp client: {e}");
-                            dual_error!("{}", &err_msg);
-                            ServerError::Operation(err_msg)
-                        })?;
+                    let mcp_client = ().into_dyn().serve(transport).await.map_err(|e| {
+                        let err_msg = format!("Failed to create mcp client: {e}");
+                        dual_error!("{}", &err_msg);
+                        ServerError::Operation(err_msg)
+                    })?;
 
                     // list tools
                     let tools = mcp_client
