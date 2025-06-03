@@ -20,8 +20,8 @@ use endpoints::{
     rag::vector_search::{DataFrom, RagScoredPoint, RetrieveObject},
 };
 use gaia_elastic_mcp_common::SearchResponse;
-use gaia_kwsearch_common::{KwSearchHit, SearchDocumentsResponse};
-use gaia_qdrant_common::{
+use gaia_kwsearch_mcp_common::{KwSearchHit, SearchDocumentsResponse};
+use gaia_qdrant_mcp_common::{
     CreateCollectionResponse, Point, ScoredPoint, SearchPointsResponse, UpsertPointsResponse,
 };
 use gaia_tidb_mcp_common::TidbSearchResponse;
@@ -367,23 +367,6 @@ async fn perform_keyword_search(
 
                     info!("Extracted keywords: {}", &keywords);
 
-                    let kw_search_url = match chat_request.kw_search_url.as_ref() {
-                        Some(url) if !url.is_empty() => {
-                            let url = url.trim_end_matches('/');
-                            dual_info!(
-                                "URL to the kw-search mcp-server: {} - request_id: {}",
-                                url,
-                                request_id
-                            );
-                            url.to_string()
-                        }
-                        _ => {
-                            let err_msg = "Not found `kw_search_url` field in the request. `kw_search_url` field is required for kw-search-server. ";
-                            dual_error!("{} - request_id: {}", err_msg, request_id);
-                            return Err(ServerError::BadRequest(err_msg.to_string()));
-                        }
-                    };
-
                     let kw_search_index = match chat_request.kw_search_index.as_ref() {
                         Some(index) if !index.is_empty() => index.to_string(),
                         _ => {
@@ -397,7 +380,6 @@ async fn perform_keyword_search(
                     let request_param = CallToolRequestParam {
                         name: "search_documents".into(),
                         arguments: Some(serde_json::Map::from_iter([
-                            ("base_url".to_string(), Value::from(kw_search_url)),
                             ("index_name".to_string(), Value::from(kw_search_index)),
                             ("query".to_string(), Value::from(keywords)),
                             ("limit".to_string(), Value::from(filter_limit)),
@@ -422,27 +404,6 @@ async fn perform_keyword_search(
                     kw_hits = search_response.hits;
                 }
                 "gaia-elastic-search" => {
-                    let es_search_url = match chat_request.es_search_url.as_ref() {
-                        Some(url) if !url.is_empty() => {
-                            let url = url.trim_end_matches('/');
-
-                            dual_info!(
-                                "URL to the es-search mcp-server: {} - request_id: {}",
-                                url,
-                                request_id
-                            );
-
-                            url.to_string()
-                        }
-                        _ => {
-                            let err_msg = "Not found `es_search_url` field in the request. `es_search_url` field is required for Elasticsearch server. ";
-
-                            dual_error!("{} - request_id: {}", err_msg, request_id);
-
-                            return Err(ServerError::BadRequest(err_msg.to_string()));
-                        }
-                    };
-
                     let es_search_index = match chat_request.es_search_index.as_ref() {
                         Some(index) if !index.is_empty() => {
                             let index = index.clone();
@@ -456,16 +417,6 @@ async fn perform_keyword_search(
 
                             dual_error!("{} - request_id: {}", err_msg, request_id);
 
-                            return Err(ServerError::BadRequest(err_msg.to_string()));
-                        }
-                    };
-
-                    // parse api key
-                    let api_key = match &chat_request.es_api_key {
-                        Some(api_key) => api_key.clone(),
-                        None => {
-                            let err_msg = "No elastic search api key provided";
-                            dual_error!("{} - request_id: {}", err_msg, request_id);
                             return Err(ServerError::BadRequest(err_msg.to_string()));
                         }
                     };
@@ -500,12 +451,10 @@ async fn perform_keyword_search(
                     let request_param = CallToolRequestParam {
                         name: "search".into(),
                         arguments: Some(serde_json::Map::from_iter([
-                            ("base_url".to_string(), Value::from(es_search_url)),
                             ("index".to_string(), Value::from(es_search_index)),
                             ("query".to_string(), Value::from(text.to_string())),
                             ("fields".to_string(), Value::Array(es_search_fields)),
                             ("size".to_string(), Value::from(filter_limit)),
-                            ("api_key".to_string(), serde_json::Value::String(api_key)),
                         ])),
                     };
 
@@ -560,50 +509,6 @@ async fn perform_keyword_search(
 
                     info!("Extracted keywords: {}", &keywords);
 
-                    let tidb_host = match chat_request.tidb_search_host.as_ref() {
-                        Some(host) if !host.is_empty() => host.to_string(),
-                        _ => {
-                            let err_msg = "Not found `tidb_search_host` field in the request. `tidb_search_host` field is required for tidb-search-server. ";
-
-                            dual_error!("{} - request_id: {}", err_msg, request_id);
-
-                            return Err(ServerError::BadRequest(err_msg.to_string()));
-                        }
-                    };
-
-                    let tidb_port = match chat_request.tidb_search_port {
-                        Some(port) => port,
-                        None => {
-                            let err_msg = "Not found `tidb_search_port` field in the request. `tidb_search_port` field is required for tidb-search-server. ";
-
-                            dual_error!("{} - request_id: {}", err_msg, request_id);
-
-                            return Err(ServerError::BadRequest(err_msg.to_string()));
-                        }
-                    };
-
-                    let tidb_username = match chat_request.tidb_search_username.as_ref() {
-                        Some(username) if !username.is_empty() => username.to_string(),
-                        _ => {
-                            let err_msg = "Not found `tidb_search_username` field in the request. `tidb_search_username` field is required for tidb-search-server. ";
-
-                            dual_error!("{} - request_id: {}", err_msg, request_id);
-
-                            return Err(ServerError::BadRequest(err_msg.to_string()));
-                        }
-                    };
-
-                    let tidb_password = match chat_request.tidb_search_password.as_ref() {
-                        Some(password) if !password.is_empty() => password.to_string(),
-                        _ => {
-                            let err_msg = "Not found `tidb_search_password` field in the request. `tidb_search_password` field is required for tidb-search-server. ";
-
-                            dual_error!("{} - request_id: {}", err_msg, request_id);
-
-                            return Err(ServerError::BadRequest(err_msg.to_string()));
-                        }
-                    };
-
                     let tidb_database = match chat_request.tidb_search_database.as_ref() {
                         Some(database) if !database.is_empty() => database.to_string(),
                         _ => {
@@ -630,16 +535,6 @@ async fn perform_keyword_search(
                     let request_param = CallToolRequestParam {
                         name: "search".into(),
                         arguments: Some(serde_json::Map::from_iter([
-                            ("host".to_string(), serde_json::Value::String(tidb_host)),
-                            ("port".to_string(), serde_json::Value::from(tidb_port)),
-                            (
-                                "username".to_string(),
-                                serde_json::Value::from(tidb_username),
-                            ),
-                            (
-                                "password".to_string(),
-                                serde_json::Value::from(tidb_password),
-                            ),
                             (
                                 "database".to_string(),
                                 serde_json::Value::from(tidb_database),
@@ -724,11 +619,8 @@ async fn get_qdrant_configs(
 ) -> Result<Vec<QdrantConfig>, ServerError> {
     let request_id = request_id.as_ref();
 
-    match (
-        chat_request.vdb_server_url.as_deref(),
-        chat_request.vdb_collection_name.as_deref(),
-    ) {
-        (Some(url), Some(collection_name)) => {
+    match chat_request.vdb_collection_name.as_deref() {
+        Some(collection_name) if !collection_name.is_empty() => {
             dual_info!(
                 "Use the VectorDB settings from the request - request_id: {}",
                 request_id
@@ -737,8 +629,7 @@ async fn get_qdrant_configs(
             let collection_name_str = collection_name.join(",");
 
             dual_info!(
-                "qdrant url: {}, collection name: {} - request_id: {}",
-                url,
+                "collection name: {} - request_id: {}",
                 collection_name_str,
                 request_id
             );
@@ -746,7 +637,6 @@ async fn get_qdrant_configs(
             let mut qdrant_config_vec = vec![];
             for col_name in collection_name.iter() {
                 qdrant_config_vec.push(QdrantConfig {
-                    url: url.to_string(),
                     collection_name: col_name.to_string(),
                     limit,
                     score_threshold,
@@ -756,7 +646,7 @@ async fn get_qdrant_configs(
             Ok(qdrant_config_vec)
         }
         _ => {
-            let err_msg = "The settings for vector search in the request are not correct. The `vdb_server_url` and `vdb_collection_name` fields in the request should be provided.";
+            let err_msg = "The settings for vector search in the request are not correct. The `vdb_collection_name` field in the request should be provided.";
 
             dual_error!("{} - request_id: {}", err_msg, request_id);
 
@@ -767,7 +657,6 @@ async fn get_qdrant_configs(
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct QdrantConfig {
-    pub(crate) url: String,
     pub(crate) collection_name: String,
     pub(crate) limit: u64,
     pub(crate) score_threshold: f32,
@@ -776,8 +665,8 @@ impl fmt::Display for QdrantConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "url: {}, collection_name: {}, limit: {}, score_threshold: {}",
-            self.url, self.collection_name, self.limit, self.score_threshold
+            "collection_name: {}, limit: {}, score_threshold: {}",
+            self.collection_name, self.limit, self.score_threshold
         )
     }
 }
@@ -984,18 +873,10 @@ async fn retrieve_context_with_single_qdrant_config(
         }
     };
 
-    // get vdb_api_key if it is provided in the request, otherwise get it from the environment variable `VDB_API_KEY`
-    let vdb_api_key = chat_request
-        .vdb_api_key
-        .clone()
-        .or_else(|| std::env::var("VDB_API_KEY").ok());
-
     // perform the context retrieval
     let mut retrieve_object: RetrieveObject = match retrieve_context(
         query_embedding.as_slice(),
-        &qdrant_config.url,
         &qdrant_config.collection_name,
-        vdb_api_key,
         qdrant_config.limit as usize,
         Some(qdrant_config.score_threshold),
         request_id,
@@ -1028,9 +909,7 @@ async fn retrieve_context_with_single_qdrant_config(
 
 async fn retrieve_context(
     query_embedding: &[f32],
-    vdb_server_url: impl AsRef<str>,
     vdb_collection_name: impl AsRef<str>,
-    vdb_api_key: Option<String>,
     limit: usize,
     score_threshold: Option<f32>,
     request_id: impl AsRef<str>,
@@ -1038,8 +917,7 @@ async fn retrieve_context(
     let request_id = request_id.as_ref();
 
     dual_info!(
-        "Retrieve context from {}/collections/{}, max number of result to return: {}, score threshold: {} - request_id: {}",
-        vdb_server_url.as_ref(),
+        "Retrieve context from collection `{}`, max number of result to return: {}, score threshold: {} - request_id: {}",
         vdb_collection_name.as_ref(),
         limit,
         score_threshold.unwrap_or_default(),
@@ -1050,46 +928,20 @@ async fn retrieve_context(
     let scored_points = match MCP_VECTOR_SEARCH_CLIENT.get() {
         Some(mcp_client) => {
             // request param
-            let request_param = match vdb_api_key {
-                Some(api_key) => CallToolRequestParam {
-                    name: "search_points".into(),
-                    arguments: Some(serde_json::Map::from_iter([
-                        (
-                            "base_url".to_string(),
-                            Value::from(vdb_server_url.as_ref().to_string()),
-                        ),
-                        ("api_key".to_string(), Value::from(api_key)),
-                        (
-                            "name".to_string(),
-                            Value::from(vdb_collection_name.as_ref().to_string()),
-                        ),
-                        ("vector".to_string(), Value::from(query_embedding.to_vec())),
-                        ("limit".to_string(), Value::from(limit as u64)),
-                        (
-                            "score_threshold".to_string(),
-                            Value::from(score_threshold.unwrap_or(0.0)),
-                        ),
-                    ])),
-                },
-                None => CallToolRequestParam {
-                    name: "search_points".into(),
-                    arguments: Some(serde_json::Map::from_iter([
-                        (
-                            "base_url".to_string(),
-                            Value::from(vdb_server_url.as_ref().to_string()),
-                        ),
-                        (
-                            "name".to_string(),
-                            Value::from(vdb_collection_name.as_ref().to_string()),
-                        ),
-                        ("vector".to_string(), Value::from(query_embedding.to_vec())),
-                        ("limit".to_string(), Value::from(limit as u64)),
-                        (
-                            "score_threshold".to_string(),
-                            Value::from(score_threshold.unwrap_or(0.0)),
-                        ),
-                    ])),
-                },
+            let request_param = CallToolRequestParam {
+                name: "search_points".into(),
+                arguments: Some(serde_json::Map::from_iter([
+                    (
+                        "name".to_string(),
+                        Value::from(vdb_collection_name.as_ref().to_string()),
+                    ),
+                    ("vector".to_string(), Value::from(query_embedding.to_vec())),
+                    ("limit".to_string(), Value::from(limit as u64)),
+                    (
+                        "score_threshold".to_string(),
+                        Value::from(score_threshold.unwrap_or(0.0)),
+                    ),
+                ])),
             };
 
             // call the search_points tool

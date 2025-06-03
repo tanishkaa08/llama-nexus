@@ -24,7 +24,7 @@ use endpoints::{
     models::ListModelsResponse,
 };
 use futures_util::StreamExt;
-use gaia_kwsearch_common::{CreateIndexResponse, KwDocumentInput};
+use gaia_kwsearch_mcp_common::{CreateIndexResponse, KwDocumentInput};
 use reqwest::header::CONTENT_TYPE;
 use rmcp::model::{CallToolRequestParam, RawContent};
 use std::{sync::Arc, time::SystemTime};
@@ -1659,10 +1659,6 @@ pub(crate) async fn create_rag_handler(
                             let request_param = CallToolRequestParam {
                                 name: "create_index".into(),
                                 arguments: Some(serde_json::Map::from_iter([
-                                    (
-                                        "base_url".to_string(),
-                                        serde_json::Value::from(kw_search_url),
-                                    ),
                                     (
                                         "name".to_string(),
                                         serde_json::Value::from(kw_search_index_name),
