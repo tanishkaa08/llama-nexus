@@ -451,13 +451,13 @@ impl McpToolServerConfig {
                     let url = self.url.trim_end_matches('/');
                     if !url.ends_with("/sse") {
                         let err_msg = format!(
-                            "Invalid sse URL: {}. The correct format should end with `/sse`",
+                            "Invalid mcp tools sse URL: {}. The correct format should end with `/sse`",
                             self.url
                         );
                         dual_error!("{}", err_msg);
                         return Err(ServerError::Operation(err_msg.to_string()));
                     }
-                    dual_debug!("Retrieve mcp tools from mcp server: {}", url);
+                    dual_debug!("Sync mcp tools from mcp server: {}", url);
 
                     // create a sse transport
                     let transport = SseClientTransport::start(url).await.map_err(|e| {
@@ -472,6 +472,111 @@ impl McpToolServerConfig {
                         dual_error!("{}", &err_msg);
                         ServerError::Operation(err_msg)
                     })?;
+
+                    // list tools
+                    let tools = mcp_client
+                        .peer()
+                        .list_tools(Default::default())
+                        .await
+                        .map_err(|e| {
+                            let err_msg = format!("Failed to list tools: {e}");
+                            dual_error!("{}", &err_msg);
+                            ServerError::Operation(err_msg)
+                        })?;
+                    dual_info!(
+                        "Found {} tools from {} mcp server",
+                        &tools.tools.len(),
+                        self.name,
+                    );
+
+                    dual_debug!(
+                        "Retrieved mcp tools: {}",
+                        serde_json::to_string_pretty(&tools).unwrap()
+                    );
+
+                    // update tools
+                    self.tools = Some(tools.tools.clone());
+
+                    // print name of all tools
+                    for (idx, tool) in tools.tools.iter().enumerate() {
+                        dual_debug!(
+                            "Tool {} - name: {}, description: {}",
+                            idx,
+                            tool.name,
+                            tool.description.as_deref().unwrap_or("No description"),
+                        );
+
+                        match MCP_TOOLS.get() {
+                            Some(mcp_tools) => {
+                                let mut tools = mcp_tools.write().await;
+                                tools.insert(tool.name.to_string(), self.name.clone());
+                            }
+                            None => {
+                                let tools =
+                                    HashMap::from([(tool.name.to_string(), self.name.clone())]);
+
+                                MCP_TOOLS.set(TokioRwLock::new(tools)).map_err(|_| {
+                                    let err_msg = "Failed to set MCP_TOOLS";
+                                    dual_error!("{}", err_msg);
+                                    ServerError::Operation(err_msg.to_string())
+                                })?;
+                            }
+                        }
+                    }
+
+                    // add mcp client to MCP_CLIENTS
+                    match MCP_CLIENTS.get() {
+                        Some(clients) => {
+                            let mut clients = clients.write().await;
+                            clients.insert(
+                                self.name.clone(),
+                                TokioRwLock::new(McpClient::new(self.name.clone(), mcp_client)),
+                            );
+                        }
+                        None => {
+                            MCP_CLIENTS
+                                .set(TokioRwLock::new(HashMap::from([(
+                                    self.name.clone(),
+                                    TokioRwLock::new(McpClient::new(self.name.clone(), mcp_client)),
+                                )])))
+                                .map_err(|_| {
+                                    let err_msg = "Failed to set MCP_CLIENTS";
+                                    dual_error!("{}", err_msg);
+                                    ServerError::Operation(err_msg.to_string())
+                                })?;
+                        }
+                    }
+                }
+                McpTransport::StreamHttp => {
+                    let url = self.url.trim_end_matches('/');
+                    if !url.ends_with("/mcp") {
+                        let err_msg = format!(
+                            "Invalid mcp tools stream-http URL: {}. The correct format should end with `/mcp`",
+                            self.url
+                        );
+                        dual_error!("{}", err_msg);
+                        return Err(ServerError::Operation(err_msg.to_string()));
+                    }
+                    dual_debug!("Sync mcp tools from mcp server: {}", url);
+
+                    // create a stream-http transport
+                    let transport = StreamableHttpClientTransport::from_uri(url);
+
+                    // create a mcp client
+                    let client_info = ClientInfo {
+                        protocol_version: Default::default(),
+                        capabilities: ClientCapabilities::default(),
+                        client_info: Implementation {
+                            name: "test stream-http client".to_string(),
+                            version: "0.0.1".to_string(),
+                        },
+                    };
+                    let mcp_client =
+                        client_info.into_dyn().serve(transport).await.map_err(|e| {
+                            let err_msg = format!("Failed to create mcp client: {e}");
+                            dual_error!("{}", &err_msg);
+                            ServerError::Operation(err_msg)
+                        })?;
 
                     // list tools
                     let tools = mcp_client
