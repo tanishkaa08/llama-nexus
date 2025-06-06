@@ -3,32 +3,7 @@ host = "127.0.0.1" # The host to listen on.
 port = 3389        # The port to listen on.
 
 
-# Section 1: MCP Tool Servers
-#
-# The following items are the configuration for the MCP tool servers:
-#
-# - name: The name of the MCP tool server.
-# - transport: The transport protocol to use. Possible values: "sse", "stdio", "streamable-http". Note that ONLY "sse" is supported for now.
-# - url: The URL of the MCP tool server.
-# - enable: Whether to enable the MCP tool server.
-#
-# Note that, if any of the MCP tool servers are enabled, then please guarantee that the
-# corresponding mcp server is started.
-
-[[mcp.server.tool]]
-name      = "gaia-calculator"
-transport = "sse"
-url       = "http://127.0.0.1:8001/sse"
-enable    = false
-
-[[mcp.server.tool]]
-name      = "gaia-weather"
-transport = "sse"
-url       = "http://127.0.0.1:8002/sse"
-enable    = false
-
-
-# Section 2: RAG
+# Section 1: RAG
 #
 # The following items are the configuration for the RAG service:
 #
@@ -46,7 +21,7 @@ prompt         = "# Context\n\nPlease answer the user question based on the foll
 context_window = 1
 
 
-# Section 2.1: Vector Search
+# Section 1.1: Vector Search
 #
 # The following items are the vector search mcp server configurations:
 #
@@ -65,7 +40,7 @@ url       = "http://127.0.0.1:8003/sse"
 enable    = false
 
 
-# Section 2.2: Keyword Search
+# Section 1.2: Keyword Search
 #
 # The following items are the keyword search mcp server configurations:
 #
