@@ -13,7 +13,7 @@ dependencies = [
  "chat-prompts",
  "clap",
  "config",
- "endpoints 0.29.0 (git+https://github.com/LlamaEdge/LlamaEdge.git?branch=dev)",
+ "endpoints",
  "futures-util",
  "gaia-elastic-mcp-common",
  "gaia-kwsearch-mcp-common",
@@ -470,12 +470,13 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chat-prompts"
-version = "0.31.0"
-source = "git+https://github.com/LlamaEdge/LlamaEdge.git?branch=dev#8048ad079f467e75eb1e36d3149657a089cf27e2"
+version = "0.31.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e09b3306dc5b14298de768c4f946c58f3916f329838d82953f895fc016a1ed48"
 dependencies = [
  "base64 0.22.1",
  "clap",
- "endpoints 0.29.0 (git+https://github.com/LlamaEdge/LlamaEdge.git?branch=dev)",
+ "endpoints",
  "enum_dispatch",
  "image",
  "serde",
@@ -852,20 +853,9 @@ dependencies = [
 
 [[package]]
 name = "endpoints"
-version = "0.29.0"
+version = "0.30.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1718655b869a7e4e63b8c6cdcf6d1e6ae825162c23fa31fbceb10028a2bda53"
-dependencies = [
- "indexmap",
- "serde",
- "serde_json",
- "url",
-]
-
-[[package]]
-name = "endpoints"
-version = "0.29.0"
-source = "git+https://github.com/LlamaEdge/LlamaEdge.git?branch=dev#8048ad079f467e75eb1e36d3149657a089cf27e2"
+checksum = "aca58dc5ab8dd9936dafb34ed2978dbf18cdb6ab519e2ececb1e017ed03fd173"
 dependencies = [
  "indexmap",
  "serde",
@@ -1091,7 +1081,7 @@ dependencies = [
 [[package]]
 name = "gaia-elastic-mcp-common"
 version = "0.2.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=main#b236855bacb492157a68c441eb5bb0f1ce26a52d"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=dev#720a2a0b4a1f9b8fdeda9be0f8ecf5a4b4e4c529"
 dependencies = [
  "rmcp",
  "serde",
@@ -1101,10 +1091,10 @@ dependencies = [
 [[package]]
 name = "gaia-kwsearch-mcp-common"
 version = "0.1.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=main#b236855bacb492157a68c441eb5bb0f1ce26a52d"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=dev#720a2a0b4a1f9b8fdeda9be0f8ecf5a4b4e4c529"
 dependencies = [
  "anyhow",
- "endpoints 0.29.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "endpoints",
  "futures",
  "hyper 1.6.0",
  "hyper-util",
@@ -1112,7 +1102,7 @@ dependencies = [
  "rand 0.8.5",
  "reqwest 0.12.19",
  "rmcp",
- "schemars",
+ "schemars 0.9.0",
  "serde",
  "serde_json",
  "tokio",
@@ -1124,7 +1114,7 @@ dependencies = [
 [[package]]
 name = "gaia-qdrant-mcp-common"
 version = "0.1.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=main#b236855bacb492157a68c441eb5bb0f1ce26a52d"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=dev#720a2a0b4a1f9b8fdeda9be0f8ecf5a4b4e4c529"
 dependencies = [
  "rmcp",
  "serde",
@@ -1134,9 +1124,9 @@ dependencies = [
 [[package]]
 name = "gaia-tidb-mcp-common"
 version = "0.2.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=main#b236855bacb492157a68c441eb5bb0f1ce26a52d"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=dev#720a2a0b4a1f9b8fdeda9be0f8ecf5a4b4e4c529"
 dependencies = [
- "endpoints 0.29.0 (registry+https://github.com/rust-lang/crates.io-index)",
+ "endpoints",
  "mysql",
  "rmcp",
  "serde",
@@ -2846,6 +2836,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "ref-cast"
+version = "1.0.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4a0ae411dbe946a674d89546582cea4ba2bb8defac896622d6496f14c23ba5cf"
+dependencies = [
+ "ref-cast-impl",
+]
+
+[[package]]
+name = "ref-cast-impl"
+version = "1.0.24"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1165225c21bff1f3bbce98f5a1f889949bc902d3575308cc7b0de30b4f6d27c7"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "regex"
 version = "1.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3015,7 +3025,7 @@ dependencies = [
  "pin-project-lite",
  "reqwest 0.12.19",
  "rmcp-macros",
- "schemars",
+ "schemars 0.8.22",
  "serde",
  "serde_json",
  "sse-stream",
@@ -3201,7 +3211,20 @@ checksum = "3fbf2ae1b8bc8e02df939598064d22402220cd5bbcca1c76f7d6a310974d5615"
 dependencies = [
  "chrono",
  "dyn-clone",
- "schemars_derive",
+ "schemars_derive 0.8.22",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "schemars"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "4cd191f9397d57d581cddd31014772520aa448f65ef991055d7f61582c65165f"
+dependencies = [
+ "dyn-clone",
+ "ref-cast",
+ "schemars_derive 0.9.0",
  "serde",
  "serde_json",
 ]
@@ -3211,6 +3234,18 @@ name = "schemars_derive"
 version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32e265784ad618884abaea0600a9adf15393368d840e0222d101a072f3f7534d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "serde_derive_internals",
+ "syn",
+]
+
+[[package]]
+name = "schemars_derive"
+version = "0.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5016d94c77c6d32f0b8e08b781f7dc8a90c2007d4e77472cc2807bc10a8438fe"
 dependencies = [
  "proc-macro2",
  "quote",
