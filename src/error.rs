@@ -15,8 +15,6 @@ pub enum ServerError {
     BadRequest(String),
     #[error("Failed to load config: {0}")]
     FailedToLoadConfig(String),
-    #[error("Failed to list tools: {0}")]
-    McpOperation(String),
     #[error("Mcp server returned empty content")]
     McpEmptyContent,
     #[error("Mcp server not found")]
@@ -30,7 +28,6 @@ impl IntoResponse for ServerError {
             ServerError::InvalidServerKind(e) => (StatusCode::BAD_REQUEST, e.to_string()),
             ServerError::BadRequest(e) => (StatusCode::BAD_REQUEST, e.to_string()),
             ServerError::FailedToLoadConfig(e) => (StatusCode::BAD_REQUEST, e.to_string()),
-            ServerError::McpOperation(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
             ServerError::McpEmptyContent => (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 "Mcp server returned empty content".to_string(),
