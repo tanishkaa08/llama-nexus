@@ -3,8 +3,7 @@ use crate::{
     dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
     info::ApiServer,
-    mcp::MCP_KEYWORD_SEARCH_CLIENT,
-    mcp::{MCP_CLIENTS, MCP_TOOLS},
+    mcp::{MCP_KEYWORD_SEARCH_CLIENT, USER_TO_MCP_CLIENTS, USER_TO_MCP_TOOLS},
     rag,
     server::{RoutingPolicy, Server, ServerIdToRemove, ServerKind},
     AppState,
@@ -36,41 +35,13 @@ pub(crate) async fn chat_handler(
     State(state): State<Arc<AppState>>,
     Extension(cancel_token): Extension<CancellationToken>,
     headers: HeaderMap,
-    Json(request): Json<ChatCompletionRequest>,
+    Json(mut request): Json<ChatCompletionRequest>,
 ) -> ServerResult<axum::response::Response> {
-    // load mcp tools from the request
-    if let Some(mcp_tools) = &request.mcp_tools {
-        if !mcp_tools.is_empty() {
-            dual_info!("Load MCP tools from the request");
-
-            for mcp_tool in mcp_tools {
-                dual_debug!("mcp_tool: {:?}", mcp_tool);
-
-                let mut mcp_server_config = McpToolServerConfig {
-                    name: mcp_tool.server_label.clone(),
-                    transport: mcp_tool.transport,
-                    url: mcp_tool.server_url.clone(),
-                    enable: true,
-                    tools: None,
-                };
-
-                // connect the mcp server
-                mcp_server_config.connect_mcp_server().await?;
-
-                // add the mcp server config to the config
-                state
-                    .config
-                    .write()
-                    .await
-                    .mcp
-                    .as_mut()
-                    .unwrap()
-                    .server
-                    .tool_servers
-                    .push(mcp_server_config);
-            }
-        }
-    }
+    // check if the user id is provided
+    if request.user.is_none() {
+        request.user = Some(gen_chat_id());
+    };
+    dual_info!("user: {}", request.user.as_ref().unwrap());
 
     let enable_rag = state.config.read().await.rag.enable;
     match enable_rag {
@@ -131,29 +102,48 @@ pub(crate) async fn chat(
         }
     };
 
-    // update the request with MCP tools
-    if let Some(mcp_config) = state.config.read().await.mcp.as_ref() {
-        if !mcp_config.server.tool_servers.is_empty() {
+    // load tools from the `mcp_tools` field in the request
+    if let Some(config_mcp_servers) = &request.mcp_tools {
+        if !config_mcp_servers.is_empty() {
             let mut more_tools = Vec::new();
-            for server_config in mcp_config.server.tool_servers.iter() {
-                if server_config.enable {
-                    server_config
-                        .tools
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .for_each(|mcp_tool| {
-                            let tool = Tool::new(ToolFunction {
-                                name: mcp_tool.name.to_string(),
-                                description: mcp_tool.description.as_ref().map(|s| s.to_string()),
-                                parameters: Some((*mcp_tool.input_schema).clone()),
-                            });
+            for config in config_mcp_servers {
+                dual_debug!("mcp server info: {:?}", config);
 
-                            more_tools.push(tool.clone());
+                let mut server_config = McpToolServerConfig {
+                    name: config.server_label.clone(),
+                    transport: config.transport,
+                    url: config.server_url.clone(),
+                    enable: true,
+                    tools: None,
+                };
+
+                // connect the mcp server and get the tools
+                server_config
+                    .connect_mcp_server(request.user.as_ref().unwrap())
+                    .await?;
+
+                // get the allowed tools
+                let allowed_tools = config.allowed_tools.as_deref().unwrap_or(&[]);
+
+                // get the tools from the mcp server
+                if let Some(tools) = server_config.tools.as_deref() {
+                    tools.iter().for_each(|rmcp_tool| {
+                        let tool_name = rmcp_tool.name.to_string();
+                        let tool = Tool::new(ToolFunction {
+                            name: tool_name.clone(),
+                            description: rmcp_tool.description.as_ref().map(|s| s.to_string()),
+                            parameters: Some((*rmcp_tool.input_schema).clone()),
                         });
+
+                        if allowed_tools.is_empty() || allowed_tools.contains(&tool_name) {
+                            dual_debug!("tool to be added: {:?}", &tool);
+                            more_tools.push(tool.clone());
+                        }
+                    });
                 }
             }
 
+            // update the request with MCP tools
             if !more_tools.is_empty() {
                 if let Some(tools) = &mut request.tools {
                     tools.extend(more_tools);
@@ -482,6 +472,16 @@ async fn call_mcp_server(
     let request_id = request_id.as_ref();
     let chat_service_url = chat_service_url.as_ref();
 
+    // get the user id from the request
+    let user_id = match request.user.as_ref() {
+        Some(user_id) => user_id,
+        None => {
+            let err_msg = "User ID is not found in the request";
+            dual_error!("{} - request_id: {}", err_msg, request_id);
+            return Err(ServerError::Operation(err_msg.to_string()));
+        }
+    };
+
     // let tool_calls = assistant_message.tool_calls.clone();
     let tool_call = &tool_calls[0];
     let tool_name = tool_call.function.name.as_str();
@@ -498,61 +498,76 @@ async fn call_mcp_server(
     let arguments =
         serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(tool_args).ok();
 
-    // find mcp client by tool name
-    if let Some(mcp_tools) = MCP_TOOLS.get() {
-        let tools = mcp_tools.read().await;
-        dual_debug!("mcp_tools: {:?}", mcp_tools);
+    // get the mcp client by user id and tool name, then call the tool
+    let response = match USER_TO_MCP_TOOLS.get() {
+        Some(user_to_mcp_tools) => {
+            let user_to_mcp_tools = user_to_mcp_tools.read().await;
+            match user_to_mcp_tools.get(user_id) {
+                Some(mcp_tools) => {
+                    let mcp_tools = mcp_tools.read().await;
+                    match mcp_tools.get(tool_name) {
+                        Some(mcp_client_name) => {
+                            match USER_TO_MCP_CLIENTS.get() {
+                                Some(user_to_mcp_clients) => {
+                                    let user_to_mcp_clients = user_to_mcp_clients.read().await;
+                                    match user_to_mcp_clients.get(user_id) {
+                                        Some(mcp_clients) => {
+                                            let mcp_clients = mcp_clients.read().await;
+                                            match mcp_clients.get(mcp_client_name) {
+                                                Some(mcp_client) => {
+                                                    // call a tool
+                                                    let request_param = CallToolRequestParam {
+                                                        name: tool_name.to_string().into(),
+                                                        arguments,
+                                                    };
+                                                    let res = mcp_client
+                                                        .read()
+                                                        .await
+                                                        .raw
+                                                        .peer()
+                                                        .call_tool(request_param)
+                                                        .await
+                                                        .map_err(|e| {
+                                                            dual_error!(
+                                                                "Failed to call the tool: {}",
+                                                                e
+                                                            );
+                                                            ServerError::Operation(e.to_string())
+                                                        })?;
+                                                    dual_debug!(
+                                                        "{} - request_id: {}",
+                                                        serde_json::to_string_pretty(&res).unwrap(),
+                                                        request_id
+                                                    );
 
-        // look up the tool name in MCP_TOOLS
-        if let Some(mcp_client_name) = tools.get(tool_name) {
-            if let Some(lock_mcp_clients) = MCP_CLIENTS.get() {
-                let mcp_clients = lock_mcp_clients.read().await;
+                                                    match res.is_error {
+                                                        Some(false) => {
+                                                            match res.content.is_empty() {
+                                                                true => {
+                                                                    dual_error!(
+                                    "MCP server returned empty content - request_id: {}",
+                                    request_id
+                                );
+                                                                    Err(ServerError::McpEmptyContent)
+                                                                }
+                                                                false => {
+                                                                    let content = &res.content[0];
+                                                                    match &content.raw {
+                                                                        RawContent::Text(text) => {
+                                                                            dual_debug!(
+                                            "tool result: {} - request_id: {}",
+                                            text.text,
+                                            request_id
+                                        );
 
-                // get the mcp client
-                let mcp_client = match mcp_clients.get(mcp_client_name) {
-                    Some(mcp_client) => mcp_client,
-                    None => {
-                        dual_error!("Tool not found: {}", tool_name);
-                        return Err(ServerError::McpOperation(tool_name.to_string()));
-                    }
-                };
-
-                // call a tool
-                let tool_sum = CallToolRequestParam {
-                    name: tool_name.to_string().into(),
-                    arguments,
-                };
-                let res = mcp_client
-                    .read()
-                    .await
-                    .raw
-                    .peer()
-                    .call_tool(tool_sum)
-                    .await
-                    .map_err(|e| {
-                        dual_error!("Failed to call the tool: {}", e);
-                        ServerError::Operation(e.to_string())
-                    })?;
-                dual_debug!("{}", serde_json::to_string_pretty(&res).unwrap());
-
-                match res.is_error {
-                    Some(false) => {
-                        match res.content.is_empty() {
-                            true => Err(ServerError::McpEmptyContent),
-                            false => {
-                                let content = &res.content[0];
-                                match &content.raw {
-                                    RawContent::Text(text) => {
-                                        dual_debug!("tool result: {}", text.text);
-
-                                        // create an assistant message
-                                        let tool_completion_message =
+                                                                            // create an assistant message
+                                                                            let tool_completion_message =
                                             ChatCompletionRequestMessage::Tool(
                                                 ChatCompletionToolMessage::new(&text.text, None),
                                             );
 
-                                        // append assistant message with tool call to request messages
-                                        let assistant_completion_message =
+                                                                            // append assistant message with tool call to request messages
+                                                                            let assistant_completion_message =
                                             ChatCompletionRequestMessage::Assistant(
                                                 ChatCompletionAssistantMessage::new(
                                                     None,
@@ -560,61 +575,73 @@ async fn call_mcp_server(
                                                     Some(tool_calls.to_vec()),
                                                 ),
                                             );
-                                        request.messages.push(assistant_completion_message);
-                                        // append tool message with tool result to request messages
-                                        request.messages.push(tool_completion_message);
+                                                                            request.messages.push(assistant_completion_message);
+                                                                            // append tool message with tool result to request messages
+                                                                            request.messages.push(tool_completion_message);
 
-                                        // Create a request client that can be cancelled
-                                        let request_builder = reqwest::Client::new()
+                                                                            // Create a request client that can be cancelled
+                                                                            let request_builder = reqwest::Client::new()
                                             .post(chat_service_url)
                                             .header(CONTENT_TYPE, "application/json")
                                             .json(&request);
 
-                                        // Use select! to handle request cancellation
-                                        let ds_response = select! {
-                                            response = request_builder.send() => {
-                                                response.map_err(|e| {
-                                                    let err_msg = format!(
-                                                        "Failed to forward the request to the downstream server: {e}"
-                                                    );
-                                                    dual_error!("{} - request_id: {}", err_msg, request_id);
-                                                    ServerError::Operation(err_msg)
-                                                })?
-                                            }
-                                            _ = cancel_token.cancelled() => {
-                                                let warn_msg = "Request was cancelled by client";
-                                                dual_warn!("{} - request_id: {}", warn_msg, request_id);
-                                                return Err(ServerError::Operation(warn_msg.to_string()));
-                                            }
-                                        };
+                                                                            // Use select! to handle request cancellation
+                                                                            let ds_response = select! {
+                                                                                response = request_builder.send() => {
+                                                                                    response.map_err(|e| {
+                                                                                        let err_msg = format!(
+                                                                                            "Failed to forward the request to the downstream server: {e}"
+                                                                                        );
+                                                                                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                                                                                        ServerError::Operation(err_msg)
+                                                                                    })?
+                                                                                }
+                                                                                _ = cancel_token.cancelled() => {
+                                                                                    let warn_msg = "Request was cancelled by client";
+                                                                                    dual_warn!("{} - request_id: {}", warn_msg, request_id);
+                                                                                    return Err(ServerError::Operation(warn_msg.to_string()));
+                                                                                }
+                                                                            };
 
-                                        let status = ds_response.status();
-                                        let headers = ds_response.headers().clone();
+                                                                            let status =
+                                                                                ds_response
+                                                                                    .status();
+                                                                            let headers =
+                                                                                ds_response
+                                                                                    .headers()
+                                                                                    .clone();
 
-                                        // Handle response body reading with cancellation
-                                        let bytes = select! {
-                                            bytes = ds_response.bytes() => {
-                                                bytes.map_err(|e| {
-                                                    let err_msg = format!("Failed to get the full response as bytes: {e}");
-                                                    dual_error!("{} - request_id: {}", err_msg, request_id);
-                                                    ServerError::Operation(err_msg)
-                                                })?
-                                            }
-                                            _ = cancel_token.cancelled() => {
-                                                let warn_msg = "Request was cancelled while reading response";
-                                                dual_warn!("{} - request_id: {}", warn_msg, request_id);
-                                                return Err(ServerError::Operation(warn_msg.to_string()));
-                                            }
-                                        };
+                                                                            // Handle response body reading with cancellation
+                                                                            let bytes = select! {
+                                                                                bytes = ds_response.bytes() => {
+                                                                                    bytes.map_err(|e| {
+                                                                                        let err_msg = format!("Failed to get the full response as bytes: {e}");
+                                                                                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                                                                                        ServerError::Operation(err_msg)
+                                                                                    })?
+                                                                                }
+                                                                                _ = cancel_token.cancelled() => {
+                                                                                    let warn_msg = "Request was cancelled while reading response";
+                                                                                    dual_warn!("{} - request_id: {}", warn_msg, request_id);
+                                                                                    return Err(ServerError::Operation(warn_msg.to_string()));
+                                                                                }
+                                                                            };
 
-                                        let mut response_builder =
-                                            Response::builder().status(status);
+                                                                            let mut
+                                                                            response_builder =
+                                                                                Response::builder()
+                                                                                    .status(status);
 
-                                        // Copy all headers from downstream response
-                                        match request.stream {
-                                            Some(true) => {
-                                                for (name, value) in headers.iter() {
-                                                    match name.as_str() {
+                                                                            // Copy all headers from downstream response
+                                                                            match request.stream {
+                                                                                Some(true) => {
+                                                                                    for (
+                                                                                        name,
+                                                                                        value,
+                                                                                    ) in headers
+                                                                                        .iter()
+                                                                                    {
+                                                                                        match name.as_str() {
                                                         "access-control-allow-origin" => {
                                                             response_builder = response_builder
                                                                 .header(name, value);
@@ -655,72 +682,158 @@ async fn call_mcp_server(
                                                             );
                                                         }
                                                     }
-                                                }
-                                            }
-                                            Some(false) | None => {
-                                                for (name, value) in headers.iter() {
-                                                    dual_debug!(
+                                                                                    }
+                                                                                }
+                                                                                Some(false)
+                                                                                | None => {
+                                                                                    for (
+                                                                                        name,
+                                                                                        value,
+                                                                                    ) in headers
+                                                                                        .iter()
+                                                                                    {
+                                                                                        dual_debug!(
                                                         "{}: {}",
                                                         name,
                                                         value.to_str().unwrap()
                                                     );
-                                                    response_builder =
+                                                                                        response_builder =
                                                         response_builder.header(name, value);
-                                                }
-                                            }
-                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
 
-                                        match response_builder.body(Body::from(bytes)) {
-                                            Ok(response) => {
-                                                dual_info!(
+                                                                            match response_builder
+                                                                                .body(Body::from(
+                                                                                    bytes,
+                                                                                )) {
+                                                                                Ok(response) => {
+                                                                                    dual_info!(
                                                     "Chat request completed successfully - request_id: {}",
                                                     request_id
                                                 );
-                                                Ok(response)
-                                            }
-                                            Err(e) => {
-                                                let err_msg =
+                                                                                    Ok(response)
+                                                                                }
+                                                                                Err(e) => {
+                                                                                    let err_msg =
                                                     format!("Failed to create the response: {e}");
-                                                dual_error!(
+                                                                                    dual_error!(
                                                     "{} - request_id: {}",
                                                     err_msg,
                                                     request_id
                                                 );
-                                                Err(ServerError::Operation(err_msg))
+                                                                                    Err(ServerError::Operation(err_msg))
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                        _ => {
+                                                                            let err_msg =
+                                            "Only text content is supported for tool call results";
+                                                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                                                                            Err(ServerError::Operation(err_msg.to_string()))
+                                                                        }
+                                                                    }
+                                                                }
+                                                            }
+                                                        }
+                                                        _ => {
+                                                            let err_msg = format!("Failed to call the tool: {tool_name}");
+                                                            dual_error!(
+                                                                "{} - request_id: {}",
+                                                                err_msg,
+                                                                request_id
+                                                            );
+                                                            Err(ServerError::Operation(err_msg))
+                                                        }
+                                                    }
+                                                }
+                                                None => {
+                                                    let err_msg = format!(
+                                                        "Not found the MCP client name `{}` in USER_TO_MCP_CLIENTS",
+                                                        mcp_client_name
+                                                    );
+                                                    dual_error!(
+                                                        "{} - request_id: {}",
+                                                        err_msg,
+                                                        request_id
+                                                    );
+                                                    return Err(ServerError::Operation(
+                                                        err_msg.to_string(),
+                                                    ));
+                                                }
                                             }
                                         }
+                                        None => {
+                                            let err_msg =
+                                                "Not found the user ID in USER_TO_MCP_CLIENTS";
+                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                                            return Err(ServerError::Operation(
+                                                err_msg.to_string(),
+                                            ));
+                                        }
                                     }
-                                    _ => {
-                                        let err_msg =
-                                            "Only text content is supported for tool call results";
-                                        dual_error!("{} - request_id: {}", err_msg, request_id);
-                                        Err(ServerError::Operation(err_msg.to_string()))
-                                    }
+                                }
+                                None => {
+                                    let err_msg = "USER_TO_MCP_CLIENTS is empty or not initialized";
+                                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                                    return Err(ServerError::Operation(err_msg.to_string()));
                                 }
                             }
                         }
-                    }
-                    _ => {
-                        let err_msg = format!("Failed to call the tool: {tool_name}");
-                        dual_error!("{} - request_id: {}", err_msg, request_id);
-                        Err(ServerError::Operation(err_msg))
+                        None => {
+                            dual_error!(
+                                "Failed to find the MCP client with tool name: {} - request_id: {}",
+                                tool_name,
+                                request_id,
+                            );
+                            return Err(ServerError::McpNotFoundClient);
+                        }
                     }
                 }
-            } else {
-                dual_error!("Empty MCP CLIENTS");
-                Err(ServerError::McpNotFoundClient)
+                None => {
+                    let err_msg = "Not found the user ID in USER_TO_MCP_TOOLS";
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    return Err(ServerError::Operation(err_msg.to_string()));
+                }
             }
-        } else {
-            dual_error!(
-                "Failed to find the MCP client with tool name: {}",
-                tool_name
-            );
-            Err(ServerError::McpNotFoundClient)
         }
-    } else {
-        dual_error!("Empty MCP TOOLS");
-        Err(ServerError::McpNotFoundClient)
+        None => {
+            let err_msg = "USER_TO_MCP_TOOLS is empty or not initialized";
+            dual_error!("{} - request_id: {}", err_msg, request_id);
+            return Err(ServerError::Operation(err_msg.to_string()));
+        }
+    };
+
+    // erase mcp tools from USER_TO_MCP_TOOLS by user id
+    if let Some(user_to_mcp_tools) = USER_TO_MCP_TOOLS.get() {
+        let mut user_to_mcp_tools = user_to_mcp_tools.write().await;
+        user_to_mcp_tools.remove(user_id);
+
+        dual_debug!(
+            "Erase mcp tools from USER_TO_MCP_TOOLS by user id: {} - request_id: {}",
+            user_id,
+            request_id
+        );
     }
+
+    // erase mcp clients from USER_TO_MCP_CLIENTS by user id
+    if let Some(user_to_mcp_clients) = USER_TO_MCP_CLIENTS.get() {
+        let mut user_to_mcp_clients = user_to_mcp_clients.write().await;
+        user_to_mcp_clients.remove(user_id);
+
+        dual_debug!(
+            "Erase mcp clients from USER_TO_MCP_CLIENTS by user id: {} - request_id: {}",
+            user_id,
+            request_id
+        );
+    }
+
+    response
+}
+
+// Generate a unique chat id for the chat completion request
+fn gen_chat_id() -> String {
+    format!("chatcmpl-{}", uuid::Uuid::new_v4())
 }
 
 pub(crate) async fn embeddings_handler(
