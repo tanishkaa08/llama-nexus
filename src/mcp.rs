@@ -6,16 +6,15 @@ use rmcp::{
 use std::collections::HashMap;
 use tokio::sync::RwLock as TokioRwLock;
 
-pub static USER_TO_MCP_TOOLS: OnceCell<
-    TokioRwLock<HashMap<UserId, TokioRwLock<HashMap<McpToolName, McpClientName>>>>,
-> = OnceCell::new();
-pub static USER_TO_MCP_CLIENTS: OnceCell<
-    TokioRwLock<HashMap<UserId, TokioRwLock<HashMap<McpClientName, TokioRwLock<McpClient>>>>>,
-> = OnceCell::new();
+pub static USER_TO_MCP_TOOLS: OnceCell<TokioRwLock<McpToolMap>> = OnceCell::new();
+pub static USER_TO_MCP_CLIENTS: OnceCell<TokioRwLock<McpClientMap>> = OnceCell::new();
 
 pub static MCP_VECTOR_SEARCH_CLIENT: OnceCell<TokioRwLock<McpClient>> = OnceCell::new();
 pub static MCP_KEYWORD_SEARCH_CLIENT: OnceCell<TokioRwLock<McpClient>> = OnceCell::new();
 
+pub type McpToolMap = HashMap<UserId, TokioRwLock<HashMap<McpToolName, McpClientName>>>;
+pub type McpClientMap =
+    HashMap<UserId, TokioRwLock<HashMap<McpClientName, TokioRwLock<McpClient>>>>;
 pub type RawMcpClient = RunningService<RoleClient, Box<dyn DynService<RoleClient>>>;
 pub type McpClientName = String;
 pub type McpToolName = String;
