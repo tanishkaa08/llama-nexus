@@ -749,8 +749,7 @@ async fn call_mcp_server(
                                                 }
                                                 None => {
                                                     let err_msg = format!(
-                                                        "Not found the MCP client name `{}` in USER_TO_MCP_CLIENTS",
-                                                        mcp_client_name
+                                                        "Not found the MCP client name `{mcp_client_name}` in USER_TO_MCP_CLIENTS"
                                                     );
                                                     dual_error!(
                                                         "{} - request_id: {}",

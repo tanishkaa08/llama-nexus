@@ -510,21 +510,24 @@ impl McpToolServerConfig {
                                             .write()
                                             .await;
 
-                                        if !mcp_tools.contains_key(&tool.name.to_string()) {
-                                            mcp_tools
-                                                .insert(tool.name.to_string(), self.name.clone());
-                                        } else {
-                                            let mcp_client_name =
-                                                mcp_tools.get(&tool.name.to_string()).unwrap();
-                                            if mcp_client_name != &self.name {
-                                                let err_msg = format!(
-                                                        "MCP Tool conflict: the existing `{}` mcp server and new `{}` mcp server have the same tool `{}`",
-                                                        mcp_client_name, self.name, tool.name
-                                                    );
-                                                dual_error!("{}", err_msg);
-                                                return Err(ServerError::Operation(
-                                                    err_msg.to_string(),
-                                                ));
+                                        match mcp_tools.get(&tool.name.to_string()) {
+                                            Some(mcp_client_name) => {
+                                                if mcp_client_name != &self.name {
+                                                    let err_msg = format!(
+                                                            "MCP Tool conflict: the existing `{}` mcp server and new `{}` mcp server have the same tool `{}`",
+                                                            mcp_client_name, self.name, tool.name
+                                                        );
+                                                    dual_error!("{}", err_msg);
+                                                    return Err(ServerError::Operation(
+                                                        err_msg.to_string(),
+                                                    ));
+                                                }
+                                            }
+                                            None => {
+                                                mcp_tools.insert(
+                                                    tool.name.to_string(),
+                                                    self.name.clone(),
+                                                );
                                             }
                                         }
                                     }
@@ -691,21 +694,24 @@ impl McpToolServerConfig {
                                             .write()
                                             .await;
 
-                                        if !mcp_tools.contains_key(&tool.name.to_string()) {
-                                            mcp_tools
-                                                .insert(tool.name.to_string(), self.name.clone());
-                                        } else {
-                                            let mcp_client_name =
-                                                mcp_tools.get(&tool.name.to_string()).unwrap();
-                                            if mcp_client_name != &self.name {
-                                                let err_msg = format!(
+                                        match mcp_tools.get(&tool.name.to_string()) {
+                                            Some(mcp_client_name) => {
+                                                if mcp_client_name != &self.name {
+                                                    let err_msg = format!(
                                                         "MCP Tool conflict: the existing `{}` mcp server and new `{}` mcp server have the same tool `{}`",
                                                         mcp_client_name, self.name, tool.name
                                                     );
-                                                dual_error!("{}", err_msg);
-                                                return Err(ServerError::Operation(
-                                                    err_msg.to_string(),
-                                                ));
+                                                    dual_error!("{}", err_msg);
+                                                    return Err(ServerError::Operation(
+                                                        err_msg.to_string(),
+                                                    ));
+                                                }
+                                            }
+                                            None => {
+                                                mcp_tools.insert(
+                                                    tool.name.to_string(),
+                                                    self.name.clone(),
+                                                );
                                             }
                                         }
                                     }
