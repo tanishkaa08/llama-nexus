@@ -1046,7 +1046,7 @@ impl MergeRagContext for RagPromptBuilder {
         context: &[String],
         has_system_prompt: bool,
         policy: MergeRagContextPolicy,
-        rag_prompt: Option<String>,
+        _rag_prompt: Option<String>,
     ) -> ChatPromptsError::Result<()> {
         if messages.is_empty() {
             dual_error!("Found empty messages in the chat request.");
@@ -1080,67 +1080,27 @@ impl MergeRagContext for RagPromptBuilder {
             MergeRagContextPolicy::SystemMessage => {
                 match &messages[0] {
                     ChatCompletionRequestMessage::System(message) => {
-                        let system_message = {
-                            match rag_prompt {
-                                Some(global_rag_prompt) => {
-                                    let processed_rag_prompt =
-                                        global_rag_prompt.replace("\\n", "\n");
-                                    // compose new system message content
-                                    let content = format!(
-                                        "{system_message}\n{rag_prompt}\n{context}",
-                                        system_message = message.content().trim(),
-                                        rag_prompt = &processed_rag_prompt,
-                                        context = context
-                                    );
+                        let content = format!(
+                            "You are a helpful AI assistant. Please answer the user question based on the information between **---BEGIN CONTEXT---** and **---END CONTEXT---**. Do not use any external knowledge. If the information between **---BEGIN CONTEXT---** and **---END CONTEXT---** is empty, please respond with `No relevant information found in the current knowledge base`.\n\n---BEGIN CONTEXT---\n\n{context}\n\n---END CONTEXT---",
+                        );
 
-                                    // create system message
-                                    ChatCompletionRequestMessage::new_system_message(
-                                        content,
-                                        message.name().cloned(),
-                                    )
-                                }
-                                None => {
-                                    // compose new system message content
-                                    let content = format!(
-                                        "{system_message}\n{context}",
-                                        system_message = message.content().trim(),
-                                        context = context
-                                    );
-
-                                    // create system message
-                                    ChatCompletionRequestMessage::new_system_message(
-                                        content,
-                                        message.name().cloned(),
-                                    )
-                                }
-                            }
-                        };
+                        let system_message = ChatCompletionRequestMessage::new_system_message(
+                            content,
+                            message.name().cloned(),
+                        );
 
                         // replace the original system message
                         messages[0] = system_message;
                     }
                     _ => {
-                        let system_message = match rag_prompt {
-                            Some(global_rag_prompt) => {
-                                let processed_rag_prompt = global_rag_prompt.replace("\\n", "\n");
-                                // compose new system message content
-                                let content = format!(
-                                    "{rag_prompt}\n{context}",
-                                    rag_prompt = &processed_rag_prompt,
-                                    context = context
-                                );
+                        // compose new system message content
+                        let content = format!(
+                            "You are a helpful AI assistant. Please answer the user question based on the information between **---BEGIN CONTEXT---** and **---END CONTEXT---**. Do not use any external knowledge. If the information between **---BEGIN CONTEXT---** and **---END CONTEXT---** is empty, please respond with `No relevant information found in the current knowledge base`.\n\n---BEGIN CONTEXT---\n\n{context}\n\n---END CONTEXT---",
+                        );
 
-                                // create system message
-                                ChatCompletionRequestMessage::new_system_message(content, None)
-                            }
-                            None => {
-                                // create system message
-                                ChatCompletionRequestMessage::new_system_message(
-                                    context.to_string(),
-                                    None,
-                                )
-                            }
-                        };
+                        // create system message
+                        let system_message =
+                            ChatCompletionRequestMessage::new_system_message(content, None);
 
                         // insert system message
                         messages.insert(0, system_message);
@@ -1154,30 +1114,11 @@ impl MergeRagContext for RagPromptBuilder {
                 match &messages.last() {
                     Some(ChatCompletionRequestMessage::User(message)) => {
                         if let ChatCompletionUserMessageContent::Text(content) = message.content() {
-                            let content = match rag_prompt {
-                                Some(global_rag_prompt) => {
-                                    let processed_rag_prompt =
-                                        global_rag_prompt.replace("\\n", "\n");
+                            let extened_content = format!(
+                                "You are a helpful AI assistant. Please answer the user question based on the information between **---BEGIN CONTEXT---** and **---END CONTEXT---**. Do not use any external knowledge. If the information between **---BEGIN CONTEXT---** and **---END CONTEXT---** is empty, please respond with `No relevant information found in the current knowledge base`.\n\n---BEGIN CONTEXT---\n\n{context}\n\n---END CONTEXT---\n\nThe question is:\n{content}",
+                            );
 
-                                    // compose new user message content
-                                    format!(
-                                            "{rag_prompt}\n{context}\n\nAnswer the question based on the pieces of context above. The question is:\n{user_message}",
-                                            rag_prompt = &processed_rag_prompt,
-                                            context = context,
-                                            user_message = content.trim(),
-                                        )
-                                }
-                                None => {
-                                    // compose new user message content
-                                    format!(
-                                            "{context}\n\nAnswer the question based on the pieces of context above. The question is:\n{user_message}",
-                                            context = context,
-                                            user_message = content.trim(),
-                                        )
-                                }
-                            };
-
-                            let content = ChatCompletionUserMessageContent::Text(content);
+                            let content = ChatCompletionUserMessageContent::Text(extened_content);
 
                             // create user message
                             let user_message = ChatCompletionRequestMessage::new_user_message(
@@ -1666,14 +1607,15 @@ async fn extract_keywords_by_llm(
 ) -> ServerResult<String> {
     let request_id = request_id.as_ref();
     let text = text.as_ref();
-    let prompt = format!(
-        "Extract the keywords from the following text. The keywords should be separated by spaces.\n\nText: {text:#?}",
+    // let user_prompt  = format!(
+    //     "Extract the keywords from the following text. \nThe extracted keywords should meet the following requirements:\n- Return only **meaningful single words or short phrases** (e.g., “neural network”, “fine-tuning”, “performance optimization”).\n- Avoid stop words, filler words, or overly generic terms (e.g., “how”, “can”, “thing”, “way”).\n- Preserve **important multi-word concepts** (e.g., “semantic search”, “transformer model”).\n- Use lowercase.\n- The keywords should be separated by spaces.\n\nText: {text:#?}",
+    // );
+    let user_prompt  = format!(
+        "Extract the keywords from the following text. Avoid stop words, filler words, or overly generic terms (e.g., “how”, “can”, “thing”, “way”). The keywords should be separated by spaces.\n\nText: {text:#?}",
     );
 
-    info!("prompt for getting keywords: {}", prompt);
-
     let user_message = ChatCompletionRequestMessage::new_user_message(
-        ChatCompletionUserMessageContent::Text(prompt),
+        ChatCompletionUserMessageContent::Text(user_prompt),
         None,
     );
 
