@@ -17,7 +17,7 @@ port = 3389        # The port to listen on.
 [rag]
 enable         = false
 policy         = "last-user-message"
-prompt         = "# Context\n\nPlease answer the user question based on the following retrieved information:"
+prompt         = "Please answer the user question based on the information in the `Context` section. If the `Context` section is empty, please respond with `No relevant information found in the current knowledge base`.\n\n# Context"
 context_window = 1
 
 
@@ -26,7 +26,7 @@ context_window = 1
 # The following items are the vector search mcp server configurations:
 #
 # - name: The name of the mcp server.
-# - transport: The transport protocol to use. Possible values: "sse", "stdio", "streamable-http". Note that ONLY "sse" is supported for now.
+# - transport: The transport protocol to use. Possible values: "sse", "stream-http".
 # - url: The URL of the mcp server.
 # - enable: Whether to enable the mcp server.
 #
@@ -35,8 +35,8 @@ context_window = 1
 
 [mcp.server.vector_search]
 name      = "gaia-qdrant"
-transport = "sse"
-url       = "http://127.0.0.1:8003/sse"
+transport = "stream-http"
+url       = "http://127.0.0.1:8003/mcp"
 enable    = false
 
 
