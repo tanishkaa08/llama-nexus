@@ -198,52 +198,58 @@ pub async fn chat(
         // fuse the two hash maps
         let fused_scores = weighted_fusion(kw_scores, em_scores, weighted_alpha);
 
-        dual_debug!(
-            "final_scores: {:#?} - request_id: {}",
-            &fused_scores,
-            request_id
-        );
+        if !fused_scores.is_empty() {
+            dual_debug!(
+                "final_scores: {:#?} - request_id: {}",
+                &fused_scores,
+                request_id
+            );
 
-        // Sort by score from high to low
-        let mut final_ranking: Vec<(u64, f64)> = fused_scores.into_iter().collect();
-        final_ranking.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-        if final_ranking.len() > filter_limit as usize {
-            final_ranking.truncate(filter_limit as usize);
-        }
-
-        // Print final ranking
-        dual_debug!(
-            "final_ranking: {:#?} - request_id: {}",
-            &final_ranking,
-            request_id
-        );
-
-        let mut retrieved = Vec::new();
-        for (hash_value, score) in final_ranking.iter() {
-            if kw_hits_map.contains_key(hash_value) {
-                retrieved.push(RagScoredPoint {
-                    source: kw_hits_map[hash_value].content.clone(),
-                    score: *score,
-                    from: DataFrom::KeywordSearch,
-                });
-            } else if em_hits_map.contains_key(hash_value) {
-                retrieved.push(RagScoredPoint {
-                    source: em_hits_map[hash_value].source.clone(),
-                    score: *score,
-                    from: DataFrom::VectorSearch,
-                });
+            // Sort by score from high to low
+            let mut final_ranking: Vec<(u64, f64)> = fused_scores.into_iter().collect();
+            final_ranking.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
+            if final_ranking.len() > filter_limit as usize {
+                final_ranking.truncate(filter_limit as usize);
             }
+
+            // Print final ranking
+            dual_debug!(
+                "final_ranking: {:#?} - request_id: {}",
+                &final_ranking,
+                request_id
+            );
+
+            let mut retrieved = Vec::new();
+            for (hash_value, score) in final_ranking.iter() {
+                if kw_hits_map.contains_key(hash_value) {
+                    retrieved.push(RagScoredPoint {
+                        source: kw_hits_map[hash_value].content.clone(),
+                        score: *score,
+                        from: DataFrom::KeywordSearch,
+                    });
+                } else if em_hits_map.contains_key(hash_value) {
+                    retrieved.push(RagScoredPoint {
+                        source: em_hits_map[hash_value].source.clone(),
+                        score: *score,
+                        from: DataFrom::VectorSearch,
+                    });
+                }
+            }
+
+            dual_info!("retrieved: {:#?} - request_id: {}", &retrieved, request_id);
+
+            let retrieve_object = RetrieveObject {
+                limit: retrieved.len(),
+                score_threshold: filter_score_threshold,
+                points: Some(retrieved),
+            };
+
+            vec![retrieve_object]
+        } else {
+            dual_warn!("No point retrieved - request_id: {}", request_id);
+
+            vec![]
         }
-
-        dual_info!("retrieved: {:#?} - request_id: {}", &retrieved, request_id);
-
-        let retrieve_object = RetrieveObject {
-            limit: retrieved.len(),
-            score_threshold: filter_score_threshold,
-            points: Some(retrieved),
-        };
-
-        vec![retrieve_object]
     };
 
     // * generate context
@@ -281,59 +287,56 @@ pub async fn chat(
             }
         }
         dual_debug!("request_id: {} - context:\n{}", request_id, context);
+    } else {
+        context = "No context retrieved".to_string();
     }
 
     // * merge context into chat request
-    if !context.is_empty() {
-        if chat_request.messages.is_empty() {
-            let err_msg = "Found empty chat messages";
+    if chat_request.messages.is_empty() {
+        let err_msg = "Found empty chat messages";
 
-            // log
-            dual_error!("{} - request_id: {}", err_msg, request_id);
+        // log
+        dual_error!("{} - request_id: {}", err_msg, request_id);
 
-            return Err(ServerError::BadRequest(err_msg.to_string()));
-        }
-
-        // get the prompt template from the chat server
-        let prompt_template = {
-            let server_info = state.server_info.read().await;
-            let chat_server = server_info
-                .servers
-                .iter()
-                .find(|(_server_id, server)| server.chat_model.is_some());
-            match chat_server {
-                Some((_server_id, chat_server)) => {
-                    let chat_model = chat_server.chat_model.as_ref().unwrap();
-                    chat_model.prompt_template.unwrap()
-                }
-                None => {
-                    let err_msg = "No chat server available";
-                    dual_error!("{} - request_id: {}", err_msg, request_id);
-                    return Err(ServerError::Operation(err_msg.to_string()));
-                }
+        return Err(ServerError::BadRequest(err_msg.to_string()));
+    }
+    // get the prompt template from the chat server
+    let prompt_template = {
+        let server_info = state.server_info.read().await;
+        let chat_server = server_info
+            .servers
+            .iter()
+            .find(|(_server_id, server)| server.chat_model.is_some());
+        match chat_server {
+            Some((_server_id, chat_server)) => {
+                let chat_model = chat_server.chat_model.as_ref().unwrap();
+                chat_model.prompt_template.unwrap()
             }
-        };
-
-        // get the rag policy
-        let (rag_policy, rag_prompt) = {
-            let config = state.config.read().await;
-            (config.rag.policy, config.rag.prompt.clone())
-        };
-
-        if let Err(e) = RagPromptBuilder::build(
-            &mut chat_request.messages,
-            &[context],
-            prompt_template.has_system_prompt(),
-            rag_policy,
-            rag_prompt,
-        ) {
-            let err_msg = e.to_string();
-
-            // log
-            dual_error!("{} - request_id: {}", err_msg, request_id);
-
-            return Err(ServerError::Operation(err_msg));
+            None => {
+                let err_msg = "No chat server available";
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                return Err(ServerError::Operation(err_msg.to_string()));
+            }
         }
+    };
+    // get the rag policy
+    let (rag_policy, rag_prompt) = {
+        let config = state.config.read().await;
+        (config.rag.policy, config.rag.prompt.clone())
+    };
+    if let Err(e) = RagPromptBuilder::build(
+        &mut chat_request.messages,
+        &[context],
+        prompt_template.has_system_prompt(),
+        rag_policy,
+        rag_prompt,
+    ) {
+        let err_msg = e.to_string();
+
+        // log
+        dual_error!("{} - request_id: {}", err_msg, request_id);
+
+        return Err(ServerError::Operation(err_msg));
     }
 
     // * perform chat completion
