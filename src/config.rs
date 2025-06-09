@@ -104,25 +104,18 @@ impl<'de> Deserialize<'de> for RagConfig {
         #[derive(Deserialize)]
         struct RagConfigHelper {
             enable: bool,
-            prompt: String,
             policy: String,
             context_window: u64,
         }
 
         let helper = RagConfigHelper::deserialize(deserializer)?;
 
-        let prompt = if helper.prompt.is_empty() {
-            None
-        } else {
-            Some(helper.prompt)
-        };
-
         let policy = MergeRagContextPolicy::from_str(&helper.policy, true)
             .map_err(|e| serde::de::Error::custom(e.to_string()))?;
 
         Ok(RagConfig {
             enable: helper.enable,
-            prompt,
+            prompt: None,
             policy,
             context_window: helper.context_window,
         })

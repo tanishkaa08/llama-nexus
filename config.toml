@@ -17,7 +17,6 @@ port = 3389        # The port to listen on.
 [rag]
 enable         = false
 policy         = "last-user-message"
-prompt         = "Please answer the user question based on the information in the `Context` section. If the `Context` section is empty, please respond with `No relevant information found in the current knowledge base`.\n\n# Context"
 context_window = 1
 
 
@@ -45,7 +44,7 @@ enable    = false
 # The following items are the keyword search mcp server configurations:
 #
 # - name: The name of the mcp server.
-# - transport: The transport protocol to use. Possible values: "sse", "stdio", "streamable-http". Note that ONLY "sse" is supported for now.
+# - transport: The transport protocol to use. Possible values: "sse", "stdio", "stream-http".
 # - url: The URL of the mcp server.
 # - enable: Whether to enable the mcp server.
 #
@@ -54,8 +53,8 @@ enable    = false
 
 [mcp.server.keyword_search]
 name      = "gaia-keyword-search"
-transport = "sse"
-url       = "http://127.0.0.1:8005/sse"
+transport = "stream-http"
+url       = "http://127.0.0.1:8005/mcp"
 enable    = false
 
 # [mcp.server.keyword_search]
