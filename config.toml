@@ -51,20 +51,20 @@ enable    = false
 # Note that, to use the configuration, comment out one of the following items and
 # uncomment the corresponding item in the following sections
 
+# [mcp.server.keyword_search]
+# name      = "gaia-keyword-search"
+# transport = "stream-http"
+# url       = "http://127.0.0.1:8005/mcp"
+# enable    = false
+
 [mcp.server.keyword_search]
-name      = "gaia-keyword-search"
+name      = "gaia-elastic-search"
 transport = "stream-http"
-url       = "http://127.0.0.1:8005/mcp"
+url       = "http://127.0.0.1:8006/mcp"
 enable    = false
 
 # [mcp.server.keyword_search]
-# name      = "gaia-elastic-search"
-# transport = "sse"
-# url       = "http://127.0.0.1:8006/sse"
-# enable    = false
-
-# [mcp.server.keyword_search]
 # name      = "gaia-tidb-search"
-# transport = "sse"
-# url       = "http://127.0.0.1:8007/sse"
+# transport = "stream-http"
+# url       = "http://127.0.0.1:8007/mcp"
 # enable    = false
