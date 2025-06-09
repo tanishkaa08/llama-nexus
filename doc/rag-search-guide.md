@@ -15,7 +15,7 @@ In this guide, we will use Qdrant and kw-search-server as examples to demonstrat
   - [Starting llama-nexus and Related Servers](#starting-llama-nexus-and-related-servers)
     - [Configuring llama-nexus Startup Parameters](#configuring-llama-nexus-startup-parameters)
     - [Starting llama-nexus](#starting-llama-nexus)
-  - [Creating Embeddings and Indices](#creating-embeddings-and-indices)
+  - [Creating Embeddings and Indices (Optional)](#creating-embeddings-and-indices-optional)
   - [Executing Search](#executing-search)
   - [Request Parameters for RAG Search](#request-parameters-for-rag-search)
     - [Parameters for Vector Search](#parameters-for-vector-search)
@@ -284,12 +284,14 @@ At this point, llama-nexus and related servers are successfully started. The top
 
 Next, we'll create embeddings and indexes for documents.
 
-## Creating Embeddings and Indices
+## Creating Embeddings and Indices (Optional)
 
 Before performing vector search and keyword search, you need to create embeddings and indexes for your documents. Embeddings will be stored in Qdrant, while indexes will be used by kw-search-server. llama-nexus provides the `/v1/create/rag` endpoint for creating embeddings and indexes for documents.
 
 > [!NOTE]
 > The `/v1/create/rag` endpoint currently only supports persisting embeddings in Qdrant and creating indexes for kw-search-server. Support for Elasticsearch will be added in the near future.
+
+<details><summary>Expand to view the details of creating embeddings and indices</summary>
 
 The CURL command below sends a request to `llama-nexus`, which performs the following tasks in sequence:
 
@@ -310,8 +312,6 @@ curl --location 'http://localhost:3389/v1/create/rag' \
 ```
 
 If the request is processed successfully, a response similar to the following will be returned:
-
-<details><summary>Expand to view the response</summary>
 
 ```bash
 {
@@ -415,9 +415,7 @@ curl --location 'http://localhost:3389/v1/chat/completions' \
             "content": "What is the location of Paris, France along the Seine river?"
         }
     ],
-    "vdb_server_url": "http://localhost:6333",
     "vdb_collection_name": ["paris-01"],
-    "kw_search_url": "http://localhost:12306",
     "kw_search_index": "paris-index-01",
     "limit": 5,
     "score_threshold": 0.5,
@@ -645,8 +643,8 @@ In addition to parameters compatible with the OpenAI API such as `model` and `me
 
 ### Parameters for Vector Search
 
-- `vdb_server_url`: URL of the Qdrant server used for vector search
-- `vdb_collection_name`: Name of the Qdrant collection used for vector search
+- Parameters for Qdrant
+  - `vdb_collection_name`: Name of the Qdrant collection used for vector search
 
 <details><summary>Expand to view example request</summary>
 
@@ -671,8 +669,6 @@ curl --location 'http://localhost:3389/v1/chat/completions' \
 ### Parameters for Keyword Search
 
 - Parameters for [kw-search-server](https://github.com/LlamaEdge/kw-search-server)
-
-  - `kw_search_url`: URL of the kw-search server used for keyword search
   - `kw_search_index`: Name of the kw-search index used for keyword search
 
   <details><summary>Expand to view example request</summary>
@@ -687,7 +683,6 @@ curl --location 'http://localhost:3389/v1/chat/completions' \
               "content": "What is the location of Paris, France along the Seine river?"
           }
       ],
-      "kw_search_url": "http://localhost:12306",
       "kw_search_index": "dummy-kw-search-index-name",
       "model": "Qwen3-4B",
   }'
@@ -696,11 +691,8 @@ curl --location 'http://localhost:3389/v1/chat/completions' \
   </details>
 
 - Parameters for Elasticsearch
-
-  - `es_search_url`: URL of the Elasticsearch server used for keyword search
   - `es_search_index`: Name of the Elasticsearch index used for keyword search
   - `es_search_fields`: Names of the Elasticsearch fields used for keyword search
-  - `es_api_key`: API key for the Elasticsearch server
 
   <details><summary>Expand to view example request</summary>
 
@@ -714,10 +706,8 @@ curl --location 'http://localhost:3389/v1/chat/completions' \
               "content": "What is the location of Paris, France along the Seine river?"
           }
       ],
-      "es_search_url": "http://localhost:9200",
       "es_search_index": "dummy-es-search-index-name",
       "es_search_fields": ["title", "content"],
-      "es_api_key": "ApiKey <your-api-key>",
       "model": "Qwen3-4B",
   }'
   ```
@@ -725,11 +715,6 @@ curl --location 'http://localhost:3389/v1/chat/completions' \
   </details>
 
 - Parameters for TiDB
-
-  - `tidb_search_host`: Host of the TiDB server used for keyword search
-  - `tidb_search_port`: Port of the TiDB server used for keyword search
-  - `tidb_search_username`: Username for the TiDB server
-  - `tidb_search_password`: Password for the TiDB server
   - `tidb_search_database`: Name of the TiDB database used for keyword search
   - `tidb_search_table`: Name of the TiDB table used for keyword search
 
@@ -745,10 +730,6 @@ curl --location 'http://localhost:3389/v1/chat/completions' \
               "content": "What is the location of Paris, France along the Seine river?"
           }
       ],
-      "tidb_search_host": "<your-tidb-host>",
-      "tidb_search_port": <your-tidb-port>,
-      "tidb_search_username": "<your-username>",
-      "tidb_search_password": "<your-password>",
       "tidb_search_database": "dummy-tidb-search-database-name",
       "tidb_search_table": "dummy-tidb-search-table-name",
       "model": "Qwen3-4B",
