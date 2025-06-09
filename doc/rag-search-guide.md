@@ -27,7 +27,7 @@ In this guide, we will use Qdrant and kw-search-server as examples to demonstrat
 First, download the `llama-nexus` binary:
 
 ```bash
-export NEXUS_VERSION=0.1.0
+export NEXUS_VERSION=0.2.0
 
 # macOS on Apple Silicon
 curl -LO https://github.com/LlamaEdge/llama-nexus/releases/download/{$NEXUS_VERSION}/llama-nexus-apple-darwin-aarch64.tar.gz
@@ -58,7 +58,6 @@ llama-nexus manages various configuration items through the `config.toml` file. 
 [rag]
 enable         = true
 policy         = "last-user-message"
-prompt         = "# Context\n\nPlease answer the user question based on the following retrieved information:"
 context_window = 1
 
 (Other configuration items)
@@ -71,8 +70,8 @@ Similar to enabling RAG mode, you can enable two MCP servers by configuring the 
 
 [mcp.server.vector_search]
 name      = "gaia-qdrant"
-transport = "sse"
-url       = "http://127.0.0.1:8003/sse"
+transport = "stream-http"
+url       = "http://127.0.0.1:8003/mcp"
 enable    = true
 
 (Other configuration items)
@@ -80,8 +79,8 @@ enable    = true
 
 [mcp.server.keyword_search]
 name      = "gaia-keyword-search"
-transport = "sse"
-url       = "http://127.0.0.1:8005/sse"
+transport = "stream-http"
+url       = "http://127.0.0.1:8005/mcp"
 enable    = true
 
 (Other configuration items)
@@ -100,7 +99,7 @@ After configuring the startup parameters, follow these steps to start llama-nexu
     export wasmedge_version="0.14.1"
 
     # Version of ggml plugin
-    export ggml_plugin="b5361"
+    export ggml_plugin="b5593"
 
     # For CPU
     curl -sSf https://raw.githubusercontent.com/WasmEdge/WasmEdge/master/utils/install_v2.sh | bash -s -- -v $wasmedge_version --ggmlbn=$ggml_plugin
@@ -113,7 +112,7 @@ After configuring the startup parameters, follow these steps to start llama-nexu
     export wasmedge_version="0.14.1"
 
     # Version of ggml plugin
-    export ggml_plugin="b5361"
+    export ggml_plugin="b5593"
 
     # CUDA version: 11 or 12
     export ggmlcuda=12
@@ -127,7 +126,7 @@ After configuring the startup parameters, follow these steps to start llama-nexu
 
   ```bash
   # Download llama-api-server.wasm
-  export API_SERVER_VERSION=0.19.0
+  export API_SERVER_VERSION=0.22.0
   curl -LO https://github.com/LlamaEdge/LlamaEdge/releases/download/{$API_SERVER_VERSION}/llama-api-server.wasm
 
   # Download chat model
@@ -162,33 +161,33 @@ After configuring the startup parameters, follow these steps to start llama-nexu
   First, download `gaia-qdrant-mcp-server-sse` and `gaia-kwsearch-mcp-server-sse` binaries:
 
   ```bash
-  export GAIA_MCP_VERSION=0.1.3
+  export GAIA_MCP_VERSION=0.2.0
 
   # macOS on Apple Silicon
   curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-apple-darwin-aarch64.tar.gz
-  tar -xvzf gaia-mcp-servers-apple-darwin-aarch64.tar.gz gaia-qdrant-mcp-server-sse gaia-kwsearch-mcp-server-sse
+  tar -xvzf gaia-mcp-servers-apple-darwin-aarch64.tar.gz gaia-qdrant-mcp-server-streamhttp gaia-kwsearch-mcp-server-streamhttp
 
   # macOS on Intel
   curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-apple-darwin-x86_64.tar.gz
-  tar -xvzf gaia-mcp-servers-apple-darwin-x86_64.tar.gz gaia-qdrant-mcp-server-sse gaia-kwsearch-mcp-server-sse
+  tar -xvzf gaia-mcp-servers-apple-darwin-x86_64.tar.gz gaia-qdrant-mcp-server-streamhttp gaia-kwsearch-mcp-server-streamhttp
 
   # Linux on x86_64
-  curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION }/gaia-mcp-servers-unknown-linux-gnu-x86_64.tar.gz
-  tar -xvzf gaia-mcp-servers-unknown-linux-gnu-x86_64.tar.gz gaia-qdrant-mcp-server-sse gaia-kwsearch-mcp-server-sse
+  curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION }/gaia-mcp-servers-linux-unknown-gnu-x86_64.tar.gz
+  tar -xvzf gaia-mcp-servers-linux-unknown-gnu-x86_64.tar.gz gaia-qdrant-mcp-server-streamhttp gaia-kwsearch-mcp-server-streamhttp
 
   # Linux on aarch64
-  curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-unknown-linux-gnu-aarch64.tar.gz
-  tar -xvzf gaia-mcp-servers-unknown-linux-gnu-aarch64.tar.gz gaia-qdrant-mcp-server-sse gaia-kwsearch-mcp-server-sse
+  curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-linux-unknown-gnu-aarch64.tar.gz
+  tar -xvzf gaia-mcp-servers-linux-unknown-gnu-aarch64.tar.gz gaia-qdrant-mcp-server-streamhttp gaia-kwsearch-mcp-server-streamhttp
   ```
 
   Then, start the MCP servers:
 
   ```bash
   # Start gaia-qdrant mcp server
-  gaia-qdrant-mcp-server-sse
+  gaia-qdrant-mcp-server-streamhttp
 
   # Start gaia-keyword-search mcp server
-  gaia-kwsearch-mcp-server-sse
+  gaia-kwsearch-mcp-server-streamhttp
   ```
 
   If started successfully, the `gaia-qdrant` and `gaia-keyword-search` MCP servers will run on ports `8003` and `8005` respectively.
@@ -241,7 +240,7 @@ After configuring the startup parameters, follow these steps to start llama-nexu
 
     ```bash
     # Run
-    kw-search-server
+    ./kw-search-server
     ```
 
     If started successfully, kw-search-server will run on port `12306` by default.
