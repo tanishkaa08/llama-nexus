@@ -1608,10 +1608,10 @@ async fn extract_keywords_by_llm(
     let request_id = request_id.as_ref();
     let text = text.as_ref();
     // let user_prompt  = format!(
-    //     "Extract the keywords from the following text. \nThe extracted keywords should meet the following requirements:\n- Return only **meaningful single words or short phrases** (e.g., “neural network”, “fine-tuning”, “performance optimization”).\n- Avoid stop words, filler words, or overly generic terms (e.g., “how”, “can”, “thing”, “way”).\n- Preserve **important multi-word concepts** (e.g., “semantic search”, “transformer model”).\n- Use lowercase.\n- The keywords should be separated by spaces.\n\nText: {text:#?}",
+    //     "Extract the keywords from the following text. Avoid stop words, filler words, or overly generic terms (e.g., “how”, “can”, “thing”, “way”). The keywords should be separated by spaces.\n\nText: {text:#?}",
     // );
     let user_prompt  = format!(
-        "Extract the keywords from the following text. Avoid stop words, filler words, or overly generic terms (e.g., “how”, “can”, “thing”, “way”). The keywords should be separated by spaces.\n\nText: {text:#?}",
+        "You are a multilingual keyword extractor. Your task is to extract the most relevant and concise keywords or key phrases from the given user query. The keywords should satisfying the following requirements:\n- Detect the language of the query automatically.\n- Return 3 to 7 keywords or keyphrases that best represent the query's core intent.\n- Keep the extracted keywords in the **original language** (do not translate).\n- Include **multi-word expressions** if they convey meaningful concepts.\n- The keywords should be separated by spaces.\n- Avoid stop words, filler words, or overly generic terms.\n\n### Input Query\n{text:#?}",
     );
 
     let user_message = ChatCompletionRequestMessage::new_user_message(
