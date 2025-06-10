@@ -162,7 +162,7 @@ jobs:
 
       - name: Create Release and Upload Release Asset
         if: ${{ github.event.inputs.create_release == 'true' && github.ref == 'refs/heads/main'}}
-        uses: softprops/action-gh-release@v2.3.0
+        uses: softprops/action-gh-release@v2.2.1
         with:
           name: ${{ steps.tag_and_release_names.outputs.release_name }}
           tag_name: ${{ steps.tag_and_release_names.outputs.tag_name }}
@@ -173,4 +173,5 @@ jobs:
             linux-x86_64-binary/llama-nexus-unknown-linux-gnu-x86_64.tar.gz
             linux-aarch64-binary/llama-nexus-unknown-linux-gnu-aarch64.tar.gz
             macos-x86_64-binary/llama-nexus-apple-darwin-x86_64.tar.gz
+            macos-arm64-binary/llama-nexus-apple-darwin-aarch64.tar.gz
           fail_on_unmatched_files: true
