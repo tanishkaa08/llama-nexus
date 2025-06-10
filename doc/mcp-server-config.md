@@ -9,8 +9,12 @@ Llama-nexus enables users to specify MCP servers in chat completion requests thr
 - `mcp_tools`: An array of MCP server configurations. Each configuration includes the following fields:
   - `type`: The type of the tool. Currently, only `mcp` is supported.
   - `server_label`: The name of the MCP server.
-  - `server_url`: The URL of the MCP server. Note that if `transport` is set to `stream-http`, the `server_url` must end with `/mcp`; if `transport` is `sse`, the `server_url` must end with `/sse`. See the [example](#example) below.
+  - `server_url`: The URL of the MCP server.
+    > [!NOTE] If the `transport` field is set to `stream-http`, the `server_url` field must end with `/mcp`; if `transport` is `sse`, the `server_url` must end with `/sse`. See the [example](#example) below.
   - `transport`: The type of the transport for the MCP server. Possible values are `stream-http` or `sse`.
+
+> [!IMPORTANT]
+> The fields for the MCP server configurations are still under development. The current implementation is not stable and may change in the future.
 
 ## Example
 
