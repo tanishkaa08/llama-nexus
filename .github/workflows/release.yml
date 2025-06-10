@@ -162,7 +162,7 @@ jobs:
 
       - name: Create Release and Upload Release Asset
         if: ${{ github.event.inputs.create_release == 'true' && github.ref == 'refs/heads/main'}}
-        uses: softprops/action-gh-release@v2.2.1
+        uses: softprops/action-gh-release@v2.2.2
         with:
           name: ${{ steps.tag_and_release_names.outputs.release_name }}
           tag_name: ${{ steps.tag_and_release_names.outputs.tag_name }}
