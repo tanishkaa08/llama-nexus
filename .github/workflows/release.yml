@@ -151,6 +151,9 @@ jobs:
           ls -al macos-x86_64-binary
           ls -al macos-arm64-binary
 
+      - name: List all uploaded files
+        run: find . -name "*.tar.gz"
+
       - name: Tag and release names
         id: tag_and_release_names
         run: |
@@ -167,7 +170,8 @@ jobs:
           draft: true
           prerelease: true
           files: |
-            linux-x86_64-binary/*
-            linux-aarch64-binary/*
-            macos-x86_64-binary/*
-            macos-arm64-binary/*
+            linux-x86_64-binary/llama-nexus-unknown-linux-gnu-x86_64.tar.gz
+            linux-aarch64-binary/llama-nexus-unknown-linux-gnu-aarch64.tar.gz
+            macos-x86_64-binary/llama-nexus-apple-darwin-x86_64.tar.gz
+            macos-arm64-binary/llama-nexus-apple-darwin-aarch64.tar.gz
+          fail_on_unmatched_files: true
