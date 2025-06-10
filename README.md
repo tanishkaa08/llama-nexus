@@ -153,8 +153,6 @@ Usage: llama-nexus [OPTIONS]
 Options:
       --config <CONFIG>
           Path to the config file [default: config.toml]
-      --rag
-          Enable RAG
       --check-health
           Enable health check for downstream servers
       --check-health-interval <CHECK_HEALTH_INTERVAL>
