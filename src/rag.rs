@@ -208,9 +208,9 @@ pub async fn chat(
             // Sort by score from high to low
             let mut final_ranking: Vec<(u64, f64)> = fused_scores.into_iter().collect();
             final_ranking.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap());
-            if final_ranking.len() > filter_limit as usize {
-                final_ranking.truncate(filter_limit as usize);
-            }
+            // if final_ranking.len() > filter_limit as usize {
+            //     final_ranking.truncate(filter_limit as usize);
+            // }
 
             // Print final ranking
             dual_debug!(
@@ -1449,13 +1449,19 @@ fn min_max_normalize(scores: &HashMap<u64, f64>) -> HashMap<u64, f64> {
         max_score
     );
 
+    // Add a small offset to ensure scores are in (0,1)
+    const EPSILON: f64 = 1e-6;
+    let range = max_score - min_score;
+    let offset = if range > 0.0 { EPSILON } else { 0.0 };
+
     scores
         .iter()
         .map(|(&doc_id, &score)| {
-            let normalized_score = if max_score - min_score > 0.0 {
-                (score - min_score) / (max_score - min_score)
+            let normalized_score = if range > 0.0 {
+                // Map to (0,1) by adding offset and scaling
+                offset + (1.0 - 2.0 * offset) * (score - min_score) / range
             } else {
-                0.0
+                0.5 // If all scores are the same, map to middle of interval
             };
 
             dual_debug!(
