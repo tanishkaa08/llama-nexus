@@ -1103,8 +1103,8 @@ dependencies = [
 
 [[package]]
 name = "gaia-elastic-mcp-common"
-version = "0.2.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=dev#51790f542dfa35903961a81e77d089000eb0a175"
+version = "0.3.0"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=main#3371722d2ae5f88b91fecd4a2fa3b2f0aa084528"
 dependencies = [
  "rmcp",
  "serde",
@@ -1114,7 +1114,7 @@ dependencies = [
 [[package]]
 name = "gaia-kwsearch-mcp-common"
 version = "0.1.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=dev#51790f542dfa35903961a81e77d089000eb0a175"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=main#3371722d2ae5f88b91fecd4a2fa3b2f0aa084528"
 dependencies = [
  "anyhow",
  "endpoints",
@@ -1137,7 +1137,7 @@ dependencies = [
 [[package]]
 name = "gaia-qdrant-mcp-common"
 version = "0.0.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=dev#51790f542dfa35903961a81e77d089000eb0a175"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=main#3371722d2ae5f88b91fecd4a2fa3b2f0aa084528"
 dependencies = [
  "rmcp",
  "serde",
@@ -1146,8 +1146,8 @@ dependencies = [
 
 [[package]]
 name = "gaia-tidb-mcp-common"
-version = "0.2.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=dev#51790f542dfa35903961a81e77d089000eb0a175"
+version = "0.3.0"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?branch=main#3371722d2ae5f88b91fecd4a2fa3b2f0aa084528"
 dependencies = [
  "endpoints",
  "mysql",
