@@ -291,6 +291,7 @@ pub struct McpKeywordSearchServerConfig {
     pub tools: Option<Vec<RmcpTool>>,
 }
 impl McpKeywordSearchServerConfig {
+    #[allow(dead_code)]
     pub async fn connect_mcp_server(&mut self) -> ServerResult<()> {
         if self.enable {
             match self.transport {
