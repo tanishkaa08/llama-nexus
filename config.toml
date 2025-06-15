@@ -37,34 +37,3 @@ name      = "gaia-qdrant"
 transport = "stream-http"
 url       = "http://127.0.0.1:8003/mcp"
 enable    = false
-
-
-# Section 1.2: Keyword Search
-#
-# The following items are the keyword search mcp server configurations:
-#
-# - name: The name of the mcp server.
-# - transport: The transport protocol to use. Possible values: "sse", "stdio", "stream-http".
-# - url: The URL of the mcp server.
-# - enable: Whether to enable the mcp server.
-#
-# Note that, to use the configuration, comment out one of the following items and
-# uncomment the corresponding item in the following sections
-
-[mcp.server.keyword_search]
-name      = "gaia-keyword-search"
-transport = "stream-http"
-url       = "http://127.0.0.1:8005/mcp"
-enable    = false
-
-# [mcp.server.keyword_search]
-# name      = "gaia-elastic-search"
-# transport = "stream-http"
-# url       = "http://127.0.0.1:8006/mcp"
-# enable    = false
-
-# [mcp.server.keyword_search]
-# name      = "gaia-tidb-search"
-# transport = "stream-http"
-# url       = "http://127.0.0.1:8007/mcp"
-# enable    = false
