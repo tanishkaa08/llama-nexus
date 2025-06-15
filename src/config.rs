@@ -52,10 +52,6 @@ impl Config {
             if let Some(server_vector_search) = mcp_config.server.vector_search_server.as_mut() {
                 server_vector_search.connect_mcp_server().await?;
             }
-
-            if let Some(server_keyword_search) = mcp_config.server.keyword_search_server.as_mut() {
-                server_keyword_search.connect_mcp_server().await?;
-            }
         }
 
         Ok(config)
@@ -657,7 +653,7 @@ impl McpToolServerConfig {
                             dual_error!("{}", &err_msg);
                             ServerError::Operation(err_msg)
                         })?;
-                    dual_info!(
+                    dual_debug!(
                         "Found {} tools from {} mcp server",
                         &tools.tools.len(),
                         self.name,
