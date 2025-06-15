@@ -63,7 +63,7 @@ context_window = 1
 (Other configuration items)
 ```
 
-Similar to enabling RAG mode, you can enable two MCP servers by configuring the `[mcp.server.vector_search]` and `[mcp.server.keyword_search]` sections in `config.toml`:
+Similar to enabling RAG mode, you can enable the vector search MCP server by configuring the `[mcp.server.vector_search]` section in `config.toml`:
 
 ```toml
 (Other configuration items)
@@ -76,14 +76,6 @@ enable    = true
 
 (Other configuration items)
 
-
-[mcp.server.keyword_search]
-name      = "gaia-keyword-search"
-transport = "stream-http"
-url       = "http://127.0.0.1:8005/mcp"
-enable    = true
-
-(Other configuration items)
 ```
 
 ### Starting llama-nexus
@@ -126,7 +118,7 @@ After configuring the startup parameters, follow these steps to start llama-nexu
 
   ```bash
   # Download llama-api-server.wasm
-  export API_SERVER_VERSION=0.22.0
+  export API_SERVER_VERSION=0.22.1
   curl -LO https://github.com/LlamaEdge/LlamaEdge/releases/download/{$API_SERVER_VERSION}/llama-api-server.wasm
 
   # Download chat model
@@ -158,36 +150,36 @@ After configuring the startup parameters, follow these steps to start llama-nexu
 
 - Start MCP servers
 
-  First, download `gaia-qdrant-mcp-server-sse` and `gaia-kwsearch-mcp-server-sse` binaries:
+  First, download `gaia-qdrant-mcp-server` and `gaia-kwsearch-mcp-server` binaries:
 
   ```bash
-  export GAIA_MCP_VERSION=0.2.0
+  export GAIA_MCP_VERSION=0.4.0
 
   # macOS on Apple Silicon
   curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-apple-darwin-aarch64.tar.gz
-  tar -xvzf gaia-mcp-servers-apple-darwin-aarch64.tar.gz gaia-qdrant-mcp-server-streamhttp gaia-kwsearch-mcp-server-streamhttp
+  tar -xvzf gaia-mcp-servers-apple-darwin-aarch64.tar.gz gaia-qdrant-mcp-server gaia-kwsearch-mcp-server
 
   # macOS on Intel
   curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-apple-darwin-x86_64.tar.gz
-  tar -xvzf gaia-mcp-servers-apple-darwin-x86_64.tar.gz gaia-qdrant-mcp-server-streamhttp gaia-kwsearch-mcp-server-streamhttp
+  tar -xvzf gaia-mcp-servers-apple-darwin-x86_64.tar.gz gaia-qdrant-mcp-server gaia-kwsearch-mcp-server
 
   # Linux on x86_64
   curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION }/gaia-mcp-servers-linux-unknown-gnu-x86_64.tar.gz
-  tar -xvzf gaia-mcp-servers-linux-unknown-gnu-x86_64.tar.gz gaia-qdrant-mcp-server-streamhttp gaia-kwsearch-mcp-server-streamhttp
+  tar -xvzf gaia-mcp-servers-linux-unknown-gnu-x86_64.tar.gz gaia-qdrant-mcp-server gaia-kwsearch-mcp-server
 
   # Linux on aarch64
   curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-linux-unknown-gnu-aarch64.tar.gz
-  tar -xvzf gaia-mcp-servers-linux-unknown-gnu-aarch64.tar.gz gaia-qdrant-mcp-server-streamhttp gaia-kwsearch-mcp-server-streamhttp
+  tar -xvzf gaia-mcp-servers-linux-unknown-gnu-aarch64.tar.gz gaia-qdrant-mcp-server gaia-kwsearch-mcp-server
   ```
 
-  Then, start the MCP servers:
+  Then, start the MCP servers. Assume that the index named `paris-index-01` is existing in kw-search-server. To create the index, please refer to the [Creating Embeddings and Indices (Optional)](#creating-embeddings-and-indices-optional) section.
 
   ```bash
   # Start gaia-qdrant mcp server
-  gaia-qdrant-mcp-server-streamhttp
+  ./gaia-qdrant-mcp-server
 
   # Start gaia-keyword-search mcp server
-  gaia-kwsearch-mcp-server-streamhttp
+  ./gaia-kwsearch-mcp-server --index paris-index-01 --transport stream-http
   ```
 
   If started successfully, the `gaia-qdrant` and `gaia-keyword-search` MCP servers will run on ports `8003` and `8005` respectively.
@@ -217,7 +209,7 @@ After configuring the startup parameters, follow these steps to start llama-nexu
     First, download the `kw-search-server` binary:
 
     ```bash
-    export KW_SERVER_VERSION=0.1.1
+    export KW_SERVER_VERSION=0.2.0
 
     # macOS on Apple Silicon
     curl -LO https://github.com/LlamaEdge/kw-search-server/releases/download/{$KW_SERVER_VERSION}/kw-search-server-aarch64-apple-darwin.tar.gz
@@ -414,8 +406,13 @@ curl --location 'http://localhost:3389/v1/chat/completions' \
             "content": "What is the location of Paris, France along the Seine river?"
         }
     ],
+    "kw_search_mcp_tool": {
+        "type": "mcp",
+        "server_label": "gaia-kwsearch-mcp-server",
+        "server_url": "http://127.0.0.1:8005/mcp",
+        "transport": "stream-http"
+    },
     "vdb_collection_name": ["paris-01"],
-    "kw_search_index": "paris-index-01",
     "limit": 5,
     "score_threshold": 0.5,
 }'
@@ -657,7 +654,6 @@ curl --location 'http://localhost:3389/v1/chat/completions' \
             "content": "What is the location of Paris, France along the Seine river?"
         }
     ],
-    "vdb_server_url": "http://localhost:6333",
     "vdb_collection_name": ["dummy-vector-search-index-name"],
     "model": "Qwen3-4B",
 }'
@@ -682,7 +678,12 @@ curl --location 'http://localhost:3389/v1/chat/completions' \
               "content": "What is the location of Paris, France along the Seine river?"
           }
       ],
-      "kw_search_index": "dummy-kw-search-index-name",
+      "kw_search_mcp_tool": {
+        "type": "mcp",
+        "server_label": "gaia-kwsearch-mcp-server",
+        "server_url": "http://127.0.0.1:8005/mcp",
+        "transport": "stream-http"
+      },
       "model": "Qwen3-4B",
   }'
   ```
@@ -705,8 +706,12 @@ curl --location 'http://localhost:3389/v1/chat/completions' \
               "content": "What is the location of Paris, France along the Seine river?"
           }
       ],
-      "es_search_index": "dummy-es-search-index-name",
-      "es_search_fields": ["title", "content"],
+      "kw_search_mcp_tool": {
+        "type": "mcp",
+        "server_label": "gaia-elastic-mcp-server",
+        "server_url": "http://127.0.0.1:8006/mcp",
+        "transport": "stream-http"
+      },
       "model": "Qwen3-4B",
   }'
   ```
@@ -729,8 +734,12 @@ curl --location 'http://localhost:3389/v1/chat/completions' \
               "content": "What is the location of Paris, France along the Seine river?"
           }
       ],
-      "tidb_search_database": "dummy-tidb-search-database-name",
-      "tidb_search_table": "dummy-tidb-search-table-name",
+      "kw_search_mcp_tool": {
+        "type": "mcp",
+        "server_label": "gaia-tidb-mcp-server",
+        "server_url": "http://127.0.0.1:8007/mcp",
+        "transport": "stream-http"
+      },
       "model": "Qwen3-4B",
   }'
   ```
@@ -759,10 +768,15 @@ curl --location 'http://localhost:3389/v1/chat/completions' \
             "content": "What is the location of Paris, France along the Seine river?"
         }
     ],
-    "vdb_server_url": "http://localhost:6333",
-    "vdb_collection_name": ["dummy-vector-search-index-name"],
-    "kw_search_url": "http://localhost:12306",
-    "kw_search_index": "dummy-kw-search-index-name",
+    "kw_search_mcp_tool": {
+        "type": "mcp",
+        "server_label": "gaia-kwsearch-mcp-server",
+        "server_url": "http://127.0.0.1:8005/mcp",
+        "transport": "stream-http"
+    },
+    "vdb_collection_name": [
+        "dummy-vector-search-index-name"
+    ],
     "limit": 5,
     "score_threshold": 0.5,
     "weighted_alpha": 0.3,
