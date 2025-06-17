@@ -17,10 +17,6 @@ In this guide, we will use Qdrant and kw-search-server as examples to demonstrat
     - [Starting llama-nexus](#starting-llama-nexus)
   - [Creating Embeddings and Indices (Optional)](#creating-embeddings-and-indices-optional)
   - [Executing Search](#executing-search)
-  - [Request Parameters for RAG Search](#request-parameters-for-rag-search)
-    - [Parameters for Vector Search](#parameters-for-vector-search)
-    - [Parameters for Keyword Search](#parameters-for-keyword-search)
-    - [Additional Parameters](#additional-parameters)
 
 ## Starting llama-nexus and Related Servers
 
@@ -63,7 +59,7 @@ context_window = 1
 (Other configuration items)
 ```
 
-Similar to enabling RAG mode, you can enable the vector search MCP server by configuring the `[mcp.server.vector_search]` section in `config.toml`:
+Similar to enabling RAG mode, you can enable two MCP servers by configuring the `[mcp.server.vector_search]` and `[mcp.server.keyword_search]` sections in `config.toml`:
 
 ```toml
 (Other configuration items)
@@ -76,6 +72,14 @@ enable    = true
 
 (Other configuration items)
 
+
+[mcp.server.keyword_search]
+name      = "gaia-keyword-search"
+transport = "stream-http"
+url       = "http://127.0.0.1:8005/mcp"
+enable    = true
+
+(Other configuration items)
 ```
 
 ### Starting llama-nexus
@@ -118,7 +122,7 @@ After configuring the startup parameters, follow these steps to start llama-nexu
 
   ```bash
   # Download llama-api-server.wasm
-  export API_SERVER_VERSION=0.22.1
+  export API_SERVER_VERSION=0.22.0
   curl -LO https://github.com/LlamaEdge/LlamaEdge/releases/download/{$API_SERVER_VERSION}/llama-api-server.wasm
 
   # Download chat model
@@ -150,41 +154,41 @@ After configuring the startup parameters, follow these steps to start llama-nexu
 
 - Start MCP servers
 
-  First, download `gaia-qdrant-mcp-server` and `gaia-kwsearch-mcp-server` binaries:
+  First, download `gaia-qdrant-mcp-server-sse` and `gaia-kwsearch-mcp-server-sse` binaries:
 
   ```bash
-  export GAIA_MCP_VERSION=0.4.0
+  export MCP_SERVER_VERSION=0.4.0
 
   # macOS on Apple Silicon
-  curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-apple-darwin-aarch64.tar.gz
+  curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$MCP_SERVER_VERSION}/gaia-mcp-servers-apple-darwin-aarch64.tar.gz
   tar -xvzf gaia-mcp-servers-apple-darwin-aarch64.tar.gz gaia-qdrant-mcp-server gaia-kwsearch-mcp-server
 
   # macOS on Intel
-  curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-apple-darwin-x86_64.tar.gz
+  curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$MCP_SERVER_VERSION}/gaia-mcp-servers-apple-darwin-x86_64.tar.gz
   tar -xvzf gaia-mcp-servers-apple-darwin-x86_64.tar.gz gaia-qdrant-mcp-server gaia-kwsearch-mcp-server
 
   # Linux on x86_64
-  curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION }/gaia-mcp-servers-linux-unknown-gnu-x86_64.tar.gz
+  curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$MCP_SERVER_VERSION}/gaia-mcp-servers-linux-unknown-gnu-x86_64.tar.gz
   tar -xvzf gaia-mcp-servers-linux-unknown-gnu-x86_64.tar.gz gaia-qdrant-mcp-server gaia-kwsearch-mcp-server
 
   # Linux on aarch64
-  curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$GAIA_MCP_VERSION}/gaia-mcp-servers-linux-unknown-gnu-aarch64.tar.gz
+  curl -LO https://github.com/decentralized-mcp/gaia-mcp-servers/releases/download/{$MCP_SERVER_VERSION}/gaia-mcp-servers-linux-unknown-gnu-aarch64.tar.gz
   tar -xvzf gaia-mcp-servers-linux-unknown-gnu-aarch64.tar.gz gaia-qdrant-mcp-server gaia-kwsearch-mcp-server
   ```
 
-  Then, start the MCP servers. Assume that the index named `paris-index-01` is existing in kw-search-server. To create the index, please refer to the [Creating Embeddings and Indices (Optional)](#creating-embeddings-and-indices-optional) section.
+  Then, start the MCP servers:
 
   ```bash
   # Start gaia-qdrant mcp server
-  ./gaia-qdrant-mcp-server
+  ./gaia-qdrant-mcp-server --base-url http://127.0.0.1:6333 --transport stream-http --collection <your-collection-name>
 
   # Start gaia-keyword-search mcp server
-  ./gaia-kwsearch-mcp-server --index paris-index-01 --transport stream-http
+  ./gaia-kwsearch-mcp-server --index <your-index-name> --transport stream-http
   ```
 
-  If started successfully, the `gaia-qdrant` and `gaia-keyword-search` MCP servers will run on ports `8003` and `8005` respectively.
+  If started successfully, the `gaia-qdrant-mcp-server` and `gaia-kwsearch-mcp-server` MCP servers will run on ports `8003` and `8005` respectively.
 
-  Note: The `gaia-qdrant` and `gaia-keyword-search` MCP servers will access Qdrant and kw-search-server respectively when performing searches. Ensure that Qdrant and kw-search-server are properly started and running on their default ports `6333` and `12306`:
+  Note: The `gaia-qdrant-mcp-server` and `gaia-kwsearch-mcp-server` MCP servers will access Qdrant and kw-search-server respectively when performing searches. Ensure that Qdrant and kw-search-server are properly started and running on their default ports `6333` and `12306`:
 
   <details><summary>Expand to view the steps to deploy Qdrant and kw-search-server</summary>
 
@@ -387,7 +391,7 @@ At this point, we have created embeddings and indexes for the documents. Next, w
 
 ## Executing Search
 
-When llama-nexus is running in RAG mode with `gaia-qdrant` and `gaia-keyword-search` MCP servers enabled, sending a chat completion request will trigger vector search and keyword search.
+When llama-nexus is running in RAG mode with `gaia-qdrant-mcp-server` and `gaia-kwsearch-mcp-server` MCP servers enabled, sending a chat completion request will trigger vector search and keyword search.
 
 The CURL command below sends a chat completion request to `llama-nexus`. Note: If your llama-nexus is running on a port other than `3389`, please update the port number in the request.
 
@@ -406,13 +410,6 @@ curl --location 'http://localhost:3389/v1/chat/completions' \
             "content": "What is the location of Paris, France along the Seine river?"
         }
     ],
-    "kw_search_mcp_tool": {
-        "type": "mcp",
-        "server_label": "gaia-kwsearch-mcp-server",
-        "server_url": "http://127.0.0.1:8005/mcp",
-        "transport": "stream-http"
-    },
-    "vdb_collection_name": ["paris-01"],
     "limit": 5,
     "score_threshold": 0.5,
 }'
@@ -445,144 +442,190 @@ After processing, llama-nexus will return a response similar to:
 }
 ```
 
-## Request Parameters for RAG Search
+At this point, we have completed the execution of vector search and keyword search. The results of vector search and keyword search can be viewed in the llama-nexus logs. Below is an example of the execution results from the llama-nexus logs:
 
-In addition to parameters compatible with the OpenAI API such as `model` and `messages`, the `/v1/chat/completions` endpoint includes the following parameters for controlling RAG search:
-
-### Parameters for Vector Search
-
-- Parameters for Qdrant
-  - `vdb_collection_name`: Name of the Qdrant collection used for vector search
-
-<details><summary>Expand to view example request</summary>
+<details><summary>Expand to view logs</summary>
 
 ```bash
-curl --location 'http://localhost:3389/v1/chat/completions' \
---header 'Content-Type: application/json' \
---data '{
-    "messages": [
-        {
-            "role": "user",
-            "content": "What is the location of Paris, France along the Seine river?"
-        }
-    ],
-    "vdb_collection_name": ["dummy-vector-search-index-name"],
-    "model": "Qwen3-4B",
-}'
-```
+(more logs)
 
-</details>
-
-### Parameters for Keyword Search
-
-- Parameters for [kw-search-server](https://github.com/LlamaEdge/kw-search-server)
-
-  ```bash
-  curl --location 'http://localhost:3389/v1/chat/completions' \
-  --header 'Content-Type: application/json' \
-  --data '{
-      "messages": [
-          {
-              "role": "user",
-              "content": "What is the location of Paris, France along the Seine river?"
-          }
-      ],
-      "kw_search_mcp_tool": {
-        "type": "mcp",
-        "server_label": "gaia-kwsearch-mcp-server",
-        "server_url": "http://127.0.0.1:8005/mcp",
-        "transport": "stream-http"
-      },
-      "model": "Qwen3-4B",
-  }'
-  ```
-
-  Also see [README of gaia-kwsearch-mcp-server](https://github.com/decentralized-mcp/gaia-mcp-servers/blob/main/gaia-kwsearch/README.md) for the MCP server side configuration details.
-
-- Parameters for Elasticsearch
-
-  ```bash
-  curl --location 'http://localhost:3389/v1/chat/completions' \
-  --header 'Content-Type: application/json' \
-  --data '{
-      "messages": [
-          {
-              "role": "user",
-              "content": "What is the location of Paris, France along the Seine river?"
-          }
-      ],
-      "kw_search_mcp_tool": {
-        "type": "mcp",
-        "server_label": "gaia-elastic-mcp-server",
-        "server_url": "http://127.0.0.1:8006/mcp",
-        "transport": "stream-http"
-      },
-      "model": "Qwen3-4B",
-  }'
-  ```
-
-  Also see [README of gaia-elastic-mcp-server](https://github.com/decentralized-mcp/gaia-mcp-servers/blob/main/gaia-elastic/README.md) for the MCP server side configuration details.
-
-- Parameters for TiDB
-
-  ```bash
-  curl --location 'http://localhost:3389/v1/chat/completions' \
-  --header 'Content-Type: application/json' \
-  --data '{
-      "messages": [
-          {
-              "role": "user",
-              "content": "What is the location of Paris, France along the Seine river?"
-          }
-      ],
-      "kw_search_mcp_tool": {
-        "type": "mcp",
-        "server_label": "gaia-tidb-mcp-server",
-        "server_url": "http://127.0.0.1:8007/mcp",
-        "transport": "stream-http"
-      },
-      "model": "Qwen3-4B",
-  }'
-  ```
-
-  Also see [README of gaia-tidb-mcp-server](https://github.com/decentralized-mcp/gaia-mcp-servers/blob/main/gaia-tidb/README.md) for the MCP server side configuration details.
-
-### Additional Parameters
-
-- `limit`: The maximum number of results to return.
-- `score_threshold`: The score threshold for vector search and keyword search results.
-- `weighted_alpha`: When vector search and keyword search find the same result, this parameter is used to weight their respective scores to obtain the final score for that result. The value range of `weighted_alpha` is `[0, 1]`, with a default value of `0.5`. The calculation formula is:
-
-  ```text
-  final_score = weighted_alpha * keyword_score + (1 - weighted_alpha) * vector_score
-  ```
-
-<details><summary>Expand to view example request</summary>
-
-```bash
-curl --location 'http://localhost:3389/v1/chat/completions' \
---header 'Content-Type: application/json' \
---data '{
-    "messages": [
-        {
-            "role": "user",
-            "content": "What is the location of Paris, France along the Seine river?"
-        }
-    ],
-    "kw_search_mcp_tool": {
-        "type": "mcp",
-        "server_label": "gaia-kwsearch-mcp-server",
-        "server_url": "http://127.0.0.1:8005/mcp",
-        "transport": "stream-http"
+2025-05-20T09:25:14.545208Z  INFO ThreadId(06) src/rag.rs:49: Received a new chat request - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.545232Z  INFO ThreadId(06) src/rag.rs:56: URL to the kw-search mcp-server: http://localhost:12306 - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.581827Z  INFO ThreadId(08) src/rag.rs:128: Got 5 kw-search hits - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.581838Z  INFO ThreadId(08) src/rag.rs:564: Use the VectorDB settings from the request - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.581842Z  INFO ThreadId(08) src/rag.rs:580: qdrant url: http://localhost:6333, collection name: paris-03, limit: 5, score threshold: 0.5 - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.581846Z  INFO ThreadId(08) src/rag.rs:690: Computing embeddings for user query - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.581849Z  INFO ThreadId(08) src/rag.rs:703: Context window: 1 - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.581851Z  INFO ThreadId(08) src/rag.rs:743: Found the latest 1 user message(s) - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.581857Z  INFO ThreadId(08) src/rag.rs:761: Query text for the context retrieval: What is the location of Paris, France along the Seine river? - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.581861Z  INFO ThreadId(08) src/handlers.rs:695: Received a new embeddings request - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.581865Z  INFO ThreadId(08) src/handlers.rs:723: Forward the embeddings request to http://localhost:9069/v1/embeddings - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.628118Z  INFO ThreadId(06) src/handlers.rs:794: Embeddings request completed successfully - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.628174Z  INFO ThreadId(06) src/rag.rs:876: Retrieve context from http://localhost:6333/collections/paris-03, max number of result to return: 5, score threshold: 0.5 - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.673742Z  INFO ThreadId(04) src/rag.rs:948: Got 5 points from the gaia-qdrant-mcp-server in 0.00433625 seconds - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.673758Z  INFO ThreadId(04) src/rag.rs:964: Try to remove duplicated points - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.674140Z  INFO ThreadId(04) src/rag.rs:855: Retrieved 5 point(s) from the collection `paris-03` - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.674169Z  INFO ThreadId(04) src/rag.rs:335: em_hits_map: {
+    16545325271760060286: RagScoredPoint {
+        source: "Paris, city and capital of France, situated in the north-central part of the country.",
+        score: 0.8027477,
     },
-    "vdb_collection_name": [
-        "dummy-vector-search-index-name"
-    ],
-    "limit": 5,
-    "score_threshold": 0.5,
-    "weighted_alpha": 0.3,
-    "model": "Qwen3-4B",
-}'
+    13314534164983550839: RagScoredPoint {
+        source: "Paris occupies a central position in the rich agricultural region known as the Paris Basin, and it constitutes one of eight départements of the Île-de",
+        score: 0.7360471,
+    },
+    14397306707317103710: RagScoredPoint {
+        source: "People were living on the site of the present-day city, located along the Seine River some 233 miles (375 km) upstream from the river's mouth on the",
+        score: 0.7763241,
+    },
+    8064019955072080751: RagScoredPoint {
+        source: "Paris's site at a crossroads of both water and land routes significant not only to France but also to Europe has had a continuing influence on its",
+        score: 0.7246754,
+    },
+    656120371065341945: RagScoredPoint {
+        source: "For centuries Paris has been one of the world's most important and attractive cities.",
+        score: 0.6880192,
+    },
+} - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.674211Z  INFO ThreadId(04) src/rag.rs:344: em_scores: {
+    14397306707317103710: 0.769685823487625,
+    8064019955072080751: 0.319503872185202,
+    656120371065341945: 0.0,
+    13314534164983550839: 0.41862222551501976,
+    16545325271760060286: 1.0,
+} - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.674232Z  INFO ThreadId(04) src/rag.rs:355: kw_hits_map: {
+    17408515414919045690: KwSearchHit {
+        title: "Unknown",
+        content: "-France administrative region. It is by far the country's most important centre of commerce and culture.",
+        score: 5.132064,
+    },
+    3298882407011454303: KwSearchHit {
+        title: "Unknown",
+        content: "The modern city has spread from the island (the Île de la Cité) and far beyond both banks of the Seine.",
+        score: 4.108218,
+    },
+    5068393704069168579: KwSearchHit {
+        title: "Unknown",
+        content: "France has long been a highly centralized country, and Paris has come to be identified with a powerful central state, drawing to itself much of the",
+        score: 3.2115037,
+    },
+    16545325271760060286: KwSearchHit {
+        title: "Unknown",
+        content: "Paris, city and capital of France, situated in the north-central part of the country.",
+        score: 4.66901,
+    },
+    14397306707317103710: KwSearchHit {
+        title: "Unknown",
+        content: "People were living on the site of the present-day city, located along the Seine River some 233 miles (375 km) upstream from the river's mouth on the",
+        score: 8.916491,
+    },
+} - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.674272Z  INFO ThreadId(04) src/rag.rs:364: kw_scores: {
+    14397306707317103710: 1.0,
+    16545325271760060286: 0.25547932420463054,
+    5068393704069168579: 0.0,
+    17408515414919045690: 0.3366458502019802,
+    3298882407011454303: 0.15718077058646557,
+} - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.674285Z  INFO ThreadId(04) src/rag.rs:373: final_scores: {
+    17408515414919045690: 0.1683229251009901,
+    5068393704069168579: 0.0,
+    656120371065341945: 0.0,
+    16545325271760060286: 0.6277396621023152,
+    3298882407011454303: 0.07859038529323278,
+    13314534164983550839: 0.20931111275750988,
+    14397306707317103710: 0.8848429117438126,
+    8064019955072080751: 0.159751936092601,
+} - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.674295Z  INFO ThreadId(04) src/rag.rs:384: final_ranking: [
+    (
+        14397306707317103710,
+        0.8848429117438126,
+    ),
+    (
+        16545325271760060286,
+        0.6277396621023152,
+    ),
+    (
+        13314534164983550839,
+        0.20931111275750988,
+    ),
+    (
+        17408515414919045690,
+        0.1683229251009901,
+    ),
+    (
+        8064019955072080751,
+        0.159751936092601,
+    ),
+    (
+        3298882407011454303,
+        0.07859038529323278,
+    ),
+    (
+        5068393704069168579,
+        0.0,
+    ),
+    (
+        656120371065341945,
+        0.0,
+    ),
+] - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.674331Z  INFO ThreadId(04) src/rag.rs:428: retrieved: [
+    RagScoredPoint {
+        source: "People were living on the site of the present-day city, located along the Seine River some 233 miles (375 km) upstream from the river's mouth on the",
+        score: 0.8848429117438126,
+    },
+    RagScoredPoint {
+        source: "Paris, city and capital of France, situated in the north-central part of the country.",
+        score: 0.6277396621023152,
+    },
+    RagScoredPoint {
+        source: "Paris occupies a central position in the rich agricultural region known as the Paris Basin, and it constitutes one of eight départements of the Île-de",
+        score: 0.20931111275750988,
+    },
+    RagScoredPoint {
+        source: "-France administrative region. It is by far the country's most important centre of commerce and culture.",
+        score: 0.1683229251009901,
+    },
+    RagScoredPoint {
+        source: "Paris's site at a crossroads of both water and land routes significant not only to France but also to Europe has had a continuing influence on its",
+        score: 0.159751936092601,
+    },
+    RagScoredPoint {
+        source: "The modern city has spread from the island (the Île de la Cité) and far beyond both banks of the Seine.",
+        score: 0.07859038529323278,
+    },
+    RagScoredPoint {
+        source: "France has long been a highly centralized country, and Paris has come to be identified with a powerful central state, drawing to itself much of the",
+        score: 0.0,
+    },
+    RagScoredPoint {
+        source: "For centuries Paris has been one of the world's most important and attractive cities.",
+        score: 0.0,
+    },
+] - request_id: 9ef0f67e-da44-444a-acba-b5f8ff9ec830
+2025-05-20T09:25:14.674379Z  INFO ThreadId(04) src/rag.rs:1054: rag_policy: last-user-message
+2025-05-20T09:25:14.674383Z  INFO ThreadId(04) src/rag.rs:1057: context:
+People were living on the site of the present-day city, located along the Seine River some 233 miles (375 km) upstream from the river's mouth on the
+
+Paris, city and capital of France, situated in the north-central part of the country.
+
+Paris occupies a central position in the rich agricultural region known as the Paris Basin, and it constitutes one of eight départements of the Île-de
+
+-France administrative region. It is by far the country's most important centre of commerce and culture.
+
+Paris's site at a crossroads of both water and land routes significant not only to France but also to Europe has had a continuing influence on its
+
+The modern city has spread from the island (the Île de la Cité) and far beyond both banks of the Seine.
+
+France has long been a highly centralized country, and Paris has come to be identified with a powerful central state, drawing to itself much of the
+
+For centuries Paris has been one of the world's most important and attractive cities.
+2025-05-20T09:25:14.674433Z  INFO ThreadId(04) src/rag.rs:1131: Merge RAG context into last user message.
+
+(more logs)
 ```
 
 </details>
