@@ -149,38 +149,53 @@ pub async fn chat_new(
 
     // vector search
     dual_info!("Performing vector search - request_id: {}", request_id);
-    let vector_hits = perform_vector_search(
-        State(state.clone()),
-        Extension(cancel_token.clone()),
-        headers.clone(),
-        &chat_request,
-        request_id,
-    )
-    .await?;
-    dual_info!(
-        "Retrieved {} points from the vector search - request_id: {}",
-        vector_hits.len(),
-        request_id
-    );
+    let mut vector_hits = Vec::new();
+    if MCP_VECTOR_SEARCH_CLIENT.get().is_some() {
+        vector_hits = perform_vector_search(
+            State(state.clone()),
+            Extension(cancel_token.clone()),
+            headers.clone(),
+            &chat_request,
+            request_id,
+        )
+        .await?;
+        dual_info!(
+            "Retrieved {} points from the vector search - request_id: {}",
+            vector_hits.len(),
+            request_id
+        );
+    } else {
+        dual_info!(
+            "Ignore vector search: No vector mcp server available - request_id: {}",
+            request_id
+        );
+    }
 
     // keyword search
     dual_info!(
         "Performing agentic keyword search - request_id: {}",
         request_id
     );
-    let kw_hits = perform_keyword_search_new(
-        State(state.clone()),
-        &query_text,
-        &chat_request,
-        // filter_limit,
-        &request_id,
-    )
-    .await?;
-    dual_info!(
-        "Retrieved {} hits from the keyword search - request_id: {}",
-        kw_hits.len(),
-        request_id
-    );
+    let mut kw_hits = Vec::new();
+    if MCP_KEYWORD_SEARCH_CLIENT.get().is_some() {
+        kw_hits = perform_keyword_search_new(
+            State(state.clone()),
+            &query_text,
+            &chat_request,
+            &request_id,
+        )
+        .await?;
+        dual_info!(
+            "Retrieved {} hits from the keyword search - request_id: {}",
+            kw_hits.len(),
+            request_id
+        );
+    } else {
+        dual_info!(
+            "Ignore keyword search: No keyword search mcp server available - request_id: {}",
+            request_id
+        );
+    }
 
     // * rerank
     let hits = {
