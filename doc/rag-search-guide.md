@@ -23,7 +23,7 @@ In this guide, we will use Qdrant and kw-search-server as examples to demonstrat
 First, download the `llama-nexus` binary:
 
 ```bash
-export NEXUS_VERSION=0.2.0
+export NEXUS_VERSION=0.3.0
 
 # macOS on Apple Silicon
 curl -LO https://github.com/LlamaEdge/llama-nexus/releases/download/{$NEXUS_VERSION}/llama-nexus-apple-darwin-aarch64.tar.gz
