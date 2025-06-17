@@ -3,7 +3,32 @@ host = "127.0.0.1" # The host to listen on.
 port = 3389        # The port to listen on.
 
 
-# Section 1: RAG
+# Section 1: MCP Tool Servers
+#
+# The following items are the configuration for the MCP tool servers:
+#
+# - name: The name of the MCP tool server.
+# - transport: The transport protocol to use. Possible values: "sse", "stdio", "streamable-http". Note that ONLY "sse" is supported for now.
+# - url: The URL of the MCP tool server.
+# - enable: Whether to enable the MCP tool server.
+#
+# Note that, if any of the MCP tool servers are enabled, then please guarantee that the
+# corresponding mcp server is started.
+
+[[mcp.server.tool]]
+name      = "gaia-calculator"
+transport = "stream-http"
+url       = "http://127.0.0.1:8001/mcp"
+enable    = false
+
+[[mcp.server.tool]]
+name      = "gaia-weather"
+transport = "stream-http"
+url       = "http://127.0.0.1:8002/mcp"
+enable    = false
+
+
+# Section 2: RAG
 #
 # The following items are the configuration for the RAG service:
 #
@@ -20,7 +45,7 @@ policy         = "last-user-message"
 context_window = 1
 
 
-# Section 1.1: Vector Search
+# Section 2.1: Vector Search
 #
 # The following items are the vector search mcp server configurations:
 #
@@ -36,4 +61,35 @@ context_window = 1
 name      = "gaia-qdrant"
 transport = "stream-http"
 url       = "http://127.0.0.1:8003/mcp"
+enable    = false
+
+
+# Section 2.2: Keyword Search
+#
+# The following items are the keyword search mcp server configurations:
+#
+# - name: The name of the mcp server.
+# - transport: The transport protocol to use. Possible values: "sse", "stdio", "stream-http".
+# - url: The URL of the mcp server.
+# - enable: Whether to enable the mcp server.
+#
+# Note that, to use the configuration, comment out one of the following items and
+# uncomment the corresponding item in the following sections
+
+# [mcp.server.keyword_search]
+# name      = "gaia-keyword-search"
+# transport = "stream-http"
+# url       = "http://127.0.0.1:8005/mcp"
+# enable    = false
+
+# [mcp.server.keyword_search]
+# name      = "gaia-elastic-search"
+# transport = "stream-http"
+# url       = "http://127.0.0.1:8006/mcp"
+# enable    = false
+
+[mcp.server.keyword_search]
+name      = "gaia-tidb-search"
+transport = "stream-http"
+url       = "http://127.0.0.1:8007/mcp"
 enable    = false
