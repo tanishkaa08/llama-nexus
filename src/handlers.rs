@@ -3,7 +3,9 @@ use crate::{
     dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
     info::ApiServer,
-    mcp::{MCP_KEYWORD_SEARCH_CLIENT, USER_TO_MCP_CLIENTS, USER_TO_MCP_TOOLS},
+    mcp::{
+        MCP_CLIENTS, MCP_KEYWORD_SEARCH_CLIENT, MCP_TOOLS, USER_TO_MCP_CLIENTS, USER_TO_MCP_TOOLS,
+    },
     rag,
     server::{RoutingPolicy, Server, ServerIdToRemove, ServerKind},
     AppState,
@@ -122,7 +124,7 @@ pub(crate) async fn _chat_old(
 
                 // connect the mcp server and get the tools
                 server_config
-                    .connect_mcp_server(request.user.as_ref().unwrap())
+                    .connect_mcp_server_by_user(request.user.as_ref().unwrap())
                     .await?;
 
                 // get the allowed tools
@@ -544,6 +546,44 @@ pub(crate) async fn chat(
         }
     };
 
+    // update the request with MCP tools
+    if let Some(mcp_config) = state.config.read().await.mcp.as_ref() {
+        if !mcp_config.server.tool_servers.is_empty() {
+            let mut more_tools = Vec::new();
+            for server_config in mcp_config.server.tool_servers.iter() {
+                if server_config.enable {
+                    server_config
+                        .tools
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .for_each(|mcp_tool| {
+                            let tool = Tool::new(ToolFunction {
+                                name: mcp_tool.name.to_string(),
+                                description: mcp_tool.description.as_ref().map(|s| s.to_string()),
+                                parameters: Some((*mcp_tool.input_schema).clone()),
+                            });
+
+                            more_tools.push(tool.clone());
+                        });
+                }
+            }
+
+            if !more_tools.is_empty() {
+                if let Some(tools) = &mut request.tools {
+                    tools.extend(more_tools);
+                } else {
+                    request.tools = Some(more_tools);
+                }
+
+                // set the tool choice to auto
+                if let Some(ToolChoice::None) | None = request.tool_choice {
+                    request.tool_choice = Some(ToolChoice::Auto);
+                }
+            }
+        }
+    }
+
     // load tools from the `mcp_tools` field in the request
     if let Some(config_mcp_servers) = &request.mcp_tools {
         if !config_mcp_servers.is_empty() {
@@ -561,7 +601,7 @@ pub(crate) async fn chat(
 
                 // connect the mcp server and get the tools
                 server_config
-                    .connect_mcp_server(request.user.as_ref().unwrap())
+                    .connect_mcp_server_by_user(request.user.as_ref().unwrap())
                     .await?;
 
                 // get the allowed tools
@@ -912,15 +952,15 @@ async fn call_mcp_server(
     let request_id = request_id.as_ref();
     let chat_service_url = chat_service_url.as_ref();
 
-    // get the user id from the request
-    let user_id = match request.user.as_ref() {
-        Some(user_id) => user_id,
-        None => {
-            let err_msg = "User ID is not found in the request";
-            dual_error!("{} - request_id: {}", err_msg, request_id);
-            return Err(ServerError::Operation(err_msg.to_string()));
-        }
-    };
+    // // get the user id from the request
+    // let user_id = match request.user.as_ref() {
+    //     Some(user_id) => user_id,
+    //     None => {
+    //         let err_msg = "User ID is not found in the request";
+    //         dual_error!("{} - request_id: {}", err_msg, request_id);
+    //         return Err(ServerError::Operation(err_msg.to_string()));
+    //     }
+    // };
 
     // let tool_calls = assistant_message.tool_calls.clone();
     let tool_call = &tool_calls[0];
@@ -938,76 +978,62 @@ async fn call_mcp_server(
     let arguments =
         serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(tool_args).ok();
 
-    // get the mcp client by user id and tool name, then call the tool
-    let response = match USER_TO_MCP_TOOLS.get() {
-        Some(user_to_mcp_tools) => {
-            let user_to_mcp_tools = user_to_mcp_tools.read().await;
-            match user_to_mcp_tools.get(user_id) {
-                Some(mcp_tools) => {
-                    let mcp_tools = mcp_tools.read().await;
-                    match mcp_tools.get(tool_name) {
-                        Some(mcp_client_name) => {
-                            match USER_TO_MCP_CLIENTS.get() {
-                                Some(user_to_mcp_clients) => {
-                                    let user_to_mcp_clients = user_to_mcp_clients.read().await;
-                                    match user_to_mcp_clients.get(user_id) {
-                                        Some(mcp_clients) => {
-                                            let mcp_clients = mcp_clients.read().await;
-                                            match mcp_clients.get(mcp_client_name) {
-                                                Some(mcp_client) => {
-                                                    // call a tool
-                                                    let request_param = CallToolRequestParam {
-                                                        name: tool_name.to_string().into(),
-                                                        arguments,
-                                                    };
-                                                    let res = mcp_client
-                                                        .read()
-                                                        .await
-                                                        .raw
-                                                        .peer()
-                                                        .call_tool(request_param)
-                                                        .await
-                                                        .map_err(|e| {
-                                                            dual_error!(
-                                                                "Failed to call the tool: {}",
-                                                                e
-                                                            );
-                                                            ServerError::Operation(e.to_string())
-                                                        })?;
-                                                    dual_debug!(
-                                                        "{} - request_id: {}",
-                                                        serde_json::to_string_pretty(&res).unwrap(),
-                                                        request_id
-                                                    );
+    // find mcp client by tool name
+    if let Some(mcp_tools) = MCP_TOOLS.get() {
+        let tools = mcp_tools.read().await;
+        dual_debug!("mcp_tools: {:?}", mcp_tools);
 
-                                                    match res.is_error {
-                                                        Some(false) => {
-                                                            match res.content.is_empty() {
-                                                                true => {
-                                                                    dual_error!(
-                                    "MCP server returned empty content - request_id: {}",
-                                    request_id
-                                );
-                                                                    Err(ServerError::McpEmptyContent)
-                                                                }
-                                                                false => {
-                                                                    let content = &res.content[0];
-                                                                    match &content.raw {
-                                                                        RawContent::Text(text) => {
-                                                                            dual_debug!(
-                                            "tool result: {} - request_id: {}",
-                                            text.text,
-                                            request_id
-                                        );
+        // look up the tool name in MCP_TOOLS
+        if let Some(mcp_client_name) = tools.get(tool_name) {
+            if let Some(lock_mcp_clients) = MCP_CLIENTS.get() {
+                let mcp_clients = lock_mcp_clients.read().await;
 
-                                                                            // create an assistant message
-                                                                            let tool_completion_message =
+                // get the mcp client
+                let mcp_client = match mcp_clients.get(mcp_client_name) {
+                    Some(mcp_client) => mcp_client,
+                    None => {
+                        let err_msg = format!("Tool not found: {tool_name}");
+                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                        return Err(ServerError::Operation(err_msg.to_string()));
+                    }
+                };
+
+                // call a tool
+                let tool_sum = CallToolRequestParam {
+                    name: tool_name.to_string().into(),
+                    arguments,
+                };
+                let res = mcp_client
+                    .read()
+                    .await
+                    .raw
+                    .peer()
+                    .call_tool(tool_sum)
+                    .await
+                    .map_err(|e| {
+                        dual_error!("Failed to call the tool: {}", e);
+                        ServerError::Operation(e.to_string())
+                    })?;
+                dual_debug!("{}", serde_json::to_string_pretty(&res).unwrap());
+
+                match res.is_error {
+                    Some(false) => {
+                        match res.content.is_empty() {
+                            true => Err(ServerError::McpEmptyContent),
+                            false => {
+                                let content = &res.content[0];
+                                match &content.raw {
+                                    RawContent::Text(text) => {
+                                        dual_debug!("tool result: {}", text.text);
+
+                                        // create an assistant message
+                                        let tool_completion_message =
                                             ChatCompletionRequestMessage::Tool(
                                                 ChatCompletionToolMessage::new(&text.text, None),
                                             );
 
-                                                                            // append assistant message with tool call to request messages
-                                                                            let assistant_completion_message =
+                                        // append assistant message with tool call to request messages
+                                        let assistant_completion_message =
                                             ChatCompletionRequestMessage::Assistant(
                                                 ChatCompletionAssistantMessage::new(
                                                     None,
@@ -1015,73 +1041,61 @@ async fn call_mcp_server(
                                                     Some(tool_calls.to_vec()),
                                                 ),
                                             );
-                                                                            request.messages.push(assistant_completion_message);
-                                                                            // append tool message with tool result to request messages
-                                                                            request.messages.push(tool_completion_message);
+                                        request.messages.push(assistant_completion_message);
+                                        // append tool message with tool result to request messages
+                                        request.messages.push(tool_completion_message);
 
-                                                                            // Create a request client that can be cancelled
-                                                                            let request_builder = reqwest::Client::new()
+                                        // Create a request client that can be cancelled
+                                        let request_builder = reqwest::Client::new()
                                             .post(chat_service_url)
                                             .header(CONTENT_TYPE, "application/json")
                                             .json(&request);
 
-                                                                            // Use select! to handle request cancellation
-                                                                            let ds_response = select! {
-                                                                                response = request_builder.send() => {
-                                                                                    response.map_err(|e| {
-                                                                                        let err_msg = format!(
-                                                                                            "Failed to forward the request to the downstream server: {e}"
-                                                                                        );
-                                                                                        dual_error!("{} - request_id: {}", err_msg, request_id);
-                                                                                        ServerError::Operation(err_msg)
-                                                                                    })?
-                                                                                }
-                                                                                _ = cancel_token.cancelled() => {
-                                                                                    let warn_msg = "Request was cancelled by client";
-                                                                                    dual_warn!("{} - request_id: {}", warn_msg, request_id);
-                                                                                    return Err(ServerError::Operation(warn_msg.to_string()));
-                                                                                }
-                                                                            };
+                                        // Use select! to handle request cancellation
+                                        let ds_response = select! {
+                                            response = request_builder.send() => {
+                                                response.map_err(|e| {
+                                                    let err_msg = format!(
+                                                        "Failed to forward the request to the downstream server: {e}"
+                                                    );
+                                                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                                                    ServerError::Operation(err_msg)
+                                                })?
+                                            }
+                                            _ = cancel_token.cancelled() => {
+                                                let warn_msg = "Request was cancelled by client";
+                                                dual_warn!("{} - request_id: {}", warn_msg, request_id);
+                                                return Err(ServerError::Operation(warn_msg.to_string()));
+                                            }
+                                        };
 
-                                                                            let status =
-                                                                                ds_response
-                                                                                    .status();
-                                                                            let headers =
-                                                                                ds_response
-                                                                                    .headers()
-                                                                                    .clone();
+                                        let status = ds_response.status();
+                                        let headers = ds_response.headers().clone();
 
-                                                                            // Handle response body reading with cancellation
-                                                                            let bytes = select! {
-                                                                                bytes = ds_response.bytes() => {
-                                                                                    bytes.map_err(|e| {
-                                                                                        let err_msg = format!("Failed to get the full response as bytes: {e}");
-                                                                                        dual_error!("{} - request_id: {}", err_msg, request_id);
-                                                                                        ServerError::Operation(err_msg)
-                                                                                    })?
-                                                                                }
-                                                                                _ = cancel_token.cancelled() => {
-                                                                                    let warn_msg = "Request was cancelled while reading response";
-                                                                                    dual_warn!("{} - request_id: {}", warn_msg, request_id);
-                                                                                    return Err(ServerError::Operation(warn_msg.to_string()));
-                                                                                }
-                                                                            };
+                                        // Handle response body reading with cancellation
+                                        let bytes = select! {
+                                            bytes = ds_response.bytes() => {
+                                                bytes.map_err(|e| {
+                                                    let err_msg = format!("Failed to get the full response as bytes: {e}");
+                                                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                                                    ServerError::Operation(err_msg)
+                                                })?
+                                            }
+                                            _ = cancel_token.cancelled() => {
+                                                let warn_msg = "Request was cancelled while reading response";
+                                                dual_warn!("{} - request_id: {}", warn_msg, request_id);
+                                                return Err(ServerError::Operation(warn_msg.to_string()));
+                                            }
+                                        };
 
-                                                                            let mut
-                                                                            response_builder =
-                                                                                Response::builder()
-                                                                                    .status(status);
+                                        let mut response_builder =
+                                            Response::builder().status(status);
 
-                                                                            // Copy all headers from downstream response
-                                                                            match request.stream {
-                                                                                Some(true) => {
-                                                                                    for (
-                                                                                        name,
-                                                                                        value,
-                                                                                    ) in headers
-                                                                                        .iter()
-                                                                                    {
-                                                                                        match name.as_str() {
+                                        // Copy all headers from downstream response
+                                        match request.stream {
+                                            Some(true) => {
+                                                for (name, value) in headers.iter() {
+                                                    match name.as_str() {
                                                         "access-control-allow-origin" => {
                                                             response_builder = response_builder
                                                                 .header(name, value);
@@ -1122,152 +1136,405 @@ async fn call_mcp_server(
                                                             );
                                                         }
                                                     }
-                                                                                    }
-                                                                                }
-                                                                                Some(false)
-                                                                                | None => {
-                                                                                    for (
-                                                                                        name,
-                                                                                        value,
-                                                                                    ) in headers
-                                                                                        .iter()
-                                                                                    {
-                                                                                        dual_debug!(
+                                                }
+                                            }
+                                            Some(false) | None => {
+                                                for (name, value) in headers.iter() {
+                                                    dual_debug!(
                                                         "{}: {}",
                                                         name,
                                                         value.to_str().unwrap()
                                                     );
-                                                                                        response_builder =
+                                                    response_builder =
                                                         response_builder.header(name, value);
-                                                                                    }
-                                                                                }
-                                                                            }
+                                                }
+                                            }
+                                        }
 
-                                                                            match response_builder
-                                                                                .body(Body::from(
-                                                                                    bytes,
-                                                                                )) {
-                                                                                Ok(response) => {
-                                                                                    dual_info!(
+                                        match response_builder.body(Body::from(bytes)) {
+                                            Ok(response) => {
+                                                dual_info!(
                                                     "Chat request completed successfully - request_id: {}",
                                                     request_id
                                                 );
-                                                                                    Ok(response)
-                                                                                }
-                                                                                Err(e) => {
-                                                                                    let err_msg =
+                                                Ok(response)
+                                            }
+                                            Err(e) => {
+                                                let err_msg =
                                                     format!("Failed to create the response: {e}");
-                                                                                    dual_error!(
+                                                dual_error!(
                                                     "{} - request_id: {}",
                                                     err_msg,
                                                     request_id
                                                 );
-                                                                                    Err(ServerError::Operation(err_msg))
-                                                                                }
-                                                                            }
-                                                                        }
-                                                                        _ => {
-                                                                            let err_msg =
-                                            "Only text content is supported for tool call results";
-                                                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-                                                                            Err(ServerError::Operation(err_msg.to_string()))
-                                                                        }
-                                                                    }
-                                                                }
-                                                            }
-                                                        }
-                                                        _ => {
-                                                            let err_msg = format!("Failed to call the tool: {tool_name}");
-                                                            dual_error!(
-                                                                "{} - request_id: {}",
-                                                                err_msg,
-                                                                request_id
-                                                            );
-                                                            Err(ServerError::Operation(err_msg))
-                                                        }
-                                                    }
-                                                }
-                                                None => {
-                                                    let err_msg = format!(
-                                                        "Not found the MCP client name `{mcp_client_name}` in USER_TO_MCP_CLIENTS"
-                                                    );
-                                                    dual_error!(
-                                                        "{} - request_id: {}",
-                                                        err_msg,
-                                                        request_id
-                                                    );
-                                                    return Err(ServerError::Operation(
-                                                        err_msg.to_string(),
-                                                    ));
-                                                }
+                                                Err(ServerError::Operation(err_msg))
                                             }
                                         }
-                                        None => {
-                                            let err_msg =
-                                                "Not found the user ID in USER_TO_MCP_CLIENTS";
-                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-                                            return Err(ServerError::Operation(
-                                                err_msg.to_string(),
-                                            ));
-                                        }
                                     }
-                                }
-                                None => {
-                                    let err_msg = "USER_TO_MCP_CLIENTS is empty or not initialized";
-                                    dual_error!("{} - request_id: {}", err_msg, request_id);
-                                    return Err(ServerError::Operation(err_msg.to_string()));
+                                    _ => {
+                                        let err_msg =
+                                            "Only text content is supported for tool call results";
+                                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                                        Err(ServerError::Operation(err_msg.to_string()))
+                                    }
                                 }
                             }
                         }
-                        None => {
-                            dual_error!(
-                                "Failed to find the MCP client with tool name: {} - request_id: {}",
-                                tool_name,
-                                request_id,
-                            );
-                            return Err(ServerError::McpNotFoundClient);
-                        }
+                    }
+                    _ => {
+                        let err_msg = format!("Failed to call the tool: {tool_name}");
+                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                        Err(ServerError::Operation(err_msg))
                     }
                 }
-                None => {
-                    let err_msg = format!("Not found the user id in USER_TO_MCP_TOOLS: {user_id} ");
-                    dual_error!("{} - request_id: {}", err_msg, request_id);
-                    return Err(ServerError::Operation(err_msg.to_string()));
-                }
+            } else {
+                let err_msg = "Empty MCP CLIENTS";
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                Err(ServerError::Operation(err_msg.to_string()))
             }
-        }
-        None => {
-            let err_msg = "USER_TO_MCP_TOOLS is empty or not initialized";
+        } else {
+            let err_msg = format!("Failed to find the MCP client with tool name: {tool_name}");
             dual_error!("{} - request_id: {}", err_msg, request_id);
-            return Err(ServerError::Operation(err_msg.to_string()));
+            Err(ServerError::McpNotFoundClient)
         }
-    };
-
-    // erase mcp tools from USER_TO_MCP_TOOLS by user id
-    if let Some(user_to_mcp_tools) = USER_TO_MCP_TOOLS.get() {
-        let mut user_to_mcp_tools = user_to_mcp_tools.write().await;
-        user_to_mcp_tools.remove(user_id);
-
-        dual_debug!(
-            "Erase mcp tools from USER_TO_MCP_TOOLS by user id: {} - request_id: {}",
-            user_id,
-            request_id
-        );
+    } else {
+        let err_msg = "Empty MCP TOOLS";
+        dual_error!("{} - request_id: {}", err_msg, request_id);
+        Err(ServerError::Operation(err_msg.to_string()))
     }
 
-    // erase mcp clients from USER_TO_MCP_CLIENTS by user id
-    if let Some(user_to_mcp_clients) = USER_TO_MCP_CLIENTS.get() {
-        let mut user_to_mcp_clients = user_to_mcp_clients.write().await;
-        user_to_mcp_clients.remove(user_id);
+    // get the mcp client by user id and tool name, then call the tool
+    // {
+    //     // let response = match USER_TO_MCP_TOOLS.get() {
+    //     //     Some(user_to_mcp_tools) => {
+    //     //         let user_to_mcp_tools = user_to_mcp_tools.read().await;
+    //     //         match user_to_mcp_tools.get(user_id) {
+    //     //             Some(mcp_tools) => {
+    //     //                 let mcp_tools = mcp_tools.read().await;
+    //     //                 match mcp_tools.get(tool_name) {
+    //     //                     Some(mcp_client_name) => {
+    //     //                         match USER_TO_MCP_CLIENTS.get() {
+    //     //                             Some(user_to_mcp_clients) => {
+    //     //                                 let user_to_mcp_clients = user_to_mcp_clients.read().await;
+    //     //                                 match user_to_mcp_clients.get(user_id) {
+    //     //                                     Some(mcp_clients) => {
+    //     //                                         let mcp_clients = mcp_clients.read().await;
+    //     //                                         match mcp_clients.get(mcp_client_name) {
+    //     //                                             Some(mcp_client) => {
+    //     //                                                 // call a tool
+    //     //                                                 let request_param = CallToolRequestParam {
+    //     //                                                     name: tool_name.to_string().into(),
+    //     //                                                     arguments,
+    //     //                                                 };
+    //     //                                                 let res = mcp_client
+    //     //                                                     .read()
+    //     //                                                     .await
+    //     //                                                     .raw
+    //     //                                                     .peer()
+    //     //                                                     .call_tool(request_param)
+    //     //                                                     .await
+    //     //                                                     .map_err(|e| {
+    //     //                                                         dual_error!(
+    //     //                                                             "Failed to call the tool: {}",
+    //     //                                                             e
+    //     //                                                         );
+    //     //                                                         ServerError::Operation(e.to_string())
+    //     //                                                     })?;
+    //     //                                                 dual_debug!(
+    //     //                                                     "{} - request_id: {}",
+    //     //                                                     serde_json::to_string_pretty(&res).unwrap(),
+    //     //                                                     request_id
+    //     //                                                 );
 
-        dual_debug!(
-            "Erase mcp clients from USER_TO_MCP_CLIENTS by user id: {} - request_id: {}",
-            user_id,
-            request_id
-        );
-    }
+    //     //                                                 match res.is_error {
+    //     //                                                     Some(false) => {
+    //     //                                                         match res.content.is_empty() {
+    //     //                                                             true => {
+    //     //                                                                 dual_error!(
+    //     //                                 "MCP server returned empty content - request_id: {}",
+    //     //                                 request_id
+    //     //                             );
+    //     //                                                                 Err(ServerError::McpEmptyContent)
+    //     //                                                             }
+    //     //                                                             false => {
+    //     //                                                                 let content = &res.content[0];
+    //     //                                                                 match &content.raw {
+    //     //                                                                     RawContent::Text(text) => {
+    //     //                                                                         dual_debug!(
+    //     //                                         "tool result: {} - request_id: {}",
+    //     //                                         text.text,
+    //     //                                         request_id
+    //     //                                     );
 
-    response
+    //     //                                                                         // create an assistant message
+    //     //                                                                         let tool_completion_message =
+    //     //                                         ChatCompletionRequestMessage::Tool(
+    //     //                                             ChatCompletionToolMessage::new(&text.text, None),
+    //     //                                         );
+
+    //     //                                                                         // append assistant message with tool call to request messages
+    //     //                                                                         let assistant_completion_message =
+    //     //                                         ChatCompletionRequestMessage::Assistant(
+    //     //                                             ChatCompletionAssistantMessage::new(
+    //     //                                                 None,
+    //     //                                                 None,
+    //     //                                                 Some(tool_calls.to_vec()),
+    //     //                                             ),
+    //     //                                         );
+    //     //                                                                         request.messages.push(assistant_completion_message);
+    //     //                                                                         // append tool message with tool result to request messages
+    //     //                                                                         request.messages.push(tool_completion_message);
+
+    //     //                                                                         // Create a request client that can be cancelled
+    //     //                                                                         let request_builder = reqwest::Client::new()
+    //     //                                         .post(chat_service_url)
+    //     //                                         .header(CONTENT_TYPE, "application/json")
+    //     //                                         .json(&request);
+
+    //     //                                                                         // Use select! to handle request cancellation
+    //     //                                                                         let ds_response = select! {
+    //     //                                                                             response = request_builder.send() => {
+    //     //                                                                                 response.map_err(|e| {
+    //     //                                                                                     let err_msg = format!(
+    //     //                                                                                         "Failed to forward the request to the downstream server: {e}"
+    //     //                                                                                     );
+    //     //                                                                                     dual_error!("{} - request_id: {}", err_msg, request_id);
+    //     //                                                                                     ServerError::Operation(err_msg)
+    //     //                                                                                 })?
+    //     //                                                                             }
+    //     //                                                                             _ = cancel_token.cancelled() => {
+    //     //                                                                                 let warn_msg = "Request was cancelled by client";
+    //     //                                                                                 dual_warn!("{} - request_id: {}", warn_msg, request_id);
+    //     //                                                                                 return Err(ServerError::Operation(warn_msg.to_string()));
+    //     //                                                                             }
+    //     //                                                                         };
+
+    //     //                                                                         let status =
+    //     //                                                                             ds_response
+    //     //                                                                                 .status();
+    //     //                                                                         let headers =
+    //     //                                                                             ds_response
+    //     //                                                                                 .headers()
+    //     //                                                                                 .clone();
+
+    //     //                                                                         // Handle response body reading with cancellation
+    //     //                                                                         let bytes = select! {
+    //     //                                                                             bytes = ds_response.bytes() => {
+    //     //                                                                                 bytes.map_err(|e| {
+    //     //                                                                                     let err_msg = format!("Failed to get the full response as bytes: {e}");
+    //     //                                                                                     dual_error!("{} - request_id: {}", err_msg, request_id);
+    //     //                                                                                     ServerError::Operation(err_msg)
+    //     //                                                                                 })?
+    //     //                                                                             }
+    //     //                                                                             _ = cancel_token.cancelled() => {
+    //     //                                                                                 let warn_msg = "Request was cancelled while reading response";
+    //     //                                                                                 dual_warn!("{} - request_id: {}", warn_msg, request_id);
+    //     //                                                                                 return Err(ServerError::Operation(warn_msg.to_string()));
+    //     //                                                                             }
+    //     //                                                                         };
+
+    //     //                                                                         let mut
+    //     //                                                                         response_builder =
+    //     //                                                                             Response::builder()
+    //     //                                                                                 .status(status);
+
+    //     //                                                                         // Copy all headers from downstream response
+    //     //                                                                         match request.stream {
+    //     //                                                                             Some(true) => {
+    //     //                                                                                 for (
+    //     //                                                                                     name,
+    //     //                                                                                     value,
+    //     //                                                                                 ) in headers
+    //     //                                                                                     .iter()
+    //     //                                                                                 {
+    //     //                                                                                     match name.as_str() {
+    //     //                                                     "access-control-allow-origin" => {
+    //     //                                                         response_builder = response_builder
+    //     //                                                             .header(name, value);
+    //     //                                                     }
+    //     //                                                     "access-control-allow-headers" => {
+    //     //                                                         response_builder = response_builder
+    //     //                                                             .header(name, value);
+    //     //                                                     }
+    //     //                                                     "access-control-allow-methods" => {
+    //     //                                                         response_builder = response_builder
+    //     //                                                             .header(name, value);
+    //     //                                                     }
+    //     //                                                     "content-type" => {
+    //     //                                                         response_builder = response_builder
+    //     //                                                             .header(name, value);
+    //     //                                                     }
+    //     //                                                     "cache-control" => {
+    //     //                                                         response_builder = response_builder
+    //     //                                                             .header(name, value);
+    //     //                                                     }
+    //     //                                                     "connection" => {
+    //     //                                                         response_builder = response_builder
+    //     //                                                             .header(name, value);
+    //     //                                                     }
+    //     //                                                     "user" => {
+    //     //                                                         response_builder = response_builder
+    //     //                                                             .header(name, value);
+    //     //                                                     }
+    //     //                                                     "date" => {
+    //     //                                                         response_builder = response_builder
+    //     //                                                             .header(name, value);
+    //     //                                                     }
+    //     //                                                     _ => {
+    //     //                                                         dual_debug!(
+    //     //                                                             "ignore header: {} - {}",
+    //     //                                                             name,
+    //     //                                                             value.to_str().unwrap()
+    //     //                                                         );
+    //     //                                                     }
+    //     //                                                 }
+    //     //                                                                                 }
+    //     //                                                                             }
+    //     //                                                                             Some(false)
+    //     //                                                                             | None => {
+    //     //                                                                                 for (
+    //     //                                                                                     name,
+    //     //                                                                                     value,
+    //     //                                                                                 ) in headers
+    //     //                                                                                     .iter()
+    //     //                                                                                 {
+    //     //                                                                                     dual_debug!(
+    //     //                                                     "{}: {}",
+    //     //                                                     name,
+    //     //                                                     value.to_str().unwrap()
+    //     //                                                 );
+    //     //                                                                                     response_builder =
+    //     //                                                     response_builder.header(name, value);
+    //     //                                                                                 }
+    //     //                                                                             }
+    //     //                                                                         }
+
+    //     //                                                                         match response_builder
+    //     //                                                                             .body(Body::from(
+    //     //                                                                                 bytes,
+    //     //                                                                             )) {
+    //     //                                                                             Ok(response) => {
+    //     //                                                                                 dual_info!(
+    //     //                                                 "Chat request completed successfully - request_id: {}",
+    //     //                                                 request_id
+    //     //                                             );
+    //     //                                                                                 Ok(response)
+    //     //                                                                             }
+    //     //                                                                             Err(e) => {
+    //     //                                                                                 let err_msg =
+    //     //                                                 format!("Failed to create the response: {e}");
+    //     //                                                                                 dual_error!(
+    //     //                                                 "{} - request_id: {}",
+    //     //                                                 err_msg,
+    //     //                                                 request_id
+    //     //                                             );
+    //     //                                                                                 Err(ServerError::Operation(err_msg))
+    //     //                                                                             }
+    //     //                                                                         }
+    //     //                                                                     }
+    //     //                                                                     _ => {
+    //     //                                                                         let err_msg =
+    //     //                                         "Only text content is supported for tool call results";
+    //     //                                                                         dual_error!("{} - request_id: {}", err_msg, request_id);
+    //     //                                                                         Err(ServerError::Operation(err_msg.to_string()))
+    //     //                                                                     }
+    //     //                                                                 }
+    //     //                                                             }
+    //     //                                                         }
+    //     //                                                     }
+    //     //                                                     _ => {
+    //     //                                                         let err_msg = format!("Failed to call the tool: {tool_name}");
+    //     //                                                         dual_error!(
+    //     //                                                             "{} - request_id: {}",
+    //     //                                                             err_msg,
+    //     //                                                             request_id
+    //     //                                                         );
+    //     //                                                         Err(ServerError::Operation(err_msg))
+    //     //                                                     }
+    //     //                                                 }
+    //     //                                             }
+    //     //                                             None => {
+    //     //                                                 let err_msg = format!(
+    //     //                                                     "Not found the MCP client name `{mcp_client_name}` in USER_TO_MCP_CLIENTS"
+    //     //                                                 );
+    //     //                                                 dual_error!(
+    //     //                                                     "{} - request_id: {}",
+    //     //                                                     err_msg,
+    //     //                                                     request_id
+    //     //                                                 );
+    //     //                                                 return Err(ServerError::Operation(
+    //     //                                                     err_msg.to_string(),
+    //     //                                                 ));
+    //     //                                             }
+    //     //                                         }
+    //     //                                     }
+    //     //                                     None => {
+    //     //                                         let err_msg =
+    //     //                                             "Not found the user ID in USER_TO_MCP_CLIENTS";
+    //     //                                         dual_error!("{} - request_id: {}", err_msg, request_id);
+    //     //                                         return Err(ServerError::Operation(
+    //     //                                             err_msg.to_string(),
+    //     //                                         ));
+    //     //                                     }
+    //     //                                 }
+    //     //                             }
+    //     //                             None => {
+    //     //                                 let err_msg = "USER_TO_MCP_CLIENTS is empty or not initialized";
+    //     //                                 dual_error!("{} - request_id: {}", err_msg, request_id);
+    //     //                                 return Err(ServerError::Operation(err_msg.to_string()));
+    //     //                             }
+    //     //                         }
+    //     //                     }
+    //     //                     None => {
+    //     //                         dual_error!(
+    //     //                             "Failed to find the MCP client with tool name: {} - request_id: {}",
+    //     //                             tool_name,
+    //     //                             request_id,
+    //     //                         );
+    //     //                         return Err(ServerError::McpNotFoundClient);
+    //     //                     }
+    //     //                 }
+    //     //             }
+    //     //             None => {
+    //     //                 let err_msg = format!("Not found the user id in USER_TO_MCP_TOOLS: {user_id} ");
+    //     //                 dual_error!("{} - request_id: {}", err_msg, request_id);
+    //     //                 return Err(ServerError::Operation(err_msg.to_string()));
+    //     //             }
+    //     //         }
+    //     //     }
+    //     //     None => {
+    //     //         let err_msg = "USER_TO_MCP_TOOLS is empty or not initialized";
+    //     //         dual_error!("{} - request_id: {}", err_msg, request_id);
+    //     //         return Err(ServerError::Operation(err_msg.to_string()));
+    //     //     }
+    //     // };
+
+    //     // // erase mcp tools from USER_TO_MCP_TOOLS by user id
+    //     // if let Some(user_to_mcp_tools) = USER_TO_MCP_TOOLS.get() {
+    //     //     let mut user_to_mcp_tools = user_to_mcp_tools.write().await;
+    //     //     user_to_mcp_tools.remove(user_id);
+
+    //     //     dual_debug!(
+    //     //         "Erase mcp tools from USER_TO_MCP_TOOLS by user id: {} - request_id: {}",
+    //     //         user_id,
+    //     //         request_id
+    //     //     );
+    //     // }
+
+    //     // // erase mcp clients from USER_TO_MCP_CLIENTS by user id
+    //     // if let Some(user_to_mcp_clients) = USER_TO_MCP_CLIENTS.get() {
+    //     //     let mut user_to_mcp_clients = user_to_mcp_clients.write().await;
+    //     //     user_to_mcp_clients.remove(user_id);
+
+    //     //     dual_debug!(
+    //     //         "Erase mcp clients from USER_TO_MCP_CLIENTS by user id: {} - request_id: {}",
+    //     //         user_id,
+    //     //         request_id
+    //     //     );
+    //     // }
+
+    //     // response
+    // }
 }
 
 // Generate a unique chat id for the chat completion request

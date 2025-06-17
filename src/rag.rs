@@ -101,38 +101,38 @@ pub async fn chat_new(
         }
     };
 
-    // Get qdrant configs
-    dual_info!(
-        "Parsing parameters for vector search - request_id: {}",
-        request_id
-    );
-    let qdrant_config_vec = match get_qdrant_configs(
-        &chat_request,
-        filter_limit,
-        filter_score_threshold,
-        &request_id,
-    )
-    .await
-    {
-        Ok(configs) => configs,
-        Err(e) => {
-            let err_msg = format!("Failed to get the VectorDB config: {e}");
-            dual_error!(
-                "Failed to get the VectorDB config: {} - request_id: {}",
-                e,
-                request_id
-            );
-            return Err(ServerError::Operation(err_msg));
-        }
-    };
+    // // Get qdrant configs
+    // dual_info!(
+    //     "Parsing parameters for vector search - request_id: {}",
+    //     request_id
+    // );
+    // let qdrant_config_vec = match get_qdrant_configs(
+    //     &chat_request,
+    //     filter_limit,
+    //     filter_score_threshold,
+    //     &request_id,
+    // )
+    // .await
+    // {
+    //     Ok(configs) => configs,
+    //     Err(e) => {
+    //         let err_msg = format!("Failed to get the VectorDB config: {e}");
+    //         dual_error!(
+    //             "Failed to get the VectorDB config: {} - request_id: {}",
+    //             e,
+    //             request_id
+    //         );
+    //         return Err(ServerError::Operation(err_msg));
+    //     }
+    // };
 
     // // Parallel execution of keyword search and vector search
     // let (res_kw_search, res_vector_search) = tokio::join!(
-    //     perform_keyword_search(
+    //     perform_keyword_search_new(
     //         State(state.clone()),
     //         &query_text,
     //         &chat_request,
-    //         filter_limit,
+    //         // filter_limit,
     //         &request_id
     //     ),
     //     perform_vector_search(
@@ -140,10 +140,12 @@ pub async fn chat_new(
     //         Extension(cancel_token.clone()),
     //         headers.clone(),
     //         &chat_request,
-    //         &qdrant_config_vec,
     //         &request_id
     //     )
     // );
+
+    // let kw_hits = res_kw_search.unwrap();
+    // let vector_hits = res_vector_search.unwrap();
 
     // vector search
     dual_info!("Performing vector search - request_id: {}", request_id);
@@ -152,7 +154,6 @@ pub async fn chat_new(
         Extension(cancel_token.clone()),
         headers.clone(),
         &chat_request,
-        &qdrant_config_vec,
         request_id,
     )
     .await?;
@@ -170,7 +171,7 @@ pub async fn chat_new(
     let kw_hits = perform_keyword_search_new(
         State(state.clone()),
         &query_text,
-        &mut chat_request,
+        &chat_request,
         // filter_limit,
         &request_id,
     )
@@ -296,7 +297,7 @@ pub async fn chat_new(
     dual_info!("Generating context - request_id: {}", request_id);
     let mut context = String::new();
     if !hits.is_empty() {
-        for (idx, retrieve_object) in hits.iter().enumerate() {
+        for retrieve_object in hits.iter() {
             match retrieve_object.points.as_ref() {
                 Some(scored_points) => {
                     match scored_points.is_empty() {
@@ -317,13 +318,19 @@ pub async fn chat_new(
                         }
                         true => {
                             // log
-                            dual_warn!("No point retrieved from the collection `{}` (score < threshold {}) - request_id: {}", qdrant_config_vec[idx].collection_name, qdrant_config_vec[idx].score_threshold, request_id);
+                            dual_warn!(
+                                "No search results used as context - request_id: {}",
+                                request_id
+                            );
                         }
                     }
                 }
                 None => {
                     // log
-                    dual_warn!("No point retrieved from the collection `{}` (score < threshold {}) - request_id: {}", qdrant_config_vec[idx].collection_name, qdrant_config_vec[idx].score_threshold, request_id);
+                    dual_warn!(
+                        "No search results used as context - request_id: {}",
+                        request_id
+                    );
                 }
             }
         }
@@ -399,6 +406,190 @@ pub async fn chat_new(
 async fn perform_keyword_search_new(
     State(state): State<Arc<AppState>>,
     query: impl AsRef<str>,
+    chat_request: &ChatCompletionRequest,
+    // filter_limit: u64,
+    request_id: impl AsRef<str>,
+) -> ServerResult<Vec<KwSearchHit>> {
+    let request_id = request_id.as_ref();
+
+    // get the user id from the request
+    let user_id = match chat_request.user.as_ref() {
+        Some(user_id) => user_id,
+        None => {
+            let err_msg = "User ID is not found in the request";
+            dual_error!("{} - request_id: {}", err_msg, request_id);
+            return Err(ServerError::Operation(err_msg.to_string()));
+        }
+    };
+
+    match MCP_KEYWORD_SEARCH_CLIENT.get() {
+        Some(mcp_client) => {
+            // get mcp tools from keyword search mcp server
+            let mcp_tool_list = mcp_client
+                .read()
+                .await
+                .raw
+                .peer()
+                .list_tools(Default::default())
+                .await
+                .map_err(|e| {
+                    let err_msg = format!("Failed to list tools: {e}");
+                    dual_error!("{}", &err_msg);
+                    ServerError::Operation(err_msg)
+                })?;
+
+            // convert mcp tools to llama tools
+            let mut llama_tools: Vec<Tool> = Vec::new();
+            mcp_tool_list.tools.iter().for_each(|rmcp_tool| {
+                let tool_name = rmcp_tool.name.to_string();
+                let tool = Tool::new(ToolFunction {
+                    name: tool_name.clone(),
+                    description: rmcp_tool.description.as_ref().map(|s| s.to_string()),
+                    parameters: Some((*rmcp_tool.input_schema).clone()),
+                });
+
+                llama_tools.push(tool.clone());
+            });
+
+            let text = query.as_ref();
+            // let user_prompt  = format!(
+            //     "Extract the keywords from the following text. Avoid stop words, filler words, or overly generic terms (e.g., “how”, “can”, “thing”, “way”). The keywords should be separated by spaces.\n\nText: {text:#?}",
+            // );
+            let user_prompt  = format!(
+                    "Please extract 3 to 5 keywords from my question, separated by spaces. Then, try to return a tool call that invokes the keyword search tool.\n\nMy question is: {text:#?}",
+                );
+
+            let user_message = ChatCompletionRequestMessage::new_user_message(
+                ChatCompletionUserMessageContent::Text(user_prompt),
+                None,
+            );
+
+            // create a request
+            let request = ChatCompletionRequestBuilder::new(&[user_message])
+                .with_tools(llama_tools)
+                .with_tool_choice(ToolChoice::Auto)
+                .with_user(user_id)
+                .build();
+
+            dual_debug!(
+                "request for getting keywords:\n{} - request_id: {}",
+                serde_json::to_string_pretty(&request).unwrap(),
+                request_id
+            );
+
+            // get the chat server
+            let target_server_info = {
+                let servers = state.server_group.read().await;
+                let chat_servers = match servers.get(&ServerKind::chat) {
+                    Some(servers) => servers,
+                    None => {
+                        let err_msg = "No chat server available";
+                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                        return Err(ServerError::Operation(err_msg.to_string()));
+                    }
+                };
+
+                match chat_servers.next().await {
+                    Ok(target_server_info) => target_server_info,
+                    Err(e) => {
+                        let err_msg = format!("Failed to get the chat server: {e}");
+                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                        return Err(ServerError::Operation(err_msg));
+                    }
+                }
+            };
+
+            let chat_service_url = format!(
+                "{}/v1/chat/completions",
+                target_server_info.url.trim_end_matches('/')
+            );
+            dual_debug!(
+                "Forward the chat request to {} - request_id: {}",
+                chat_service_url,
+                request_id
+            );
+
+            // Create a request client
+            let response = reqwest::Client::new()
+                .post(&chat_service_url)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .json(&request)
+                .send()
+                .await
+                .map_err(|e| {
+                    let err_msg = format!("Failed to send the chat request: {e}");
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    ServerError::Operation(err_msg)
+                })?;
+
+            let status = response.status();
+            dual_debug!("status: {} - request_id: {}", status, request_id);
+            let headers = response.headers().clone();
+
+            // check if the response has a header with the key "requires-tool-call"
+            if let Some(value) = headers.get("requires-tool-call") {
+                // convert the value to a boolean
+                let requires_tool_call: bool = value.to_str().unwrap().parse().unwrap();
+
+                dual_debug!(
+                    "requires_tool_call: {} - request_id: {}",
+                    requires_tool_call,
+                    request_id
+                );
+
+                if requires_tool_call {
+                    let bytes = response.bytes().await.map_err(|e| {
+                        let err_msg = format!("Failed to get the response bytes: {e}");
+                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                        ServerError::Operation(err_msg)
+                    })?;
+
+                    let chat_completion: ChatCompletionObject = match serde_json::from_slice(&bytes)
+                    {
+                        Ok(completion) => completion,
+                        Err(e) => {
+                            let err_msg = format!("Failed to parse the response: {e}");
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                            return Err(ServerError::Operation(err_msg));
+                        }
+                    };
+
+                    let assistant_message = &chat_completion.choices[0].message;
+
+                    match call_keyword_search_mcp_server_new(
+                        assistant_message.tool_calls.as_slice(),
+                        &request_id,
+                    )
+                    .await
+                    {
+                        Ok(kw_hits) => return Ok(kw_hits),
+                        Err(ServerError::McpNotFoundClient) => {
+                            dual_warn!("Not found MCP server - request_id: {}", request_id);
+                            return Ok(vec![]);
+                        }
+                        Err(e) => {
+                            let err_msg = format!(
+                                "Failed to call MCP server: {e} - request_id: {request_id}"
+                            );
+                            dual_error!("{}", err_msg);
+                            return Err(ServerError::Operation(err_msg));
+                        }
+                    }
+                }
+            }
+        }
+        None => {
+            let warn_msg = "No keyword search mcp server connected";
+            dual_warn!("{} - request_id: {}", warn_msg, request_id);
+        }
+    }
+
+    Ok(vec![])
+}
+
+async fn _perform_keyword_search_new_old(
+    State(state): State<Arc<AppState>>,
+    query: impl AsRef<str>,
     chat_request: &mut ChatCompletionRequest,
     // filter_limit: u64,
     request_id: impl AsRef<str>,
@@ -434,7 +625,7 @@ async fn perform_keyword_search_new(
 
         // connect the mcp server and get the tools
         server_config
-            .connect_mcp_server(chat_request.user.as_ref().unwrap())
+            .connect_mcp_server_by_user(chat_request.user.as_ref().unwrap())
             .await?;
 
         // get the allowed tools
@@ -562,7 +753,7 @@ async fn perform_keyword_search_new(
 
                     let assistant_message = &chat_completion.choices[0].message;
 
-                    match call_keyword_search_mcp_server(
+                    match _call_keyword_search_mcp_server_new_old(
                         assistant_message.tool_calls.as_slice(),
                         &mut request,
                         &request_id,
@@ -675,7 +866,7 @@ pub async fn _chat_old(
     };
 
     // Get qdrant configs
-    let qdrant_config_vec = match get_qdrant_configs(
+    let qdrant_config_vec = match _get_qdrant_configs(
         &chat_request,
         filter_limit,
         filter_score_threshold,
@@ -709,7 +900,6 @@ pub async fn _chat_old(
             Extension(cancel_token.clone()),
             headers.clone(),
             &chat_request,
-            &qdrant_config_vec,
             &request_id
         )
     );
@@ -1172,7 +1362,6 @@ async fn perform_vector_search(
     Extension(cancel_token): Extension<CancellationToken>,
     headers: HeaderMap,
     chat_request: &ChatCompletionRequest,
-    qdrant_config_vec: &[QdrantConfig],
     request_id: &str,
 ) -> ServerResult<Vec<RetrieveObject>> {
     retrieve_context_with_multiple_qdrant_configs(
@@ -1181,12 +1370,11 @@ async fn perform_vector_search(
         headers,
         request_id,
         chat_request,
-        qdrant_config_vec,
     )
     .await
 }
 
-async fn get_qdrant_configs(
+async fn _get_qdrant_configs(
     chat_request: &ChatCompletionRequest,
     limit: u64,
     score_threshold: f32,
@@ -1252,52 +1440,48 @@ async fn retrieve_context_with_multiple_qdrant_configs(
     headers: HeaderMap,
     request_id: impl AsRef<str>,
     chat_request: &ChatCompletionRequest,
-    qdrant_config_vec: &[QdrantConfig],
 ) -> Result<Vec<RetrieveObject>, ServerError> {
     let mut retrieve_object_vec: Vec<RetrieveObject> = Vec::new();
     let mut set: HashSet<String> = HashSet::new();
-    for qdrant_config in qdrant_config_vec {
-        let mut retrieve_object = retrieve_context_with_single_qdrant_config(
-            State(state.clone()),
-            Extension(cancel_token.clone()),
-            headers.clone(),
-            request_id.as_ref(),
-            chat_request,
-            qdrant_config,
-        )
-        .await?;
 
-        if let Some(points) = retrieve_object.points.as_mut() {
+    let mut retrieve_object = retrieve_context_with_single_qdrant_config(
+        State(state.clone()),
+        Extension(cancel_token.clone()),
+        headers.clone(),
+        request_id.as_ref(),
+        chat_request,
+    )
+    .await?;
+
+    if let Some(points) = retrieve_object.points.as_mut() {
+        if !points.is_empty() {
+            // find the duplicate points
+            let mut idx_removed = vec![];
+            for (idx, point) in points.iter().enumerate() {
+                if set.contains(&point.source) {
+                    idx_removed.push(idx);
+                } else {
+                    set.insert(point.source.clone());
+                }
+            }
+
+            // remove the duplicate points
+            if !idx_removed.is_empty() {
+                let num = idx_removed.len();
+
+                for idx in idx_removed.iter().rev() {
+                    points.remove(*idx);
+                }
+
+                dual_info!(
+                    "Removed {} duplicated vector search results - request_id: {}",
+                    num,
+                    request_id.as_ref()
+                );
+            }
+
             if !points.is_empty() {
-                // find the duplicate points
-                let mut idx_removed = vec![];
-                for (idx, point) in points.iter().enumerate() {
-                    if set.contains(&point.source) {
-                        idx_removed.push(idx);
-                    } else {
-                        set.insert(point.source.clone());
-                    }
-                }
-
-                // remove the duplicate points
-                if !idx_removed.is_empty() {
-                    let num = idx_removed.len();
-
-                    for idx in idx_removed.iter().rev() {
-                        points.remove(*idx);
-                    }
-
-                    dual_info!(
-                        "removed duplicated {} point(s) retrieved from the collection `{}` - request_id: {}",
-                        num,
-                        qdrant_config.collection_name,
-                        request_id.as_ref()
-                    );
-                }
-
-                if !points.is_empty() {
-                    retrieve_object_vec.push(retrieve_object);
-                }
+                retrieve_object_vec.push(retrieve_object);
             }
         }
     }
@@ -1311,7 +1495,6 @@ async fn retrieve_context_with_single_qdrant_config(
     headers: HeaderMap,
     request_id: impl AsRef<str>,
     chat_request: &ChatCompletionRequest,
-    qdrant_config: &QdrantConfig,
 ) -> Result<RetrieveObject, ServerError> {
     let request_id = request_id.as_ref();
 
@@ -1436,33 +1619,25 @@ async fn retrieve_context_with_single_qdrant_config(
     };
 
     // perform the context retrieval
-    let mut retrieve_object: RetrieveObject = match retrieve_context(
-        query_embedding.as_slice(),
-        &qdrant_config.collection_name,
-        qdrant_config.limit as usize,
-        Some(qdrant_config.score_threshold),
-        request_id,
-    )
-    .await
-    {
-        Ok(search_result) => search_result,
-        Err(e) => {
-            let err_msg = format!("No point retrieved. {e}");
+    let mut retrieve_object: RetrieveObject =
+        match retrieve_context(query_embedding.as_slice(), request_id).await {
+            Ok(search_result) => search_result,
+            Err(e) => {
+                let err_msg = format!("No point retrieved. {e}");
 
-            // log
-            dual_error!("{} - request_id: {}", err_msg, request_id);
+                // log
+                dual_error!("{} - request_id: {}", err_msg, request_id);
 
-            return Err(ServerError::Operation(err_msg));
-        }
-    };
+                return Err(ServerError::Operation(err_msg));
+            }
+        };
     if retrieve_object.points.is_none() {
         retrieve_object.points = Some(Vec::new());
     }
 
     dual_debug!(
-        "Retrieved {} point(s) from the collection `{}` - request_id: {}",
+        "Got {} point(s) by vector search - request_id: {}",
         retrieve_object.points.as_ref().unwrap().len(),
-        qdrant_config.collection_name,
         request_id
     );
 
@@ -1471,9 +1646,6 @@ async fn retrieve_context_with_single_qdrant_config(
 
 async fn retrieve_context(
     query_embedding: &[f32],
-    vdb_collection_name: impl AsRef<str>,
-    limit: usize,
-    score_threshold: Option<f32>,
     request_id: impl AsRef<str>,
 ) -> Result<RetrieveObject, ServerError> {
     let request_id = request_id.as_ref();
@@ -1484,18 +1656,10 @@ async fn retrieve_context(
             // request param
             let request_param = CallToolRequestParam {
                 name: "search_points".into(),
-                arguments: Some(serde_json::Map::from_iter([
-                    (
-                        "name".to_string(),
-                        Value::from(vdb_collection_name.as_ref().to_string()),
-                    ),
-                    ("vector".to_string(), Value::from(query_embedding.to_vec())),
-                    ("limit".to_string(), Value::from(limit as u64)),
-                    (
-                        "score_threshold".to_string(),
-                        Value::from(score_threshold.unwrap_or(0.0)),
-                    ),
-                ])),
+                arguments: Some(serde_json::Map::from_iter([(
+                    "vector".to_string(),
+                    Value::from(query_embedding.to_vec()),
+                )])),
             };
 
             // call the search_points tool
@@ -1545,8 +1709,8 @@ async fn retrieve_context(
     let ro = match unique_scored_points.is_empty() {
         true => RetrieveObject {
             points: None,
-            limit,
-            score_threshold: score_threshold.unwrap_or(0.0),
+            limit: 0,
+            score_threshold: 0.0,
         },
         false => {
             let mut points: Vec<RagScoredPoint> = vec![];
@@ -1573,8 +1737,8 @@ async fn retrieve_context(
 
             RetrieveObject {
                 points: Some(points),
-                limit,
-                score_threshold: score_threshold.unwrap_or(0.0),
+                limit: 0,
+                score_threshold: 0.0,
             }
         }
     };
@@ -2236,7 +2400,7 @@ async fn _extract_keywords_by_llm(
     Ok(content.to_string())
 }
 
-async fn call_keyword_search_mcp_server(
+async fn _call_keyword_search_mcp_server_new_old(
     tool_calls: &[ToolCall],
     request: &mut ChatCompletionRequest,
     request_id: impl AsRef<str>,
@@ -2565,6 +2729,176 @@ async fn call_keyword_search_mcp_server(
             user_id,
             request_id
         );
+    }
+
+    Ok(kw_hits)
+}
+
+async fn call_keyword_search_mcp_server_new(
+    tool_calls: &[ToolCall],
+    request_id: impl AsRef<str>,
+) -> ServerResult<Vec<KwSearchHit>> {
+    let request_id = request_id.as_ref();
+
+    // get the tool call from the tool calls
+    let tool_call = &tool_calls[0];
+    let tool_name = tool_call.function.name.as_str();
+    let tool_args = &tool_call.function.arguments;
+
+    dual_debug!(
+        "tool name: {}, tool args: {} - request_id: {}",
+        tool_name,
+        tool_args,
+        request_id
+    );
+
+    // convert the func_args to a json object
+    let arguments =
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(tool_args).ok();
+
+    // call the `search` tool of the keyword search mcp server
+    let mut kw_hits: Vec<KwSearchHit> = Vec::new();
+    match MCP_KEYWORD_SEARCH_CLIENT.get() {
+        Some(mcp_client) => match mcp_client.read().await.raw.peer_info() {
+            Some(peer_info) => match peer_info.server_info.name.as_str() {
+                "gaia-kwsearch-mcp-server" => {
+                    // call a tool
+                    let request_param = CallToolRequestParam {
+                        name: tool_name.to_string().into(),
+                        arguments,
+                    };
+                    let mcp_tool_result = mcp_client
+                        .read()
+                        .await
+                        .raw
+                        .peer()
+                        .call_tool(request_param)
+                        .await
+                        .map_err(|e| {
+                            dual_error!("Failed to call the tool: {}", e);
+                            ServerError::Operation(e.to_string())
+                        })?;
+
+                    dual_debug!(
+                        "{} - request_id: {}",
+                        serde_json::to_string_pretty(&mcp_tool_result).unwrap(),
+                        request_id
+                    );
+
+                    let search_response = SearchDocumentsResponse::from(mcp_tool_result.clone());
+                    kw_hits = search_response.hits;
+
+                    let kw_hits_str = serde_json::to_string_pretty(&kw_hits).unwrap();
+                    dual_debug!("kw_hits: {} - request_id: {}", kw_hits_str, request_id);
+                }
+                "gaia-tidb-mcp-server" => {
+                    // call a tool
+                    let request_param = CallToolRequestParam {
+                        name: tool_name.to_string().into(),
+                        arguments,
+                    };
+                    let mcp_tool_result = mcp_client
+                        .read()
+                        .await
+                        .raw
+                        .peer()
+                        .call_tool(request_param)
+                        .await
+                        .map_err(|e| {
+                            dual_error!("Failed to call the tool: {}", e);
+                            ServerError::Operation(e.to_string())
+                        })?;
+
+                    dual_debug!(
+                        "{} - request_id: {}",
+                        serde_json::to_string_pretty(&mcp_tool_result).unwrap(),
+                        request_id
+                    );
+
+                    // parse tool result
+                    let search_response = TidbSearchResponse::from(mcp_tool_result);
+
+                    if !search_response.hits.is_empty() {
+                        for hit in search_response.hits.iter() {
+                            let kw_hit = KwSearchHit {
+                                title: hit.title.clone(),
+                                content: hit.content.clone(),
+                                score: 0.0,
+                            };
+
+                            kw_hits.push(kw_hit);
+                        }
+                    }
+                }
+                "gaia-elastic-mcp-server" => {
+                    // request param
+                    let request_param = CallToolRequestParam {
+                        name: tool_name.to_string().into(),
+                        arguments,
+                    };
+
+                    // call tool
+                    let mcp_tool_result = mcp_client
+                        .read()
+                        .await
+                        .raw
+                        .peer()
+                        .call_tool(request_param)
+                        .await
+                        .map_err(|e| {
+                            let err_msg = format!("Failed to call the tool: {e}");
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                            ServerError::Operation(err_msg)
+                        })?;
+
+                    // parse tool result
+                    let search_response = SearchResponse::from(mcp_tool_result);
+
+                    if !search_response.hits.hits.is_empty() {
+                        for hit in search_response.hits.hits.iter() {
+                            let score = hit.score;
+                            let title = hit
+                                .source
+                                .get("title")
+                                .unwrap()
+                                .as_str()
+                                .unwrap()
+                                .to_string();
+                            let content = hit
+                                .source
+                                .get("content")
+                                .unwrap()
+                                .as_str()
+                                .unwrap()
+                                .to_string();
+
+                            let kw_hit = KwSearchHit {
+                                title,
+                                content,
+                                score,
+                            };
+
+                            kw_hits.push(kw_hit);
+                        }
+                    }
+                }
+                _ => {
+                    let err_msg =
+                        format!("Unsupported MCP server: {}", &peer_info.server_info.name);
+                    dual_error!("{} - request_id: {}", &err_msg, request_id);
+                    return Err(ServerError::Operation(err_msg));
+                }
+            },
+            None => {
+                let err_msg = "Failed to get the server info from MCP server";
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                return Err(ServerError::Operation(err_msg.to_string()));
+            }
+        },
+        None => {
+            let warn_msg = "No keyword search mcp server connected";
+            dual_warn!("{} - request_id: {}", warn_msg, request_id);
+        }
     }
 
     Ok(kw_hits)
