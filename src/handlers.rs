@@ -47,12 +47,50 @@ pub(crate) async fn chat_handler(
     if request.user.is_none() {
         request.user = Some(gen_chat_id());
     };
-
     dual_info!(
         "Received a new chat request from user: {} - request_id: {}",
         request.user.as_ref().unwrap(),
         request_id
     );
+
+    // update the request with MCP tools
+    dual_info!("Updating the request with MCP tools");
+    if let Some(mcp_config) = state.config.read().await.mcp.as_ref() {
+        if !mcp_config.server.tool_servers.is_empty() {
+            let mut more_tools = Vec::new();
+            for server_config in mcp_config.server.tool_servers.iter() {
+                if server_config.enable {
+                    server_config
+                        .tools
+                        .as_ref()
+                        .unwrap()
+                        .iter()
+                        .for_each(|mcp_tool| {
+                            let tool = Tool::new(ToolFunction {
+                                name: mcp_tool.name.to_string(),
+                                description: mcp_tool.description.as_ref().map(|s| s.to_string()),
+                                parameters: Some((*mcp_tool.input_schema).clone()),
+                            });
+
+                            more_tools.push(tool.clone());
+                        });
+                }
+            }
+
+            if !more_tools.is_empty() {
+                if let Some(tools) = &mut request.tools {
+                    tools.extend(more_tools);
+                } else {
+                    request.tools = Some(more_tools);
+                }
+
+                // set the tool choice to auto
+                if let Some(ToolChoice::None) | None = request.tool_choice {
+                    request.tool_choice = Some(ToolChoice::Auto);
+                }
+            }
+        }
+    }
 
     let enable_rag = state.config.read().await.rag.enable;
     match enable_rag {
@@ -109,44 +147,6 @@ pub(crate) async fn chat(
             }
         }
     };
-
-    // update the request with MCP tools
-    if let Some(mcp_config) = state.config.read().await.mcp.as_ref() {
-        if !mcp_config.server.tool_servers.is_empty() {
-            let mut more_tools = Vec::new();
-            for server_config in mcp_config.server.tool_servers.iter() {
-                if server_config.enable {
-                    server_config
-                        .tools
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .for_each(|mcp_tool| {
-                            let tool = Tool::new(ToolFunction {
-                                name: mcp_tool.name.to_string(),
-                                description: mcp_tool.description.as_ref().map(|s| s.to_string()),
-                                parameters: Some((*mcp_tool.input_schema).clone()),
-                            });
-
-                            more_tools.push(tool.clone());
-                        });
-                }
-            }
-
-            if !more_tools.is_empty() {
-                if let Some(tools) = &mut request.tools {
-                    tools.extend(more_tools);
-                } else {
-                    request.tools = Some(more_tools);
-                }
-
-                // set the tool choice to auto
-                if let Some(ToolChoice::None) | None = request.tool_choice {
-                    request.tool_choice = Some(ToolChoice::Auto);
-                }
-            }
-        }
-    }
 
     // load tools from the `mcp_tools` field in the request
     if let Some(config_mcp_servers) = &request.mcp_tools {

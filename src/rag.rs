@@ -1,7 +1,7 @@
 use crate::{
     dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
-    mcp::{MCP_KEYWORD_SEARCH_CLIENT, MCP_VECTOR_SEARCH_CLIENT},
+    mcp::{MCP_CLIENTS, MCP_TOOLS, MCP_VECTOR_SEARCH_CLIENT},
     server::{RoutingPolicy, ServerKind},
     AppState,
 };
@@ -14,8 +14,7 @@ use chat_prompts::{error as ChatPromptsError, MergeRagContext, MergeRagContextPo
 use endpoints::{
     chat::{
         ChatCompletionObject, ChatCompletionRequest, ChatCompletionRequestBuilder,
-        ChatCompletionRequestMessage, ChatCompletionUserMessageContent, Tool, ToolCall, ToolChoice,
-        ToolFunction,
+        ChatCompletionRequestMessage, ChatCompletionUserMessageContent, ToolCall, ToolChoice,
     },
     embeddings::{EmbeddingObject, EmbeddingRequest, EmbeddingsResponse, InputText},
     rag::vector_search::{DataFrom, RagScoredPoint, RetrieveObject},
@@ -170,15 +169,14 @@ pub async fn chat(
         "Performing agentic keyword search - request_id: {}",
         request_id
     );
-    let mut kw_hits = Vec::new();
-    if MCP_KEYWORD_SEARCH_CLIENT.get().is_some() {
-        kw_hits = perform_keyword_search(
-            State(state.clone()),
-            &query_text,
-            &chat_request,
-            &request_id,
-        )
-        .await?;
+    let kw_hits = perform_keyword_search(
+        State(state.clone()),
+        &query_text,
+        &chat_request,
+        &request_id,
+    )
+    .await?;
+    if !kw_hits.is_empty() {
         dual_info!(
             "Retrieved {} hits from the keyword search - request_id: {}",
             kw_hits.len(),
@@ -416,7 +414,6 @@ async fn perform_keyword_search(
     State(state): State<Arc<AppState>>,
     query: impl AsRef<str>,
     chat_request: &ChatCompletionRequest,
-    // filter_limit: u64,
     request_id: impl AsRef<str>,
 ) -> ServerResult<Vec<KwSearchHit>> {
     let request_id = request_id.as_ref();
@@ -431,165 +428,127 @@ async fn perform_keyword_search(
         }
     };
 
-    match MCP_KEYWORD_SEARCH_CLIENT.get() {
-        Some(mcp_client) => {
-            // get mcp tools from keyword search mcp server
-            let mcp_tool_list = mcp_client
-                .read()
-                .await
-                .raw
-                .peer()
-                .list_tools(Default::default())
-                .await
-                .map_err(|e| {
-                    let err_msg = format!("Failed to list tools: {e}");
-                    dual_error!("{}", &err_msg);
-                    ServerError::Operation(err_msg)
-                })?;
+    let text = query.as_ref();
+    let user_prompt  = format!(
+            "Please extract 3 to 5 keywords from my question, separated by spaces. Then, try to return a tool call that invokes the keyword search tool.\n\nMy question is: {text:#?}",
+        );
 
-            // convert mcp tools to llama tools
-            let mut llama_tools: Vec<Tool> = Vec::new();
-            mcp_tool_list.tools.iter().for_each(|rmcp_tool| {
-                let tool_name = rmcp_tool.name.to_string();
-                let tool = Tool::new(ToolFunction {
-                    name: tool_name.clone(),
-                    description: rmcp_tool.description.as_ref().map(|s| s.to_string()),
-                    parameters: Some((*rmcp_tool.input_schema).clone()),
-                });
+    let user_message = ChatCompletionRequestMessage::new_user_message(
+        ChatCompletionUserMessageContent::Text(user_prompt),
+        None,
+    );
 
-                llama_tools.push(tool.clone());
-            });
+    // create a request
+    let request = ChatCompletionRequestBuilder::new(&[user_message])
+        .with_tools(chat_request.tools.as_ref().unwrap().to_vec())
+        .with_tool_choice(ToolChoice::Auto)
+        .with_user(user_id)
+        .build();
+    dual_debug!(
+        "request for getting keywords:\n{} - request_id: {}",
+        serde_json::to_string_pretty(&request).unwrap(),
+        request_id
+    );
 
-            let text = query.as_ref();
-            // let user_prompt  = format!(
-            //     "Extract the keywords from the following text. Avoid stop words, filler words, or overly generic terms (e.g., “how”, “can”, “thing”, “way”). The keywords should be separated by spaces.\n\nText: {text:#?}",
-            // );
-            let user_prompt  = format!(
-                    "Please extract 3 to 5 keywords from my question, separated by spaces. Then, try to return a tool call that invokes the keyword search tool.\n\nMy question is: {text:#?}",
-                );
+    // get the chat server
+    let target_server_info = {
+        let servers = state.server_group.read().await;
+        let chat_servers = match servers.get(&ServerKind::chat) {
+            Some(servers) => servers,
+            None => {
+                let err_msg = "No chat server available";
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                return Err(ServerError::Operation(err_msg.to_string()));
+            }
+        };
 
-            let user_message = ChatCompletionRequestMessage::new_user_message(
-                ChatCompletionUserMessageContent::Text(user_prompt),
-                None,
-            );
+        match chat_servers.next().await {
+            Ok(target_server_info) => target_server_info,
+            Err(e) => {
+                let err_msg = format!("Failed to get the chat server: {e}");
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                return Err(ServerError::Operation(err_msg));
+            }
+        }
+    };
 
-            // create a request
-            let request = ChatCompletionRequestBuilder::new(&[user_message])
-                .with_tools(llama_tools)
-                .with_tool_choice(ToolChoice::Auto)
-                .with_user(user_id)
-                .build();
+    let chat_service_url = format!(
+        "{}/v1/chat/completions",
+        target_server_info.url.trim_end_matches('/')
+    );
+    dual_debug!(
+        "Forward the chat request to {} - request_id: {}",
+        chat_service_url,
+        request_id
+    );
 
-            dual_debug!(
-                "request for getting keywords:\n{} - request_id: {}",
-                serde_json::to_string_pretty(&request).unwrap(),
-                request_id
-            );
+    // Create a request client
+    let response = reqwest::Client::new()
+        .post(&chat_service_url)
+        .header(reqwest::header::CONTENT_TYPE, "application/json")
+        .json(&request)
+        .send()
+        .await
+        .map_err(|e| {
+            let err_msg = format!("Failed to send the chat request: {e}");
+            dual_error!("{} - request_id: {}", err_msg, request_id);
+            ServerError::Operation(err_msg)
+        })?;
 
-            // get the chat server
-            let target_server_info = {
-                let servers = state.server_group.read().await;
-                let chat_servers = match servers.get(&ServerKind::chat) {
-                    Some(servers) => servers,
-                    None => {
-                        let err_msg = "No chat server available";
-                        dual_error!("{} - request_id: {}", err_msg, request_id);
-                        return Err(ServerError::Operation(err_msg.to_string()));
-                    }
-                };
+    let status = response.status();
+    if !status.is_success() {
+        let err_msg = format!("Failed to get the response: {status}");
+        dual_error!("{} - request_id: {}", err_msg, request_id);
+        return Ok(vec![]);
+    }
 
-                match chat_servers.next().await {
-                    Ok(target_server_info) => target_server_info,
-                    Err(e) => {
-                        let err_msg = format!("Failed to get the chat server: {e}");
-                        dual_error!("{} - request_id: {}", err_msg, request_id);
-                        return Err(ServerError::Operation(err_msg));
-                    }
+    let headers = response.headers().clone();
+    // check if the response has a header with the key "requires-tool-call"
+    if let Some(value) = headers.get("requires-tool-call") {
+        // convert the value to a boolean
+        let requires_tool_call: bool = value.to_str().unwrap().parse().unwrap();
+        dual_debug!(
+            "requires_tool_call: {} - request_id: {}",
+            requires_tool_call,
+            request_id
+        );
+
+        if requires_tool_call {
+            let bytes = response.bytes().await.map_err(|e| {
+                let err_msg = format!("Failed to get the response bytes: {e}");
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                ServerError::Operation(err_msg)
+            })?;
+
+            let chat_completion: ChatCompletionObject = match serde_json::from_slice(&bytes) {
+                Ok(completion) => completion,
+                Err(e) => {
+                    let err_msg = format!("Failed to parse the response: {e}");
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    return Err(ServerError::Operation(err_msg));
                 }
             };
 
-            let chat_service_url = format!(
-                "{}/v1/chat/completions",
-                target_server_info.url.trim_end_matches('/')
-            );
-            dual_debug!(
-                "Forward the chat request to {} - request_id: {}",
-                chat_service_url,
-                request_id
-            );
+            let assistant_message = &chat_completion.choices[0].message;
 
-            // Create a request client
-            let response = reqwest::Client::new()
-                .post(&chat_service_url)
-                .header(reqwest::header::CONTENT_TYPE, "application/json")
-                .json(&request)
-                .send()
-                .await
-                .map_err(|e| {
-                    let err_msg = format!("Failed to send the chat request: {e}");
-                    dual_error!("{} - request_id: {}", err_msg, request_id);
-                    ServerError::Operation(err_msg)
-                })?;
-
-            let status = response.status();
-            dual_debug!("status: {} - request_id: {}", status, request_id);
-            let headers = response.headers().clone();
-
-            // check if the response has a header with the key "requires-tool-call"
-            if let Some(value) = headers.get("requires-tool-call") {
-                // convert the value to a boolean
-                let requires_tool_call: bool = value.to_str().unwrap().parse().unwrap();
-
-                dual_debug!(
-                    "requires_tool_call: {} - request_id: {}",
-                    requires_tool_call,
-                    request_id
-                );
-
-                if requires_tool_call {
-                    let bytes = response.bytes().await.map_err(|e| {
-                        let err_msg = format!("Failed to get the response bytes: {e}");
-                        dual_error!("{} - request_id: {}", err_msg, request_id);
-                        ServerError::Operation(err_msg)
-                    })?;
-
-                    let chat_completion: ChatCompletionObject = match serde_json::from_slice(&bytes)
-                    {
-                        Ok(completion) => completion,
-                        Err(e) => {
-                            let err_msg = format!("Failed to parse the response: {e}");
-                            dual_error!("{} - request_id: {}", err_msg, request_id);
-                            return Err(ServerError::Operation(err_msg));
-                        }
-                    };
-
-                    let assistant_message = &chat_completion.choices[0].message;
-
-                    match call_keyword_search_mcp_server(
-                        assistant_message.tool_calls.as_slice(),
-                        &request_id,
-                    )
-                    .await
-                    {
-                        Ok(kw_hits) => return Ok(kw_hits),
-                        Err(ServerError::McpNotFoundClient) => {
-                            dual_warn!("Not found MCP server - request_id: {}", request_id);
-                            return Ok(vec![]);
-                        }
-                        Err(e) => {
-                            let err_msg = format!(
-                                "Failed to call MCP server: {e} - request_id: {request_id}"
-                            );
-                            dual_error!("{}", err_msg);
-                            return Err(ServerError::Operation(err_msg));
-                        }
-                    }
+            match call_keyword_search_mcp_server(
+                assistant_message.tool_calls.as_slice(),
+                &request_id,
+            )
+            .await
+            {
+                Ok(kw_hits) => return Ok(kw_hits),
+                Err(ServerError::McpNotFoundClient) => {
+                    dual_warn!("Not found MCP server - request_id: {}", request_id);
+                    return Ok(vec![]);
+                }
+                Err(e) => {
+                    let err_msg =
+                        format!("Failed to call MCP server: {e} - request_id: {request_id}");
+                    dual_error!("{}", err_msg);
+                    return Err(ServerError::Operation(err_msg));
                 }
             }
-        }
-        None => {
-            let warn_msg = "No keyword search mcp server connected";
-            dual_warn!("{} - request_id: {}", warn_msg, request_id);
         }
     }
 
@@ -1502,7 +1461,6 @@ async fn call_keyword_search_mcp_server(
     let tool_call = &tool_calls[0];
     let tool_name = tool_call.function.name.as_str();
     let tool_args = &tool_call.function.arguments;
-
     dual_debug!(
         "tool name: {}, tool args: {} - request_id: {}",
         tool_name,
@@ -1514,148 +1472,208 @@ async fn call_keyword_search_mcp_server(
     let arguments =
         serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(tool_args).ok();
 
-    // call the `search` tool of the keyword search mcp server
     let mut kw_hits: Vec<KwSearchHit> = Vec::new();
-    match MCP_KEYWORD_SEARCH_CLIENT.get() {
-        Some(mcp_client) => match mcp_client.read().await.raw.peer_info() {
-            Some(peer_info) => match peer_info.server_info.name.as_str() {
-                "gaia-kwsearch-mcp-server" => {
-                    // call a tool
-                    let request_param = CallToolRequestParam {
-                        name: tool_name.to_string().into(),
-                        arguments,
-                    };
-                    let mcp_tool_result = mcp_client
-                        .read()
-                        .await
-                        .raw
-                        .peer()
-                        .call_tool(request_param)
-                        .await
-                        .map_err(|e| {
-                            dual_error!("Failed to call the tool: {}", e);
-                            ServerError::Operation(e.to_string())
-                        })?;
+    match MCP_TOOLS.get() {
+        Some(mcp_tools) => match mcp_tools.read().await.get(tool_name) {
+            Some(mcp_client_name) => {
+                match MCP_CLIENTS.get() {
+                    Some(mcp_clients) => {
+                        match mcp_clients.read().await.get(mcp_client_name) {
+                            Some(mcp_client) => {
+                                match mcp_client.read().await.raw.peer_info() {
+                                    Some(peer_info) => {
+                                        match peer_info.server_info.name.as_str() {
+                                            "gaia-kwsearch-mcp-server" => {
+                                                // call a tool
+                                                let request_param = CallToolRequestParam {
+                                                    name: tool_name.to_string().into(),
+                                                    arguments,
+                                                };
+                                                let mcp_tool_result = mcp_client
+                                                    .read()
+                                                    .await
+                                                    .raw
+                                                    .peer()
+                                                    .call_tool(request_param)
+                                                    .await
+                                                    .map_err(|e| {
+                                                        dual_error!(
+                                                            "Failed to call the tool: {}",
+                                                            e
+                                                        );
+                                                        ServerError::Operation(e.to_string())
+                                                    })?;
 
-                    dual_debug!(
-                        "{} - request_id: {}",
-                        serde_json::to_string_pretty(&mcp_tool_result).unwrap(),
-                        request_id
-                    );
+                                                dual_debug!(
+                                                    "{} - request_id: {}",
+                                                    serde_json::to_string_pretty(&mcp_tool_result)
+                                                        .unwrap(),
+                                                    request_id
+                                                );
 
-                    let search_response = SearchDocumentsResponse::from(mcp_tool_result.clone());
-                    kw_hits = search_response.hits;
+                                                let search_response = SearchDocumentsResponse::from(
+                                                    mcp_tool_result.clone(),
+                                                );
+                                                kw_hits = search_response.hits;
 
-                    let kw_hits_str = serde_json::to_string_pretty(&kw_hits).unwrap();
-                    dual_debug!("kw_hits: {} - request_id: {}", kw_hits_str, request_id);
-                }
-                "gaia-tidb-mcp-server" => {
-                    // call a tool
-                    let request_param = CallToolRequestParam {
-                        name: tool_name.to_string().into(),
-                        arguments,
-                    };
-                    let mcp_tool_result = mcp_client
-                        .read()
-                        .await
-                        .raw
-                        .peer()
-                        .call_tool(request_param)
-                        .await
-                        .map_err(|e| {
-                            dual_error!("Failed to call the tool: {}", e);
-                            ServerError::Operation(e.to_string())
-                        })?;
+                                                let kw_hits_str =
+                                                    serde_json::to_string_pretty(&kw_hits).unwrap();
+                                                dual_debug!(
+                                                    "kw_hits: {} - request_id: {}",
+                                                    kw_hits_str,
+                                                    request_id
+                                                );
+                                            }
+                                            "gaia-tidb-mcp-server" => {
+                                                // call a tool
+                                                let request_param = CallToolRequestParam {
+                                                    name: tool_name.to_string().into(),
+                                                    arguments,
+                                                };
+                                                let mcp_tool_result = mcp_client
+                                                    .read()
+                                                    .await
+                                                    .raw
+                                                    .peer()
+                                                    .call_tool(request_param)
+                                                    .await
+                                                    .map_err(|e| {
+                                                        dual_error!(
+                                                            "Failed to call the tool: {}",
+                                                            e
+                                                        );
+                                                        ServerError::Operation(e.to_string())
+                                                    })?;
 
-                    dual_debug!(
-                        "{} - request_id: {}",
-                        serde_json::to_string_pretty(&mcp_tool_result).unwrap(),
-                        request_id
-                    );
+                                                dual_debug!(
+                                                    "{} - request_id: {}",
+                                                    serde_json::to_string_pretty(&mcp_tool_result)
+                                                        .unwrap(),
+                                                    request_id
+                                                );
 
-                    // parse tool result
-                    let search_response = TidbSearchResponse::from(mcp_tool_result);
+                                                // parse tool result
+                                                let search_response =
+                                                    TidbSearchResponse::from(mcp_tool_result);
 
-                    if !search_response.hits.is_empty() {
-                        for hit in search_response.hits.iter() {
-                            let kw_hit = KwSearchHit {
-                                title: hit.title.clone(),
-                                content: hit.content.clone(),
-                                score: 0.0,
-                            };
+                                                if !search_response.hits.is_empty() {
+                                                    for hit in search_response.hits.iter() {
+                                                        let kw_hit = KwSearchHit {
+                                                            title: hit.title.clone(),
+                                                            content: hit.content.clone(),
+                                                            score: 0.0,
+                                                        };
 
-                            kw_hits.push(kw_hit);
+                                                        kw_hits.push(kw_hit);
+                                                    }
+                                                }
+                                            }
+                                            "gaia-elastic-mcp-server" => {
+                                                // request param
+                                                let request_param = CallToolRequestParam {
+                                                    name: tool_name.to_string().into(),
+                                                    arguments,
+                                                };
+
+                                                // call tool
+                                                let mcp_tool_result = mcp_client
+                                                    .read()
+                                                    .await
+                                                    .raw
+                                                    .peer()
+                                                    .call_tool(request_param)
+                                                    .await
+                                                    .map_err(|e| {
+                                                        let err_msg =
+                                                            format!("Failed to call the tool: {e}");
+                                                        dual_error!(
+                                                            "{} - request_id: {}",
+                                                            err_msg,
+                                                            request_id
+                                                        );
+                                                        ServerError::Operation(err_msg)
+                                                    })?;
+
+                                                // parse tool result
+                                                let search_response =
+                                                    SearchResponse::from(mcp_tool_result);
+
+                                                if !search_response.hits.hits.is_empty() {
+                                                    for hit in search_response.hits.hits.iter() {
+                                                        let score = hit.score;
+                                                        let title = hit
+                                                            .source
+                                                            .get("title")
+                                                            .unwrap()
+                                                            .as_str()
+                                                            .unwrap()
+                                                            .to_string();
+                                                        let content = hit
+                                                            .source
+                                                            .get("content")
+                                                            .unwrap()
+                                                            .as_str()
+                                                            .unwrap()
+                                                            .to_string();
+
+                                                        let kw_hit = KwSearchHit {
+                                                            title,
+                                                            content,
+                                                            score,
+                                                        };
+
+                                                        kw_hits.push(kw_hit);
+                                                    }
+                                                }
+                                            }
+                                            _ => {
+                                                let err_msg = format!(
+                                                    "Unsupported MCP server: {}",
+                                                    &peer_info.server_info.name
+                                                );
+                                                dual_error!(
+                                                    "{} - request_id: {}",
+                                                    &err_msg,
+                                                    request_id
+                                                );
+                                                return Err(ServerError::Operation(err_msg));
+                                            }
+                                        }
+                                    }
+                                    None => {
+                                        let err_msg = "Failed to get MCP server info";
+                                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                                        return Err(ServerError::Operation(err_msg.to_string()));
+                                    }
+                                }
+                            }
+                            None => {
+                                let err_msg = format!(
+                                    "Failed to get the mcp client named `{mcp_client_name}`"
+                                );
+                                dual_error!("{} - request_id: {}", err_msg, request_id);
+                                return Err(ServerError::Operation(err_msg.to_string()));
+                            }
                         }
                     }
-                }
-                "gaia-elastic-mcp-server" => {
-                    // request param
-                    let request_param = CallToolRequestParam {
-                        name: tool_name.to_string().into(),
-                        arguments,
-                    };
-
-                    // call tool
-                    let mcp_tool_result = mcp_client
-                        .read()
-                        .await
-                        .raw
-                        .peer()
-                        .call_tool(request_param)
-                        .await
-                        .map_err(|e| {
-                            let err_msg = format!("Failed to call the tool: {e}");
-                            dual_error!("{} - request_id: {}", err_msg, request_id);
-                            ServerError::Operation(err_msg)
-                        })?;
-
-                    // parse tool result
-                    let search_response = SearchResponse::from(mcp_tool_result);
-
-                    if !search_response.hits.hits.is_empty() {
-                        for hit in search_response.hits.hits.iter() {
-                            let score = hit.score;
-                            let title = hit
-                                .source
-                                .get("title")
-                                .unwrap()
-                                .as_str()
-                                .unwrap()
-                                .to_string();
-                            let content = hit
-                                .source
-                                .get("content")
-                                .unwrap()
-                                .as_str()
-                                .unwrap()
-                                .to_string();
-
-                            let kw_hit = KwSearchHit {
-                                title,
-                                content,
-                                score,
-                            };
-
-                            kw_hits.push(kw_hit);
-                        }
+                    None => {
+                        let err_msg = "MCP_CLIENTS is not initialized";
+                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                        return Err(ServerError::Operation(err_msg.to_string()));
                     }
                 }
-                _ => {
-                    let err_msg =
-                        format!("Unsupported MCP server: {}", &peer_info.server_info.name);
-                    dual_error!("{} - request_id: {}", &err_msg, request_id);
-                    return Err(ServerError::Operation(err_msg));
-                }
-            },
+            }
             None => {
-                let err_msg = "Failed to get the server info from MCP server";
+                let err_msg =
+                    format!("Not found mcp client providing mcp tool named `{tool_name}`");
                 dual_error!("{} - request_id: {}", err_msg, request_id);
                 return Err(ServerError::Operation(err_msg.to_string()));
             }
         },
         None => {
-            let warn_msg = "No keyword search mcp server connected";
-            dual_warn!("{} - request_id: {}", warn_msg, request_id);
+            let err_msg = "MCP_TOOLS is not initialized";
+            dual_error!("{} - request_id: {}", err_msg, request_id);
+            return Err(ServerError::Operation(err_msg.to_string()));
         }
     }
 
