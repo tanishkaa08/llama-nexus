@@ -17,9 +17,6 @@ pub static MCP_TOOLS: OnceCell<TokioRwLock<HashMap<McpToolName, McpClientName>>>
 pub static MCP_CLIENTS: OnceCell<TokioRwLock<HashMap<McpClientName, TokioRwLock<McpClient>>>> =
     OnceCell::new();
 
-// Global MCP clients for vector search
-pub static MCP_VECTOR_SEARCH_CLIENT: OnceCell<TokioRwLock<McpClient>> = OnceCell::new();
-
 pub type McpToolMap = HashMap<UserId, TokioRwLock<HashMap<McpToolName, McpClientName>>>;
 pub type McpClientMap =
     HashMap<UserId, TokioRwLock<HashMap<McpClientName, TokioRwLock<McpClient>>>>;

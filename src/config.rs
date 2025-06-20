@@ -1,10 +1,7 @@
 use crate::{
     dual_debug, dual_error, dual_info,
     error::{ServerError, ServerResult},
-    mcp::{
-        McpClient, MCP_CLIENTS, MCP_TOOLS, MCP_VECTOR_SEARCH_CLIENT, USER_TO_MCP_CLIENTS,
-        USER_TO_MCP_TOOLS,
-    },
+    mcp::{McpClient, MCP_CLIENTS, MCP_TOOLS, USER_TO_MCP_CLIENTS, USER_TO_MCP_TOOLS},
 };
 use chat_prompts::MergeRagContextPolicy;
 use clap::ValueEnum;
@@ -53,11 +50,6 @@ impl Config {
                 for server_config in mcp_config.server.tool_servers.iter_mut() {
                     server_config.connect_mcp_server().await?;
                 }
-            }
-
-            // connect vector search mcp server
-            if let Some(server_vector_search) = mcp_config.server.vector_search_server.as_mut() {
-                server_vector_search.connect_mcp_server().await?;
             }
         }
 
@@ -150,142 +142,6 @@ pub struct McpConfig {
 pub struct McpServerConfig {
     #[serde(rename = "tool")]
     pub tool_servers: Vec<McpToolServerConfig>,
-    #[serde(rename = "vector_search")]
-    pub vector_search_server: Option<McpVectorSearchServerConfig>,
-    // #[serde(rename = "keyword_search")]
-    // pub keyword_search_server: Option<McpKeywordSearchServerConfig>,
-}
-
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub struct McpVectorSearchServerConfig {
-    pub name: String,
-    pub transport: McpTransport,
-    pub url: String,
-    pub enable: bool,
-    #[serde(skip_deserializing)]
-    pub tools: Option<Vec<RmcpTool>>,
-}
-impl McpVectorSearchServerConfig {
-    pub async fn connect_mcp_server(&mut self) -> ServerResult<()> {
-        if self.enable {
-            match self.transport {
-                McpTransport::Sse => {
-                    let url = self.url.trim_end_matches('/');
-                    if !url.ends_with("/sse") {
-                        let err_msg = format!(
-                            "Invalid vector search mcp SSE URL: {}. The correct format should end with `/sse`",
-                            self.url
-                        );
-                        dual_error!("{}", err_msg);
-                        return Err(ServerError::Operation(err_msg.to_string()));
-                    }
-                    dual_debug!("Sync vector search mcp server: {}", url);
-
-                    // create a sse transport
-                    let transport = SseClientTransport::start(url).await.map_err(|e| {
-                        let err_msg =
-                            format!("Failed to create vector search mcp SSE transport: {e}");
-                        dual_error!("{}", &err_msg);
-                        ServerError::Operation(err_msg)
-                    })?;
-
-                    // create a SSE mcp client
-                    let mcp_client = ()
-                        .into_dyn()
-                        .serve(transport)
-                        .await
-                        .inspect_err(|e| {
-                            tracing::error!("client error: {:?}", e);
-                        })
-                        .map_err(|e| {
-                            let err_msg = format!("Failed to create vector search mcp client: {e}");
-                            dual_error!("{}", &err_msg);
-                            ServerError::Operation(err_msg)
-                        })?;
-
-                    // add mcp client to MCP_CLIENTS
-                    match MCP_VECTOR_SEARCH_CLIENT.get() {
-                        Some(client) => {
-                            let mut locked_client = client.write().await;
-                            *locked_client = McpClient::new(self.name.clone(), mcp_client);
-                        }
-                        None => {
-                            MCP_VECTOR_SEARCH_CLIENT
-                                .set(TokioRwLock::new(McpClient::new(
-                                    self.name.clone(),
-                                    mcp_client,
-                                )))
-                                .map_err(|_| {
-                                    let err_msg = "Failed to set MCP_VECTOR_SEARCH_CLIENT";
-                                    dual_error!("{}", err_msg);
-                                    ServerError::Operation(err_msg.to_string())
-                                })?;
-                        }
-                    }
-                }
-                McpTransport::StreamHttp => {
-                    let url = self.url.trim_end_matches('/');
-                    if !url.ends_with("/mcp") {
-                        let err_msg = format!(
-                            "Invalid vector search mcp stream-http URL: {}. The correct format should end with `/mcp`",
-                            self.url
-                        );
-                        dual_error!("{}", err_msg);
-                        return Err(ServerError::Operation(err_msg.to_string()));
-                    }
-                    dual_debug!("Sync vector search mcp server: {}", url);
-
-                    // create a stream-http transport
-                    let transport = StreamableHttpClientTransport::from_uri(url);
-
-                    let client_info = ClientInfo {
-                        protocol_version: Default::default(),
-                        capabilities: ClientCapabilities::default(),
-                        client_info: Implementation {
-                            name: "test stream-http client".to_string(),
-                            version: "0.0.1".to_string(),
-                        },
-                    };
-                    let mcp_client =
-                        client_info.into_dyn().serve(transport).await.map_err(|e| {
-                            let err_msg = format!("Failed to create vector search mcp client: {e}");
-                            dual_error!("{}", &err_msg);
-                            ServerError::Operation(err_msg)
-                        })?;
-
-                    // add mcp client to MCP_CLIENTS
-                    match MCP_VECTOR_SEARCH_CLIENT.get() {
-                        Some(client) => {
-                            let mut locked_client = client.write().await;
-                            *locked_client = McpClient::new(self.name.clone(), mcp_client);
-                        }
-                        None => {
-                            MCP_VECTOR_SEARCH_CLIENT
-                                .set(TokioRwLock::new(McpClient::new(
-                                    self.name.clone(),
-                                    mcp_client,
-                                )))
-                                .map_err(|_| {
-                                    let err_msg = "Failed to set MCP_VECTOR_SEARCH_CLIENT";
-                                    dual_error!("{}", err_msg);
-                                    ServerError::Operation(err_msg.to_string())
-                                })?;
-                        }
-                    }
-                }
-                _ => {
-                    let err_msg = format!(
-                        "Unsupported vector search mcp transport: {}",
-                        self.transport
-                    );
-                    dual_error!("{}", err_msg);
-                    return Err(ServerError::Operation(err_msg.to_string()));
-                }
-            }
-        }
-
-        Ok(())
-    }
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]

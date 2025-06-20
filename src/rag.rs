@@ -1,7 +1,7 @@
 use crate::{
     dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
-    mcp::{MCP_CLIENTS, MCP_TOOLS, MCP_VECTOR_SEARCH_CLIENT},
+    mcp::{MCP_CLIENTS, MCP_TOOLS},
     server::{RoutingPolicy, ServerKind},
     AppState,
 };
@@ -92,64 +92,17 @@ pub async fn chat(
         }
     };
 
-    // // Get qdrant configs
-    // dual_info!(
-    //     "Parsing parameters for vector search - request_id: {}",
-    //     request_id
-    // );
-    // let qdrant_config_vec = match get_qdrant_configs(
-    //     &chat_request,
-    //     filter_limit,
-    //     filter_score_threshold,
-    //     &request_id,
-    // )
-    // .await
-    // {
-    //     Ok(configs) => configs,
-    //     Err(e) => {
-    //         let err_msg = format!("Failed to get the VectorDB config: {e}");
-    //         dual_error!(
-    //             "Failed to get the VectorDB config: {} - request_id: {}",
-    //             e,
-    //             request_id
-    //         );
-    //         return Err(ServerError::Operation(err_msg));
-    //     }
-    // };
-
-    // // Parallel execution of keyword search and vector search
-    // let (res_kw_search, res_vector_search) = tokio::join!(
-    //     perform_keyword_search_new(
-    //         State(state.clone()),
-    //         &query_text,
-    //         &chat_request,
-    //         // filter_limit,
-    //         &request_id
-    //     ),
-    //     perform_vector_search(
-    //         State(state.clone()),
-    //         Extension(cancel_token.clone()),
-    //         headers.clone(),
-    //         &chat_request,
-    //         &request_id
-    //     )
-    // );
-
-    // let kw_hits = res_kw_search.unwrap();
-    // let vector_hits = res_vector_search.unwrap();
-
     // vector search
     dual_info!("Performing vector search - request_id: {}", request_id);
-    let mut vector_hits = Vec::new();
-    if MCP_VECTOR_SEARCH_CLIENT.get().is_some() {
-        vector_hits = perform_vector_search(
-            State(state.clone()),
-            Extension(cancel_token.clone()),
-            headers.clone(),
-            &chat_request,
-            request_id,
-        )
-        .await?;
+    let vector_hits = perform_vector_search(
+        State(state.clone()),
+        Extension(cancel_token.clone()),
+        headers.clone(),
+        &chat_request,
+        request_id,
+    )
+    .await?;
+    if !vector_hits.is_empty() {
         dual_info!(
             "Retrieved {} points from the vector search - request_id: {}",
             vector_hits.len(),
@@ -576,7 +529,7 @@ async fn retrieve_context_with_multiple_qdrant_configs(
     headers: HeaderMap,
     request_id: impl AsRef<str>,
     chat_request: &ChatCompletionRequest,
-) -> Result<Vec<RetrieveObject>, ServerError> {
+) -> ServerResult<Vec<RetrieveObject>> {
     let mut retrieve_object_vec: Vec<RetrieveObject> = Vec::new();
     let mut set: HashSet<String> = HashSet::new();
 
@@ -631,8 +584,18 @@ async fn retrieve_context_with_single_qdrant_config(
     headers: HeaderMap,
     request_id: impl AsRef<str>,
     chat_request: &ChatCompletionRequest,
-) -> Result<RetrieveObject, ServerError> {
+) -> ServerResult<RetrieveObject> {
     let request_id = request_id.as_ref();
+
+    // get the user id from the request
+    let user_id = match chat_request.user.as_ref() {
+        Some(user_id) => user_id,
+        None => {
+            let err_msg = "User ID is not found in the request";
+            dual_error!("{} - request_id: {}", err_msg, request_id);
+            return Err(ServerError::Operation(err_msg.to_string()));
+        }
+    };
 
     // get the context window from config
     let config_ctx_window = state.config.read().await.rag.context_window;
@@ -742,8 +705,8 @@ async fn retrieve_context_with_single_qdrant_config(
         }
     };
 
-    let query_embedding: Vec<f32> = match embedding_response.data.first() {
-        Some(embedding) => embedding.embedding.iter().map(|x| *x as f32).collect(),
+    let query_embedding: Vec<f64> = match embedding_response.data.first() {
+        Some(embedding) => embedding.embedding.to_vec(),
         None => {
             let err_msg = "No embeddings returned";
 
@@ -755,21 +718,148 @@ async fn retrieve_context_with_single_qdrant_config(
     };
 
     // perform the context retrieval
-    let mut retrieve_object: RetrieveObject =
-        match retrieve_context(query_embedding.as_slice(), request_id).await {
-            Ok(search_result) => search_result,
-            Err(e) => {
-                let err_msg = format!("No point retrieved. {e}");
+    let retrieve_object = {
+        let user_prompt  = "Perform vector search with the input vector. Return a tool call that invokes the vector search tool.\n\nThe input vector is: [0.0,0.0,0.0,0.0]".to_string();
 
-                // log
-                dual_error!("{} - request_id: {}", err_msg, request_id);
+        let user_message = ChatCompletionRequestMessage::new_user_message(
+            ChatCompletionUserMessageContent::Text(user_prompt),
+            None,
+        );
 
-                return Err(ServerError::Operation(err_msg));
+        // create a request
+        let request = ChatCompletionRequestBuilder::new(&[user_message])
+            .with_tools(chat_request.tools.as_ref().unwrap().to_vec())
+            .with_tool_choice(ToolChoice::Auto)
+            .with_user(user_id)
+            .build();
+        dual_debug!(
+            "request for getting keywords:\n{} - request_id: {}",
+            serde_json::to_string_pretty(&request).unwrap(),
+            request_id
+        );
+
+        // get the chat server
+        let target_server_info = {
+            let servers = state.server_group.read().await;
+            let chat_servers = match servers.get(&ServerKind::chat) {
+                Some(servers) => servers,
+                None => {
+                    let err_msg = "No chat server available";
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    return Err(ServerError::Operation(err_msg.to_string()));
+                }
+            };
+
+            match chat_servers.next().await {
+                Ok(target_server_info) => target_server_info,
+                Err(e) => {
+                    let err_msg = format!("Failed to get the chat server: {e}");
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    return Err(ServerError::Operation(err_msg));
+                }
             }
         };
-    if retrieve_object.points.is_none() {
-        retrieve_object.points = Some(Vec::new());
-    }
+
+        let chat_service_url = format!(
+            "{}/v1/chat/completions",
+            target_server_info.url.trim_end_matches('/')
+        );
+        dual_debug!(
+            "Forward the chat request to {} - request_id: {}",
+            chat_service_url,
+            request_id
+        );
+
+        // Create a request client
+        let response = reqwest::Client::new()
+            .post(&chat_service_url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| {
+                let err_msg = format!("Failed to send the chat request: {e}");
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                ServerError::Operation(err_msg)
+            })?;
+
+        let status = response.status();
+        match status.is_success() {
+            false => {
+                let err_msg = format!("Failed to get the response: {status}");
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                RetrieveObject {
+                    points: Some(Vec::new()),
+                    limit: 0,
+                    score_threshold: 0.0,
+                }
+            }
+            true => {
+                let mut ro = RetrieveObject {
+                    points: Some(Vec::new()),
+                    limit: 0,
+                    score_threshold: 0.0,
+                };
+
+                let headers = response.headers().clone();
+                // check if the response has a header with the key "requires-tool-call"
+                if let Some(value) = headers.get("requires-tool-call") {
+                    // convert the value to a boolean
+                    let requires_tool_call: bool = value.to_str().unwrap().parse().unwrap();
+                    dual_debug!(
+                        "requires_tool_call: {} - request_id: {}",
+                        requires_tool_call,
+                        request_id
+                    );
+
+                    if requires_tool_call {
+                        let bytes = response.bytes().await.map_err(|e| {
+                            let err_msg = format!("Failed to get the response bytes: {e}");
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                            ServerError::Operation(err_msg)
+                        })?;
+
+                        let chat_completion: ChatCompletionObject =
+                            match serde_json::from_slice(&bytes) {
+                                Ok(completion) => completion,
+                                Err(e) => {
+                                    let err_msg = format!("Failed to parse the response: {e}");
+                                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                                    return Err(ServerError::Operation(err_msg));
+                                }
+                            };
+
+                        let assistant_message = &chat_completion.choices[0].message;
+
+                        match call_vector_search_mcp_server(
+                            assistant_message.tool_calls.as_slice(),
+                            query_embedding.as_slice(),
+                            &request_id,
+                        )
+                        .await
+                        {
+                            Ok(rag_scored_points) => {
+                                ro.points = Some(rag_scored_points);
+                            }
+                            Err(ServerError::McpNotFoundClient) => {
+                                let err_msg = "Not found MCP server";
+                                dual_warn!("{} - request_id: {}", err_msg, request_id);
+                            }
+                            Err(e) => {
+                                let err_msg = format!(
+                                    "Failed to call MCP server: {e} - request_id: {request_id}"
+                                );
+                                dual_error!("{}", err_msg);
+                                return Err(ServerError::Operation(err_msg));
+                            }
+                        }
+                    }
+                }
+
+                ro
+            }
+        }
+    };
 
     dual_debug!(
         "Got {} point(s) by vector search - request_id: {}",
@@ -778,108 +868,6 @@ async fn retrieve_context_with_single_qdrant_config(
     );
 
     Ok(retrieve_object)
-}
-
-async fn retrieve_context(
-    query_embedding: &[f32],
-    request_id: impl AsRef<str>,
-) -> Result<RetrieveObject, ServerError> {
-    let request_id = request_id.as_ref();
-
-    // search points from gaia-qdrant-mcp-server
-    let scored_points = match MCP_VECTOR_SEARCH_CLIENT.get() {
-        Some(mcp_client) => {
-            // request param
-            let request_param = CallToolRequestParam {
-                name: "search_points".into(),
-                arguments: Some(serde_json::Map::from_iter([(
-                    "vector".to_string(),
-                    Value::from(query_embedding.to_vec()),
-                )])),
-            };
-
-            // call the search_points tool
-            let tool_result = mcp_client
-                .read()
-                .await
-                .raw
-                .peer()
-                .call_tool(request_param)
-                .await
-                .map_err(|e| {
-                    let err_msg = format!("Failed to call the search_points tool: {e}");
-                    dual_error!("{} - request_id: {}", err_msg, request_id);
-                    ServerError::Operation(err_msg)
-                })?;
-
-            // parse the response
-            let response = SearchPointsResponse::from(tool_result);
-
-            response.result
-        }
-        None => {
-            let err_msg = "No vector search mcp client available";
-            dual_error!("{} - request_id: {}", err_msg, request_id);
-            return Err(ServerError::Operation(err_msg.to_string()));
-        }
-    };
-
-    dual_debug!(
-        "Check and remove duplicated vector search results - request_id: {}",
-        request_id
-    );
-
-    // remove duplicates, which have the same source
-    let mut seen = HashSet::new();
-    let unique_scored_points: Vec<ScoredPoint> = scored_points
-        .into_iter()
-        .filter(|point| seen.insert(point.payload.get("source").unwrap().to_string()))
-        .collect();
-
-    dual_debug!(
-        "Retrieved {} unique vector search results in total - request_id: {}",
-        unique_scored_points.len(),
-        request_id
-    );
-
-    let ro = match unique_scored_points.is_empty() {
-        true => RetrieveObject {
-            points: None,
-            limit: 0,
-            score_threshold: 0.0,
-        },
-        false => {
-            let mut points: Vec<RagScoredPoint> = vec![];
-            for point in unique_scored_points.iter() {
-                if point.payload.is_empty() {
-                    continue;
-                }
-
-                dual_debug!("point: {:?}", point);
-
-                if let Some(source) = point.payload.get("source").and_then(Value::as_str) {
-                    points.push(RagScoredPoint {
-                        source: source.to_string(),
-                        score: point.score,
-                        from: DataFrom::VectorSearch,
-                    })
-                }
-
-                // For debugging purpose, log the optional search field if it exists
-                if let Some(search) = point.payload.get("search").and_then(Value::as_str) {
-                    dual_info!("search: {} - request_id: {}", search, request_id);
-                }
-            }
-
-            RetrieveObject {
-                points: Some(points),
-                limit: 0,
-                score_threshold: 0.0,
-            }
-        }
-    };
-
-    Ok(ro)
 }
 
 #[derive(Debug, Default)]
@@ -921,7 +909,7 @@ impl MergeRagContext for RagPromptBuilder {
                 match &messages[0] {
                     ChatCompletionRequestMessage::System(message) => {
                         let content = format!(
-                            "You are a helpful AI assistant. Please answer the user question based on the information between **---BEGIN CONTEXT---** and **---END CONTEXT---**. Do not use any external knowledge. If the information between **---BEGIN CONTEXT---** and **---END CONTEXT---** is empty, please respond with `No relevant information found in the current knowledge base`.\n\n---BEGIN CONTEXT---\n\n{context}\n\n---END CONTEXT---",
+                            "You are a helpful AI assistant. Please answer the user question based on the information between **---BEGIN CONTEXT---** and **---END CONTEXT---**. Do not use any external knowledge. If the information between **---BEGIN CONTEXT---** and **---END CONTEXT---** is empty, please respond with `No relevant information found in the current knowledge base`. Note that DO NOT use any tools if provided.\n\n---BEGIN CONTEXT---\n\n{context}\n\n---END CONTEXT---",
                         );
 
                         let system_message = ChatCompletionRequestMessage::new_system_message(
@@ -935,7 +923,7 @@ impl MergeRagContext for RagPromptBuilder {
                     _ => {
                         // compose new system message content
                         let content = format!(
-                            "You are a helpful AI assistant. Please answer the user question based on the information between **---BEGIN CONTEXT---** and **---END CONTEXT---**. Do not use any external knowledge. If the information between **---BEGIN CONTEXT---** and **---END CONTEXT---** is empty, please respond with `No relevant information found in the current knowledge base`.\n\n---BEGIN CONTEXT---\n\n{context}\n\n---END CONTEXT---",
+                            "You are a helpful AI assistant. Please answer the user question based on the information between **---BEGIN CONTEXT---** and **---END CONTEXT---**. Do not use any external knowledge. If the information between **---BEGIN CONTEXT---** and **---END CONTEXT---** is empty, please respond with `No relevant information found in the current knowledge base`. Note that DO NOT use any tools if provided.\n\n---BEGIN CONTEXT---\n\n{context}\n\n---END CONTEXT---",
                         );
 
                         // create system message
@@ -955,7 +943,7 @@ impl MergeRagContext for RagPromptBuilder {
                     Some(ChatCompletionRequestMessage::User(message)) => {
                         if let ChatCompletionUserMessageContent::Text(content) = message.content() {
                             let extened_content = format!(
-                                "You are a helpful AI assistant. Please answer the user question based on the information between **---BEGIN CONTEXT---** and **---END CONTEXT---**. Do not use any external knowledge. If the information between **---BEGIN CONTEXT---** and **---END CONTEXT---** is empty, please respond with `No relevant information found in the current knowledge base`.\n\n---BEGIN CONTEXT---\n\n{context}\n\n---END CONTEXT---\n\nThe question is:\n{content}",
+                                "You are a helpful AI assistant. Please answer the user question based on the information between **---BEGIN CONTEXT---** and **---END CONTEXT---**. Do not use any external knowledge. If the information between **---BEGIN CONTEXT---** and **---END CONTEXT---** is empty, please respond with `No relevant information found in the current knowledge base`. Note that DO NOT use any tools if provided.\n\n---BEGIN CONTEXT---\n\n{context}\n\n---END CONTEXT---\n\nThe question is:\n{content}",
                             );
 
                             let content = ChatCompletionUserMessageContent::Text(extened_content);
@@ -1276,11 +1264,14 @@ async fn call_keyword_search_mcp_server(
                                                     .call_tool(request_param)
                                                     .await
                                                     .map_err(|e| {
+                                                        let err_msg =
+                                                            format!("Failed to call the tool: {e}");
                                                         dual_error!(
-                                                            "Failed to call the tool: {}",
-                                                            e
+                                                            "{} - request_id: {}",
+                                                            err_msg,
+                                                            request_id
                                                         );
-                                                        ServerError::Operation(e.to_string())
+                                                        ServerError::Operation(err_msg)
                                                     })?;
 
                                                 dual_debug!(
@@ -1290,9 +1281,8 @@ async fn call_keyword_search_mcp_server(
                                                     request_id
                                                 );
 
-                                                let search_response = SearchDocumentsResponse::from(
-                                                    mcp_tool_result.clone(),
-                                                );
+                                                let search_response =
+                                                    SearchDocumentsResponse::from(mcp_tool_result);
                                                 kw_hits = search_response.hits;
 
                                                 let kw_hits_str =
@@ -1410,12 +1400,11 @@ async fn call_keyword_search_mcp_server(
                                                     "Unsupported MCP server: {}",
                                                     &peer_info.server_info.name
                                                 );
-                                                dual_error!(
+                                                dual_warn!(
                                                     "{} - request_id: {}",
                                                     &err_msg,
                                                     request_id
                                                 );
-                                                return Err(ServerError::Operation(err_msg));
                                             }
                                         }
                                     }
@@ -1457,4 +1446,190 @@ async fn call_keyword_search_mcp_server(
     }
 
     Ok(kw_hits)
+}
+
+async fn call_vector_search_mcp_server(
+    tool_calls: &[ToolCall],
+    vector: &[f64],
+    request_id: impl AsRef<str>,
+) -> ServerResult<Vec<RagScoredPoint>> {
+    let request_id = request_id.as_ref();
+
+    // get the tool call from the tool calls
+    let tool_call = &tool_calls[0];
+    let tool_name = tool_call.function.name.as_str();
+    let tool_args = &tool_call.function.arguments;
+    dual_debug!(
+        "tool name: {}, tool args: {} - request_id: {}",
+        tool_name,
+        tool_args,
+        request_id
+    );
+
+    // convert the func_args to a json object
+    let arguments = Some(serde_json::Map::from_iter([(
+        "vector".to_string(),
+        serde_json::Value::Array(vector.iter().map(|v| serde_json::Value::from(*v)).collect()),
+    )]));
+
+    match MCP_TOOLS.get() {
+        Some(mcp_tools) => match mcp_tools.read().await.get(tool_name) {
+            Some(mcp_client_name) => {
+                match MCP_CLIENTS.get() {
+                    Some(mcp_clients) => {
+                        match mcp_clients.read().await.get(mcp_client_name) {
+                            Some(mcp_client) => {
+                                match mcp_client.read().await.raw.peer_info() {
+                                    Some(peer_info) => {
+                                        match peer_info.server_info.name.as_str() {
+                                            "gaia-qdrant-mcp-server" => {
+                                                // request param
+                                                let request_param = CallToolRequestParam {
+                                                    name: tool_name.to_string().into(),
+                                                    arguments,
+                                                };
+
+                                                // call tool
+                                                let mcp_tool_result = mcp_client
+                                                    .read()
+                                                    .await
+                                                    .raw
+                                                    .peer()
+                                                    .call_tool(request_param)
+                                                    .await
+                                                    .map_err(|e| {
+                                                        let err_msg =
+                                                            format!("Failed to call the tool: {e}");
+                                                        dual_error!(
+                                                            "{} - request_id: {}",
+                                                            err_msg,
+                                                            request_id
+                                                        );
+                                                        ServerError::Operation(err_msg)
+                                                    })?;
+
+                                                dual_debug!(
+                                                    "{} - request_id: {}",
+                                                    serde_json::to_string_pretty(&mcp_tool_result)
+                                                        .unwrap(),
+                                                    request_id
+                                                );
+
+                                                let search_response =
+                                                    SearchPointsResponse::from(mcp_tool_result);
+                                                let scored_points = search_response.result;
+
+                                                dual_debug!(
+                                                    "Check and remove duplicated vector search results - request_id: {}",
+                                                    request_id
+                                                );
+
+                                                // remove duplicates, which have the same source
+                                                let mut seen = HashSet::new();
+                                                let unique_scored_points: Vec<ScoredPoint> =
+                                                    scored_points
+                                                        .into_iter()
+                                                        .filter(|point| {
+                                                            seen.insert(
+                                                                point
+                                                                    .payload
+                                                                    .get("source")
+                                                                    .unwrap()
+                                                                    .to_string(),
+                                                            )
+                                                        })
+                                                        .collect();
+
+                                                dual_debug!(
+                                                    "Retrieved {} unique vector search results in total - request_id: {}",
+                                                    unique_scored_points.len(),
+                                                    request_id
+                                                );
+
+                                                let mut points: Vec<RagScoredPoint> = vec![];
+                                                for point in unique_scored_points.iter() {
+                                                    if point.payload.is_empty() {
+                                                        continue;
+                                                    }
+
+                                                    dual_debug!("point: {:?}", point);
+
+                                                    if let Some(source) = point
+                                                        .payload
+                                                        .get("source")
+                                                        .and_then(Value::as_str)
+                                                    {
+                                                        points.push(RagScoredPoint {
+                                                            source: source.to_string(),
+                                                            score: point.score,
+                                                            from: DataFrom::VectorSearch,
+                                                        })
+                                                    }
+
+                                                    // For debugging purpose, log the optional search field if it exists
+                                                    if let Some(search) = point
+                                                        .payload
+                                                        .get("search")
+                                                        .and_then(Value::as_str)
+                                                    {
+                                                        dual_info!(
+                                                            "search: {} - request_id: {}",
+                                                            search,
+                                                            request_id
+                                                        );
+                                                    }
+                                                }
+
+                                                Ok(points)
+                                            }
+                                            _ => {
+                                                let err_msg = format!(
+                                                    "Unsupported MCP server: {}",
+                                                    &peer_info.server_info.name
+                                                );
+                                                dual_error!(
+                                                    "{} - request_id: {}",
+                                                    &err_msg,
+                                                    request_id
+                                                );
+                                                Err(ServerError::Operation(err_msg))
+                                            }
+                                        }
+                                    }
+                                    None => {
+                                        let err_msg = "Failed to get MCP server info";
+                                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                                        Err(ServerError::Operation(err_msg.to_string()))
+                                    }
+                                }
+                            }
+                            None => {
+                                let err_msg = format!(
+                                    "Failed to get the mcp client named `{mcp_client_name}`"
+                                );
+                                dual_error!("{} - request_id: {}", err_msg, request_id);
+                                Err(ServerError::Operation(err_msg.to_string()))
+                            }
+                        }
+                    }
+                    None => {
+                        let err_msg = "MCP_CLIENTS is not initialized";
+                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                        Err(ServerError::Operation(err_msg.to_string()))
+                    }
+                }
+            }
+            None => {
+                let err_msg =
+                    format!("Not found mcp client providing mcp tool named `{tool_name}`");
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                Err(ServerError::Operation(err_msg.to_string()))
+            }
+        },
+        None => {
+            let err_msg = "MCP_TOOLS is not initialized";
+            dual_error!("{} - request_id: {}", err_msg, request_id);
+            Err(ServerError::Operation(err_msg.to_string()))
+        }
+    }
 }
