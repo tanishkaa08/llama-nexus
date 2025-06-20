@@ -33,8 +33,6 @@ use std::{
 use text_splitter::{MarkdownSplitter, TextSplitter};
 use tokio_util::sync::CancellationToken;
 
-const DEFAULT_FILTER_LIMIT: u64 = 10;
-const DEFAULT_FILTER_SCORE_THRESHOLD: f32 = 0.5;
 const DEFAULT_FILTER_WEIGHTED_ALPHA: f64 = 0.5;
 
 pub async fn chat(
@@ -47,24 +45,6 @@ pub async fn chat(
     let request_id = request_id.as_ref();
 
     // * filter parameters
-    let filter_limit = match chat_request.limit {
-        Some(limit) => limit,
-        None => DEFAULT_FILTER_LIMIT,
-    };
-    dual_debug!(
-        "filter_limit: {} - request_id: {}",
-        filter_limit,
-        request_id
-    );
-    let filter_score_threshold = match chat_request.score_threshold {
-        Some(score_threshold) => score_threshold,
-        None => DEFAULT_FILTER_SCORE_THRESHOLD,
-    };
-    dual_debug!(
-        "filter_score_threshold: {} - request_id: {}",
-        filter_score_threshold,
-        request_id
-    );
     let weighted_alpha = match chat_request.weighted_alpha {
         Some(weighted_alpha) => weighted_alpha,
         None => DEFAULT_FILTER_WEIGHTED_ALPHA,
@@ -232,9 +212,9 @@ pub async fn chat(
             }
 
             let retrieve_object = RetrieveObject {
-                limit: retrieved.len(),
-                score_threshold: filter_score_threshold,
                 points: Some(retrieved),
+                limit: 0,
+                score_threshold: 0.0,
             };
 
             vec![retrieve_object]
