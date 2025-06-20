@@ -1,5 +1,4 @@
 use crate::{
-    config::McpToolServerConfig,
     dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
     info::ApiServer,
@@ -146,63 +145,6 @@ pub(crate) async fn chat(
             }
         }
     };
-
-    // load tools from the `mcp_tools` field in the request
-    if let Some(config_mcp_servers) = &request.mcp_tools {
-        if !config_mcp_servers.is_empty() {
-            let mut more_tools = Vec::new();
-            for config in config_mcp_servers {
-                dual_debug!("mcp server info: {:?}", config);
-
-                let mut server_config = McpToolServerConfig {
-                    name: config.server_label.clone(),
-                    transport: config.transport,
-                    url: config.server_url.clone(),
-                    enable: true,
-                    tools: None,
-                };
-
-                // connect the mcp server and get the tools
-                server_config
-                    .connect_mcp_server_by_user(request.user.as_ref().unwrap())
-                    .await?;
-
-                // get the allowed tools
-                let allowed_tools = config.allowed_tools.as_deref().unwrap_or(&[]);
-
-                // get the tools from the mcp server
-                if let Some(tools) = server_config.tools.as_deref() {
-                    tools.iter().for_each(|rmcp_tool| {
-                        let tool_name = rmcp_tool.name.to_string();
-                        let tool = Tool::new(ToolFunction {
-                            name: tool_name.clone(),
-                            description: rmcp_tool.description.as_ref().map(|s| s.to_string()),
-                            parameters: Some((*rmcp_tool.input_schema).clone()),
-                        });
-
-                        if allowed_tools.is_empty() || allowed_tools.contains(&tool_name) {
-                            dual_debug!("tool to be added: {:?}", &tool);
-                            more_tools.push(tool.clone());
-                        }
-                    });
-                }
-            }
-
-            // update the request with MCP tools
-            if !more_tools.is_empty() {
-                if let Some(tools) = &mut request.tools {
-                    tools.extend(more_tools);
-                } else {
-                    request.tools = Some(more_tools);
-                }
-
-                // set the tool choice to auto
-                if let Some(ToolChoice::None) | None = request.tool_choice {
-                    request.tool_choice = Some(ToolChoice::Auto);
-                }
-            }
-        }
-    }
 
     let chat_service_url = format!(
         "{}/v1/chat/completions",

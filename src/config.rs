@@ -1,7 +1,7 @@
 use crate::{
     dual_debug, dual_error, dual_info,
     error::{ServerError, ServerResult},
-    mcp::{McpClient, MCP_CLIENTS, MCP_TOOLS, USER_TO_MCP_CLIENTS, USER_TO_MCP_TOOLS},
+    mcp::{McpClient, MCP_CLIENTS, MCP_TOOLS},
 };
 use chat_prompts::MergeRagContextPolicy;
 use clap::ValueEnum;
@@ -208,6 +208,13 @@ impl McpToolServerConfig {
                     // update tools
                     self.tools = Some(tools.tools.clone());
 
+                    let mut client = McpClient::new(self.name.clone(), mcp_client);
+                    client.tools = tools
+                        .tools
+                        .iter()
+                        .map(|tool| tool.name.to_string())
+                        .collect();
+
                     // print name of all tools
                     for (idx, tool) in tools.tools.iter().enumerate() {
                         dual_debug!(
@@ -239,16 +246,13 @@ impl McpToolServerConfig {
                     match MCP_CLIENTS.get() {
                         Some(clients) => {
                             let mut clients = clients.write().await;
-                            clients.insert(
-                                self.name.clone(),
-                                TokioRwLock::new(McpClient::new(self.name.clone(), mcp_client)),
-                            );
+                            clients.insert(self.name.clone(), TokioRwLock::new(client));
                         }
                         None => {
                             MCP_CLIENTS
                                 .set(TokioRwLock::new(HashMap::from([(
                                     self.name.clone(),
-                                    TokioRwLock::new(McpClient::new(self.name.clone(), mcp_client)),
+                                    TokioRwLock::new(client),
                                 )])))
                                 .map_err(|_| {
                                     let err_msg = "Failed to set MCP_CLIENTS";
@@ -313,6 +317,13 @@ impl McpToolServerConfig {
                     // update tools
                     self.tools = Some(tools.tools.clone());
 
+                    let mut client = McpClient::new(self.name.clone(), mcp_client);
+                    client.tools = tools
+                        .tools
+                        .iter()
+                        .map(|tool| tool.name.to_string())
+                        .collect();
+
                     // print name of all tools
                     for (idx, tool) in tools.tools.iter().enumerate() {
                         dual_debug!(
@@ -344,412 +355,19 @@ impl McpToolServerConfig {
                     match MCP_CLIENTS.get() {
                         Some(clients) => {
                             let mut clients = clients.write().await;
-                            clients.insert(
-                                self.name.clone(),
-                                TokioRwLock::new(McpClient::new(self.name.clone(), mcp_client)),
-                            );
+                            clients.insert(self.name.clone(), TokioRwLock::new(client));
                         }
                         None => {
                             MCP_CLIENTS
                                 .set(TokioRwLock::new(HashMap::from([(
                                     self.name.clone(),
-                                    TokioRwLock::new(McpClient::new(self.name.clone(), mcp_client)),
+                                    TokioRwLock::new(client),
                                 )])))
                                 .map_err(|_| {
                                     let err_msg = "Failed to set MCP_CLIENTS";
                                     dual_error!("{}", err_msg);
                                     ServerError::Operation(err_msg.to_string())
                                 })?;
-                        }
-                    }
-                }
-                _ => {
-                    let err_msg = format!("Unsupported transport: {}", self.transport);
-                    dual_error!("{}", err_msg);
-                    return Err(ServerError::Operation(err_msg.to_string()));
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Connect the mcp server by user or by request
-    ///
-    /// # Arguments
-    ///
-    /// * `user_id`: The user id or request id
-    pub async fn connect_mcp_server_by_user(
-        &mut self,
-        user_id: impl AsRef<str>,
-    ) -> ServerResult<()> {
-        if self.enable {
-            match self.transport {
-                McpTransport::Sse => {
-                    let url = self.url.trim_end_matches('/');
-                    if !url.ends_with("/sse") {
-                        let err_msg = format!(
-                            "Invalid mcp tools sse URL: {}. The correct format should end with `/sse`",
-                            self.url
-                        );
-                        dual_error!("{}", err_msg);
-                        return Err(ServerError::Operation(err_msg.to_string()));
-                    }
-                    dual_debug!("Sync mcp tools from mcp server: {}", url);
-
-                    // create a sse transport
-                    let transport = SseClientTransport::start(url).await.map_err(|e| {
-                        let err_msg = format!("Failed to create sse transport: {e}");
-                        dual_error!("{}", &err_msg);
-                        ServerError::Operation(err_msg)
-                    })?;
-
-                    // create a mcp client
-                    let mcp_client = ().into_dyn().serve(transport).await.map_err(|e| {
-                        let err_msg = format!("Failed to create mcp client: {e}");
-                        dual_error!("{}", &err_msg);
-                        ServerError::Operation(err_msg)
-                    })?;
-
-                    // list tools
-                    let tools = mcp_client
-                        .peer()
-                        .list_tools(Default::default())
-                        .await
-                        .map_err(|e| {
-                            let err_msg = format!("Failed to list tools: {e}");
-                            dual_error!("{}", &err_msg);
-                            ServerError::Operation(err_msg)
-                        })?;
-                    dual_info!(
-                        "Found {} tools from {} mcp server",
-                        &tools.tools.len(),
-                        self.name,
-                    );
-
-                    dual_debug!(
-                        "Retrieved mcp tools: {}",
-                        serde_json::to_string_pretty(&tools).unwrap()
-                    );
-
-                    // update tools
-                    self.tools = Some(tools.tools.clone());
-
-                    // print name of all tools
-                    for (idx, tool) in tools.tools.iter().enumerate() {
-                        dual_debug!(
-                            "Tool {} - name: {}, description: {}",
-                            idx,
-                            tool.name,
-                            tool.description.as_deref().unwrap_or("No description"),
-                        );
-
-                        match USER_TO_MCP_TOOLS.get() {
-                            Some(user_to_mcp_tools) => {
-                                let mut user_to_mcp_tools = user_to_mcp_tools.write().await;
-
-                                match user_to_mcp_tools.contains_key(user_id.as_ref()) {
-                                    true => {
-                                        let mut mcp_tools = user_to_mcp_tools
-                                            .get(user_id.as_ref())
-                                            .unwrap()
-                                            .write()
-                                            .await;
-
-                                        match mcp_tools.get(&tool.name.to_string()) {
-                                            Some(mcp_client_name) => {
-                                                if mcp_client_name != &self.name {
-                                                    let err_msg = format!(
-                                                            "MCP Tool conflict: the existing `{}` mcp server and new `{}` mcp server have the same tool `{}`",
-                                                            mcp_client_name, self.name, tool.name
-                                                        );
-                                                    dual_error!("{}", err_msg);
-                                                    return Err(ServerError::Operation(
-                                                        err_msg.to_string(),
-                                                    ));
-                                                }
-                                            }
-                                            None => {
-                                                mcp_tools.insert(
-                                                    tool.name.to_string(),
-                                                    self.name.clone(),
-                                                );
-                                            }
-                                        }
-                                    }
-                                    false => {
-                                        let mcp_tools = TokioRwLock::new(HashMap::from([(
-                                            tool.name.to_string(),
-                                            self.name.clone(),
-                                        )]));
-
-                                        user_to_mcp_tools
-                                            .insert(user_id.as_ref().to_string(), mcp_tools);
-                                    }
-                                }
-                            }
-                            None => {
-                                let mcp_tools = TokioRwLock::new(HashMap::from([(
-                                    tool.name.to_string(),
-                                    self.name.clone(),
-                                )]));
-
-                                USER_TO_MCP_TOOLS
-                                    .set(TokioRwLock::new(HashMap::from([(
-                                        user_id.as_ref().to_string(),
-                                        mcp_tools,
-                                    )])))
-                                    .map_err(|_| {
-                                        let err_msg = "Failed to set USER_TO_MCP_TOOLS";
-                                        dual_error!("{}", err_msg);
-                                        ServerError::Operation(err_msg.to_string())
-                                    })?;
-                            }
-                        }
-                    }
-
-                    // add mcp client to USER_TO_MCP_CLIENTS
-                    match USER_TO_MCP_CLIENTS.get() {
-                        Some(user_to_mcp_clients) => {
-                            let mut user_to_mcp_clients_mut = user_to_mcp_clients.write().await;
-
-                            match user_to_mcp_clients_mut.contains_key(user_id.as_ref()) {
-                                true => {
-                                    let mut mcp_clients_mut = user_to_mcp_clients_mut
-                                        .get(user_id.as_ref())
-                                        .unwrap()
-                                        .write()
-                                        .await;
-
-                                    if !mcp_clients_mut.contains_key(&self.name) {
-                                        mcp_clients_mut.insert(
-                                            self.name.clone(),
-                                            TokioRwLock::new(McpClient::new(
-                                                self.name.clone(),
-                                                mcp_client,
-                                            )),
-                                        );
-                                    } else {
-                                        let err_msg = format!(
-                                                "MCP Client conflict: the mcp client connecting to mcp server `{}` already exists",
-                                                self.name
-                                            );
-                                        dual_error!("{}", err_msg);
-                                        return Err(ServerError::Operation(err_msg.to_string()));
-                                    }
-                                }
-                                false => {
-                                    let mcp_client = TokioRwLock::new(HashMap::from([(
-                                        self.name.clone(),
-                                        TokioRwLock::new(McpClient::new(
-                                            self.name.clone(),
-                                            mcp_client,
-                                        )),
-                                    )]));
-
-                                    user_to_mcp_clients_mut
-                                        .insert(user_id.as_ref().to_string(), mcp_client);
-                                }
-                            }
-                        }
-                        None => {
-                            let mcp_client = TokioRwLock::new(HashMap::from([(
-                                user_id.as_ref().to_string(),
-                                TokioRwLock::new(HashMap::from([(
-                                    self.name.clone(),
-                                    TokioRwLock::new(McpClient::new(self.name.clone(), mcp_client)),
-                                )])),
-                            )]));
-
-                            USER_TO_MCP_CLIENTS.set(mcp_client).map_err(|_| {
-                                let err_msg = "Failed to set USER_TO_MCP_CLIENTS";
-                                dual_error!("{}", err_msg);
-                                ServerError::Operation(err_msg.to_string())
-                            })?;
-                        }
-                    }
-                }
-                McpTransport::StreamHttp => {
-                    let url = self.url.trim_end_matches('/');
-                    if !url.ends_with("/mcp") {
-                        let err_msg = format!(
-                            "Invalid mcp tools stream-http URL: {}. The correct format should end with `/mcp`",
-                            self.url
-                        );
-                        dual_error!("{}", err_msg);
-                        return Err(ServerError::Operation(err_msg.to_string()));
-                    }
-                    dual_debug!("Sync mcp tools from mcp server: {}", url);
-
-                    // create a stream-http transport
-                    let transport = StreamableHttpClientTransport::from_uri(url);
-
-                    // create a mcp client
-                    let client_info = ClientInfo {
-                        protocol_version: Default::default(),
-                        capabilities: ClientCapabilities::default(),
-                        client_info: Implementation {
-                            name: "test stream-http client".to_string(),
-                            version: "0.0.1".to_string(),
-                        },
-                    };
-                    let mcp_client =
-                        client_info.into_dyn().serve(transport).await.map_err(|e| {
-                            let err_msg = format!("Failed to create mcp client: {e}");
-                            dual_error!("{}", &err_msg);
-                            ServerError::Operation(err_msg)
-                        })?;
-
-                    // list tools
-                    let tools = mcp_client
-                        .peer()
-                        .list_tools(Default::default())
-                        .await
-                        .map_err(|e| {
-                            let err_msg = format!("Failed to list tools: {e}");
-                            dual_error!("{}", &err_msg);
-                            ServerError::Operation(err_msg)
-                        })?;
-                    dual_debug!(
-                        "Found {} tools from {} mcp server",
-                        &tools.tools.len(),
-                        self.name,
-                    );
-
-                    // update tools
-                    self.tools = Some(tools.tools.clone());
-
-                    // put tools into USER_TO_MCP_TOOLS
-                    for (idx, tool) in tools.tools.iter().enumerate() {
-                        dual_debug!(
-                            "Tool {} - name: {}, description: {}",
-                            idx,
-                            tool.name,
-                            tool.description.as_deref().unwrap_or("No description"),
-                        );
-
-                        match USER_TO_MCP_TOOLS.get() {
-                            Some(user_to_mcp_tools) => {
-                                let mut user_to_mcp_tools = user_to_mcp_tools.write().await;
-
-                                match user_to_mcp_tools.contains_key(user_id.as_ref()) {
-                                    true => {
-                                        let mut mcp_tools = user_to_mcp_tools
-                                            .get(user_id.as_ref())
-                                            .unwrap()
-                                            .write()
-                                            .await;
-
-                                        match mcp_tools.get(&tool.name.to_string()) {
-                                            Some(mcp_client_name) => {
-                                                if mcp_client_name != &self.name {
-                                                    let err_msg = format!(
-                                                        "MCP Tool conflict: the existing `{}` mcp server and new `{}` mcp server have the same tool `{}`",
-                                                        mcp_client_name, self.name, tool.name
-                                                    );
-                                                    dual_error!("{}", err_msg);
-                                                    return Err(ServerError::Operation(
-                                                        err_msg.to_string(),
-                                                    ));
-                                                }
-                                            }
-                                            None => {
-                                                mcp_tools.insert(
-                                                    tool.name.to_string(),
-                                                    self.name.clone(),
-                                                );
-                                            }
-                                        }
-                                    }
-                                    false => {
-                                        let mcp_tools = TokioRwLock::new(HashMap::from([(
-                                            tool.name.to_string(),
-                                            self.name.clone(),
-                                        )]));
-
-                                        user_to_mcp_tools
-                                            .insert(user_id.as_ref().to_string(), mcp_tools);
-                                    }
-                                }
-                            }
-                            None => {
-                                let mcp_tools = TokioRwLock::new(HashMap::from([(
-                                    tool.name.to_string(),
-                                    self.name.clone(),
-                                )]));
-
-                                USER_TO_MCP_TOOLS
-                                    .set(TokioRwLock::new(HashMap::from([(
-                                        user_id.as_ref().to_string(),
-                                        mcp_tools,
-                                    )])))
-                                    .map_err(|_| {
-                                        let err_msg = "Failed to set USER_TO_MCP_TOOLS";
-                                        dual_error!("{}", err_msg);
-                                        ServerError::Operation(err_msg.to_string())
-                                    })?;
-                            }
-                        }
-                    }
-
-                    // add mcp client to USER_TO_MCP_CLIENTS
-                    match USER_TO_MCP_CLIENTS.get() {
-                        Some(user_to_mcp_clients) => {
-                            let mut user_to_mcp_clients_mut = user_to_mcp_clients.write().await;
-
-                            match user_to_mcp_clients_mut.contains_key(user_id.as_ref()) {
-                                true => {
-                                    let mut mcp_clients_mut = user_to_mcp_clients_mut
-                                        .get(user_id.as_ref())
-                                        .unwrap()
-                                        .write()
-                                        .await;
-
-                                    if !mcp_clients_mut.contains_key(&self.name) {
-                                        mcp_clients_mut.insert(
-                                            self.name.clone(),
-                                            TokioRwLock::new(McpClient::new(
-                                                self.name.clone(),
-                                                mcp_client,
-                                            )),
-                                        );
-                                    } else {
-                                        let err_msg = format!(
-                                                "MCP Client conflict: the mcp client connecting to mcp server `{}` already exists",
-                                                self.name
-                                            );
-                                        dual_error!("{}", err_msg);
-                                        return Err(ServerError::Operation(err_msg.to_string()));
-                                    }
-                                }
-                                false => {
-                                    let mcp_client = TokioRwLock::new(HashMap::from([(
-                                        self.name.clone(),
-                                        TokioRwLock::new(McpClient::new(
-                                            self.name.clone(),
-                                            mcp_client,
-                                        )),
-                                    )]));
-
-                                    user_to_mcp_clients_mut
-                                        .insert(user_id.as_ref().to_string(), mcp_client);
-                                }
-                            }
-                        }
-                        None => {
-                            let mcp_client = TokioRwLock::new(HashMap::from([(
-                                user_id.as_ref().to_string(),
-                                TokioRwLock::new(HashMap::from([(
-                                    self.name.clone(),
-                                    TokioRwLock::new(McpClient::new(self.name.clone(), mcp_client)),
-                                )])),
-                            )]));
-
-                            USER_TO_MCP_CLIENTS.set(mcp_client).map_err(|_| {
-                                let err_msg = "Failed to set USER_TO_MCP_CLIENTS";
-                                dual_error!("{}", err_msg);
-                                ServerError::Operation(err_msg.to_string())
-                            })?;
                         }
                     }
                 }
