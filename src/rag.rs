@@ -469,11 +469,8 @@ async fn perform_keyword_search(
 
             let assistant_message = &chat_completion.choices[0].message;
 
-            match call_keyword_search_mcp_server(
-                assistant_message.tool_calls.as_slice(),
-                &request_id,
-            )
-            .await
+            match call_keyword_search_service(assistant_message.tool_calls.as_slice(), &request_id)
+                .await
             {
                 Ok(kw_hits) => return Ok(kw_hits),
                 Err(ServerError::McpNotFoundClient) => {
@@ -818,7 +815,7 @@ async fn retrieve_context_with_single_qdrant_config(
 
                         let assistant_message = &chat_completion.choices[0].message;
 
-                        match call_vector_search_mcp_server(
+                        match call_vector_search_service(
                             assistant_message.tool_calls.as_slice(),
                             query_embedding.as_slice(),
                             &request_id,
@@ -1205,7 +1202,7 @@ fn weighted_fusion(
     }
 }
 
-async fn call_keyword_search_mcp_server(
+async fn call_keyword_search_service(
     tool_calls: &[ToolCall],
     request_id: impl AsRef<str>,
 ) -> ServerResult<Vec<KwSearchHit>> {
@@ -1227,10 +1224,10 @@ async fn call_keyword_search_mcp_server(
         serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(tool_args).ok();
 
     match MCP_SERVICES.get() {
-        Some(mcp_clients) => {
-            for (_, mcp_client) in mcp_clients.read().await.iter() {
-                if mcp_client.read().await.has_tool(tool_name) {
-                    match mcp_client.read().await.raw.peer_info() {
+        Some(services) => {
+            for (_service_name, service) in services.read().await.iter() {
+                if service.read().await.has_tool(tool_name) {
+                    match service.read().await.raw.peer_info() {
                         Some(peer_info) => {
                             match peer_info.server_info.name.as_str() {
                                 "gaia-kwsearch-mcp-server" => {
@@ -1239,11 +1236,10 @@ async fn call_keyword_search_mcp_server(
                                         name: tool_name.to_string().into(),
                                         arguments,
                                     };
-                                    let mcp_tool_result = mcp_client
+                                    let mcp_tool_result = service
                                         .read()
                                         .await
                                         .raw
-                                        .peer()
                                         .call_tool(request_param)
                                         .await
                                         .map_err(|e| {
@@ -1278,11 +1274,10 @@ async fn call_keyword_search_mcp_server(
                                         name: tool_name.to_string().into(),
                                         arguments,
                                     };
-                                    let mcp_tool_result = mcp_client
+                                    let mcp_tool_result = service
                                         .read()
                                         .await
                                         .raw
-                                        .peer()
                                         .call_tool(request_param)
                                         .await
                                         .map_err(|e| {
@@ -1321,11 +1316,10 @@ async fn call_keyword_search_mcp_server(
                                     };
 
                                     // call tool
-                                    let mcp_tool_result = mcp_client
+                                    let mcp_tool_result = service
                                         .read()
                                         .await
                                         .raw
-                                        .peer()
                                         .call_tool(request_param)
                                         .await
                                         .map_err(|e| {
@@ -1369,7 +1363,7 @@ async fn call_keyword_search_mcp_server(
                                 }
                                 _ => {
                                     let err_msg = format!(
-                                        "Unsupported MCP server: {}",
+                                        "Unsupported MCP service: {}",
                                         &peer_info.server_info.name
                                     );
                                     dual_warn!("{} - request_id: {}", &err_msg, request_id);
@@ -1377,7 +1371,7 @@ async fn call_keyword_search_mcp_server(
                             }
                         }
                         None => {
-                            let err_msg = "Failed to get MCP server info";
+                            let err_msg = "Failed to get MCP service info";
                             dual_error!("{} - request_id: {}", err_msg, request_id);
                             return Err(ServerError::Operation(err_msg.to_string()));
                         }
@@ -1388,14 +1382,14 @@ async fn call_keyword_search_mcp_server(
             Err(ServerError::McpNotFoundClient)
         }
         None => {
-            let err_msg = "MCP_CLIENTS is not initialized";
+            let err_msg = "MCP_SERVICES is not initialized";
             dual_error!("{} - request_id: {}", err_msg, request_id);
             Err(ServerError::Operation(err_msg.to_string()))
         }
     }
 }
 
-async fn call_vector_search_mcp_server(
+async fn call_vector_search_service(
     tool_calls: &[ToolCall],
     vector: &[f64],
     request_id: impl AsRef<str>,
@@ -1420,10 +1414,10 @@ async fn call_vector_search_mcp_server(
     )]));
 
     match MCP_SERVICES.get() {
-        Some(mcp_clients) => {
-            for (_, mcp_client) in mcp_clients.read().await.iter() {
-                if mcp_client.read().await.has_tool(tool_name) {
-                    match mcp_client.read().await.raw.peer_info() {
+        Some(services) => {
+            for (_service_name, service) in services.read().await.iter() {
+                if service.read().await.has_tool(tool_name) {
+                    match service.read().await.raw.peer_info() {
                         Some(peer_info) => {
                             if peer_info.server_info.name.as_str() == "gaia-qdrant-mcp-server" {
                                 // request param
@@ -1433,11 +1427,10 @@ async fn call_vector_search_mcp_server(
                                 };
 
                                 // call tool
-                                let mcp_tool_result = mcp_client
+                                let mcp_tool_result = service
                                     .read()
                                     .await
                                     .raw
-                                    .peer()
                                     .call_tool(request_param)
                                     .await
                                     .map_err(|e| {
@@ -1511,7 +1504,7 @@ async fn call_vector_search_mcp_server(
                             }
                         }
                         None => {
-                            let err_msg = "Failed to get MCP server info";
+                            let err_msg = "Failed to get MCP service info";
                             dual_error!("{} - request_id: {}", err_msg, request_id);
                             return Err(ServerError::Operation(err_msg.to_string()));
                         }
@@ -1522,7 +1515,7 @@ async fn call_vector_search_mcp_server(
             Err(ServerError::McpNotFoundClient)
         }
         None => {
-            let err_msg = "MCP_CLIENTS is not initialized";
+            let err_msg = "MCP_SERVICES is not initialized";
             dual_error!("{} - request_id: {}", err_msg, request_id);
             Err(ServerError::Operation(err_msg.to_string()))
         }
