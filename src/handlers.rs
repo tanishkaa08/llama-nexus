@@ -23,7 +23,7 @@ use endpoints::{
     models::ListModelsResponse,
 };
 use futures_util::StreamExt;
-use reqwest::header::CONTENT_TYPE;
+use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use rmcp::model::{CallToolRequestParam, RawContent};
 use std::{sync::Arc, time::SystemTime};
 use tokio::select;
@@ -118,7 +118,7 @@ pub(crate) async fn chat_handler(
 pub(crate) async fn chat(
     State(state): State<Arc<AppState>>,
     Extension(cancel_token): Extension<CancellationToken>,
-    _headers: HeaderMap,
+    headers: HeaderMap,
     Json(mut request): Json<ChatCompletionRequest>,
     request_id: impl AsRef<str>,
 ) -> ServerResult<axum::response::Response> {
@@ -157,14 +157,29 @@ pub(crate) async fn chat(
     );
 
     // Create a request client that can be cancelled
-    let request_builder = reqwest::Client::new()
-        .post(&chat_service_url)
-        .header(CONTENT_TYPE, "application/json")
-        .json(&request);
+    let ds_request = if headers.contains_key("authorization") {
+        let authorization = headers
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        reqwest::Client::new()
+            .post(&chat_service_url)
+            .header(CONTENT_TYPE, "application/json")
+            .header(AUTHORIZATION, authorization)
+            .json(&request)
+    } else {
+        reqwest::Client::new()
+            .post(&chat_service_url)
+            .header(CONTENT_TYPE, "application/json")
+            .json(&request)
+    };
 
     // Use select! to handle request cancellation
     let ds_response = select! {
-        response = request_builder.send() => {
+        response = ds_request.send() => {
             response.map_err(|e| {
                 let err_msg = format!(
                     "Failed to forward the request to the downstream server: {e}"
@@ -264,6 +279,7 @@ pub(crate) async fn chat(
                     match call_mcp_server(
                         tool_calls.as_slice(),
                         &mut request,
+                        &headers,
                         &chat_service_url,
                         &request_id,
                         cancel_token,
@@ -401,6 +417,7 @@ pub(crate) async fn chat(
                     match call_mcp_server(
                         assistant_message.tool_calls.as_slice(),
                         &mut request,
+                        &headers,
                         &chat_service_url,
                         &request_id,
                         cancel_token,
@@ -450,6 +467,7 @@ pub(crate) async fn chat(
 async fn call_mcp_server(
     tool_calls: &[ToolCall],
     request: &mut ChatCompletionRequest,
+    headers: &HeaderMap,
     chat_service_url: impl AsRef<str>,
     request_id: impl AsRef<str>,
     cancel_token: CancellationToken,
@@ -479,11 +497,10 @@ async fn call_mcp_server(
 
         // look up the tool name in MCP_TOOLS
         if let Some(mcp_client_name) = tools.get(tool_name) {
-            if let Some(lock_mcp_clients) = MCP_SERVICES.get() {
-                let mcp_clients = lock_mcp_clients.read().await;
-
+            if let Some(services) = MCP_SERVICES.get() {
+                let service_map = services.read().await;
                 // get the mcp client
-                let mcp_client = match mcp_clients.get(mcp_client_name) {
+                let service = match service_map.get(mcp_client_name) {
                     Some(mcp_client) => mcp_client,
                     None => {
                         let err_msg = format!("Tool not found: {tool_name}");
@@ -497,11 +514,10 @@ async fn call_mcp_server(
                     name: tool_name.to_string().into(),
                     arguments,
                 };
-                let res = mcp_client
+                let res = service
                     .read()
                     .await
                     .raw
-                    .peer()
                     .call_tool(tool_sum)
                     .await
                     .map_err(|e| {
@@ -540,14 +556,29 @@ async fn call_mcp_server(
                                         request.messages.push(tool_completion_message);
 
                                         // Create a request client that can be cancelled
-                                        let request_builder = reqwest::Client::new()
-                                            .post(chat_service_url)
-                                            .header(CONTENT_TYPE, "application/json")
-                                            .json(&request);
+                                        let ds_request = if headers.contains_key("authorization") {
+                                            let authorization = headers
+                                                .get("authorization")
+                                                .unwrap()
+                                                .to_str()
+                                                .unwrap()
+                                                .to_string();
+
+                                            reqwest::Client::new()
+                                                .post(chat_service_url)
+                                                .header(CONTENT_TYPE, "application/json")
+                                                .header(AUTHORIZATION, authorization)
+                                                .json(&request)
+                                        } else {
+                                            reqwest::Client::new()
+                                                .post(chat_service_url)
+                                                .header(CONTENT_TYPE, "application/json")
+                                                .json(&request)
+                                        };
 
                                         // Use select! to handle request cancellation
                                         let ds_response = select! {
-                                            response = request_builder.send() => {
+                                            response = ds_request.send() => {
                                                 response.map_err(|e| {
                                                     let err_msg = format!(
                                                         "Failed to forward the request to the downstream server: {e}"
@@ -767,15 +798,29 @@ pub(crate) async fn embeddings_handler(
     );
 
     // Create request client
-    let client = reqwest::Client::new();
-    let request = client
-        .post(embeddings_service_url)
-        .header("Content-Type", content_type)
-        .json(&request);
+    let ds_request = if headers.contains_key("authorization") {
+        let authorization = headers
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
+
+        reqwest::Client::new()
+            .post(embeddings_service_url)
+            .header("Content-Type", content_type)
+            .header("Authorization", authorization)
+            .json(&request)
+    } else {
+        reqwest::Client::new()
+            .post(embeddings_service_url)
+            .header("Content-Type", content_type)
+            .json(&request)
+    };
 
     // Use select! to handle request cancellation
-    let response = select! {
-        response = request.send() => {
+    let ds_response = select! {
+        response = ds_request.send() => {
             response.map_err(|e| {
                 let err_msg = format!(
                     "Failed to forward the request to the downstream server: {e}",
@@ -791,11 +836,11 @@ pub(crate) async fn embeddings_handler(
         }
     };
 
-    let status = response.status();
+    let status = ds_response.status();
 
     // Handle response body reading with cancellation
     let bytes = select! {
-        bytes = response.bytes() => {
+        bytes = ds_response.bytes() => {
             bytes.map_err(|e| {
                 let err_msg = format!("Failed to get the full response as bytes: {e}");
                 dual_error!("{err_msg} - request_id: {request_id}");
@@ -880,9 +925,9 @@ pub(crate) async fn audio_transcriptions_handler(
     );
 
     // Create request client
-    let mut request_builder = reqwest::Client::new().post(transcription_service_url);
+    let mut ds_request = reqwest::Client::new().post(transcription_service_url);
     for (name, value) in req.headers().iter() {
-        request_builder = request_builder.header(name, value);
+        ds_request = ds_request.header(name, value);
     }
 
     // convert the request body into bytes
@@ -893,11 +938,11 @@ pub(crate) async fn audio_transcriptions_handler(
         ServerError::Operation(err_msg)
     })?;
 
-    request_builder = request_builder.body(body_bytes);
+    ds_request = ds_request.body(body_bytes);
 
     // Use select! to handle request cancellation
-    let response = select! {
-        response = request_builder.send() => {
+    let ds_response = select! {
+        response = ds_request.send() => {
             response.map_err(|e| {
                 let err_msg = format!(
                     "Failed to forward the request to the downstream server: {e}"
@@ -913,11 +958,11 @@ pub(crate) async fn audio_transcriptions_handler(
         }
     };
 
-    let status = response.status();
+    let status = ds_response.status();
 
     // Handle response body reading with cancellation
     let bytes = select! {
-        bytes = response.bytes() => {
+        bytes = ds_response.bytes() => {
             bytes.map_err(|e| {
                 let err_msg = format!("Failed to get the full response as bytes: {e}");
                 dual_error!("{err_msg} - request_id: {request_id}");
@@ -1002,9 +1047,9 @@ pub(crate) async fn audio_translations_handler(
     );
 
     // Create request client
-    let mut request_builder = reqwest::Client::new().post(translation_service_url);
+    let mut ds_request = reqwest::Client::new().post(translation_service_url);
     for (name, value) in req.headers().iter() {
-        request_builder = request_builder.header(name, value);
+        ds_request = ds_request.header(name, value);
     }
 
     // convert the request body into bytes
@@ -1015,11 +1060,11 @@ pub(crate) async fn audio_translations_handler(
         ServerError::Operation(err_msg)
     })?;
 
-    request_builder = request_builder.body(body_bytes);
+    ds_request = ds_request.body(body_bytes);
 
     // Use select! to handle request cancellation
-    let response = select! {
-        response = request_builder.send() => {
+    let ds_response = select! {
+        response = ds_request.send() => {
             response.map_err(|e| {
                 let err_msg = format!(
                     "Failed to forward the request to the downstream server: {e}"
@@ -1035,11 +1080,11 @@ pub(crate) async fn audio_translations_handler(
         }
     };
 
-    let status = response.status();
+    let status = ds_response.status();
 
     // Handle response body reading with cancellation
     let bytes = select! {
-        bytes = response.bytes() => {
+        bytes = ds_response.bytes() => {
             bytes.map_err(|e| {
                 let err_msg = format!("Failed to get the full response as bytes: {e}");
                 dual_error!("{err_msg} - request_id: {request_id}");
@@ -1124,9 +1169,9 @@ pub(crate) async fn audio_tts_handler(
     );
 
     // Create request client
-    let mut request_builder = reqwest::Client::new().post(tts_service_url);
+    let mut ds_request = reqwest::Client::new().post(tts_service_url);
     for (name, value) in req.headers().iter() {
-        request_builder = request_builder.header(name, value);
+        ds_request = ds_request.header(name, value);
     }
 
     let body = req.into_body();
@@ -1136,11 +1181,11 @@ pub(crate) async fn audio_tts_handler(
         ServerError::Operation(err_msg)
     })?;
 
-    request_builder = request_builder.body(body_bytes);
+    ds_request = ds_request.body(body_bytes);
 
     // Use select! to handle request cancellation
     let ds_response = select! {
-        response = request_builder.send() => {
+        response = ds_request.send() => {
             response.map_err(|e| {
                 let err_msg = format!(
                     "Failed to forward the request to the downstream server: {e}"
@@ -1242,9 +1287,9 @@ pub(crate) async fn image_handler(
     );
 
     // Create request client
-    let mut request_builder = reqwest::Client::new().post(image_service_url);
+    let mut ds_request = reqwest::Client::new().post(image_service_url);
     for (name, value) in req.headers().iter() {
-        request_builder = request_builder.header(name, value);
+        ds_request = ds_request.header(name, value);
     }
 
     // convert the request body into bytes
@@ -1255,11 +1300,11 @@ pub(crate) async fn image_handler(
         ServerError::Operation(err_msg)
     })?;
 
-    request_builder = request_builder.body(body_bytes);
+    ds_request = ds_request.body(body_bytes);
 
     // Use select! to handle request cancellation
     let ds_response = select! {
-        response = request_builder.send() => {
+        response = ds_request.send() => {
             response.map_err(|e| {
                 let err_msg = format!(
                     "Failed to forward the request to the downstream server: {e}"

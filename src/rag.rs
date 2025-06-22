@@ -77,7 +77,7 @@ pub async fn chat(
     let vector_hits = perform_vector_search(
         State(state.clone()),
         Extension(cancel_token.clone()),
-        headers.clone(),
+        &headers,
         &chat_request,
         request_id,
     )
@@ -104,6 +104,7 @@ pub async fn chat(
         State(state.clone()),
         &query_text,
         &chat_request,
+        &headers,
         &request_id,
     )
     .await?;
@@ -352,6 +353,7 @@ async fn perform_keyword_search(
     State(state): State<Arc<AppState>>,
     query: impl AsRef<str>,
     chat_request: &ChatCompletionRequest,
+    headers: &HeaderMap,
     request_id: impl AsRef<str>,
 ) -> ServerResult<Vec<KwSearchHit>> {
     let request_id = request_id.as_ref();
@@ -421,26 +423,48 @@ async fn perform_keyword_search(
     );
 
     // Create a request client
-    let response = reqwest::Client::new()
-        .post(&chat_service_url)
-        .header(reqwest::header::CONTENT_TYPE, "application/json")
-        .json(&request)
-        .send()
-        .await
-        .map_err(|e| {
-            let err_msg = format!("Failed to send the chat request: {e}");
-            dual_error!("{} - request_id: {}", err_msg, request_id);
-            ServerError::Operation(err_msg)
-        })?;
+    let ds_response = if headers.contains_key("authorization") {
+        let authorization = headers
+            .get("authorization")
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
 
-    let status = response.status();
+        reqwest::Client::new()
+            .post(&chat_service_url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .header(reqwest::header::AUTHORIZATION, authorization)
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| {
+                let err_msg = format!("Failed to send the chat request: {e}");
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                ServerError::Operation(err_msg)
+            })?
+    } else {
+        reqwest::Client::new()
+            .post(&chat_service_url)
+            .header(reqwest::header::CONTENT_TYPE, "application/json")
+            .json(&request)
+            .send()
+            .await
+            .map_err(|e| {
+                let err_msg = format!("Failed to send the chat request: {e}");
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                ServerError::Operation(err_msg)
+            })?
+    };
+
+    let status = ds_response.status();
     if !status.is_success() {
-        let err_msg = format!("Failed to get the response: {status}");
+        let err_msg = format!("Failed to get the response from the chat server: {status}");
         dual_error!("{} - request_id: {}", err_msg, request_id);
         return Ok(vec![]);
     }
 
-    let headers = response.headers().clone();
+    let headers = ds_response.headers().clone();
     // check if the response has a header with the key "requires-tool-call"
     if let Some(value) = headers.get("requires-tool-call") {
         // convert the value to a boolean
@@ -452,7 +476,7 @@ async fn perform_keyword_search(
         );
 
         if requires_tool_call {
-            let bytes = response.bytes().await.map_err(|e| {
+            let bytes = ds_response.bytes().await.map_err(|e| {
                 let err_msg = format!("Failed to get the response bytes: {e}");
                 dual_error!("{} - request_id: {}", err_msg, request_id);
                 ServerError::Operation(err_msg)
@@ -493,7 +517,7 @@ async fn perform_keyword_search(
 async fn perform_vector_search(
     State(state): State<Arc<AppState>>,
     Extension(cancel_token): Extension<CancellationToken>,
-    headers: HeaderMap,
+    headers: &HeaderMap,
     chat_request: &ChatCompletionRequest,
     request_id: &str,
 ) -> ServerResult<Vec<RetrieveObject>> {
@@ -510,7 +534,7 @@ async fn perform_vector_search(
 async fn retrieve_context_with_multiple_qdrant_configs(
     State(state): State<Arc<AppState>>,
     Extension(cancel_token): Extension<CancellationToken>,
-    headers: HeaderMap,
+    headers: &HeaderMap,
     request_id: impl AsRef<str>,
     chat_request: &ChatCompletionRequest,
 ) -> ServerResult<Vec<RetrieveObject>> {
@@ -520,7 +544,7 @@ async fn retrieve_context_with_multiple_qdrant_configs(
     let mut retrieve_object = retrieve_context_with_single_qdrant_config(
         State(state.clone()),
         Extension(cancel_token.clone()),
-        headers.clone(),
+        headers,
         request_id.as_ref(),
         chat_request,
     )
@@ -565,7 +589,7 @@ async fn retrieve_context_with_multiple_qdrant_configs(
 async fn retrieve_context_with_single_qdrant_config(
     State(state): State<Arc<AppState>>,
     Extension(cancel_token): Extension<CancellationToken>,
-    headers: HeaderMap,
+    headers: &HeaderMap,
     request_id: impl AsRef<str>,
     chat_request: &ChatCompletionRequest,
 ) -> ServerResult<RetrieveObject> {
@@ -595,7 +619,7 @@ async fn retrieve_context_with_single_qdrant_config(
         request_id
     );
 
-    // compute embeddings for user query
+    // compute embeddings for user query by embedding server
     let embedding_response = match chat_request.messages.is_empty() {
         true => {
             let err_msg = "Found empty chat messages";
@@ -754,20 +778,44 @@ async fn retrieve_context_with_single_qdrant_config(
             request_id
         );
 
-        // Create a request client
-        let response = reqwest::Client::new()
-            .post(&chat_service_url)
-            .header(reqwest::header::CONTENT_TYPE, "application/json")
-            .json(&request)
-            .send()
-            .await
-            .map_err(|e| {
-                let err_msg = format!("Failed to send the chat request: {e}");
-                dual_error!("{} - request_id: {}", err_msg, request_id);
-                ServerError::Operation(err_msg)
-            })?;
+        // generate tool call by chat server
+        let ds_response = if headers.contains_key("authorization") {
+            let authorization = headers
+                .get("authorization")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string();
 
-        let status = response.status();
+            // Create a request client
+            reqwest::Client::new()
+                .post(&chat_service_url)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .header(reqwest::header::AUTHORIZATION, authorization)
+                .json(&request)
+                .send()
+                .await
+                .map_err(|e| {
+                    let err_msg = format!("Failed to send the chat request: {e}");
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    ServerError::Operation(err_msg)
+                })?
+        } else {
+            // Create a request client
+            reqwest::Client::new()
+                .post(&chat_service_url)
+                .header(reqwest::header::CONTENT_TYPE, "application/json")
+                .json(&request)
+                .send()
+                .await
+                .map_err(|e| {
+                    let err_msg = format!("Failed to send the chat request: {e}");
+                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                    ServerError::Operation(err_msg)
+                })?
+        };
+
+        let status = ds_response.status();
         match status.is_success() {
             false => {
                 let err_msg = format!("Failed to get the response: {status}");
@@ -785,9 +833,8 @@ async fn retrieve_context_with_single_qdrant_config(
                     score_threshold: 0.0,
                 };
 
-                let headers = response.headers().clone();
                 // check if the response has a header with the key "requires-tool-call"
-                if let Some(value) = headers.get("requires-tool-call") {
+                if let Some(value) = ds_response.headers().get("requires-tool-call") {
                     // convert the value to a boolean
                     let requires_tool_call: bool = value.to_str().unwrap().parse().unwrap();
                     dual_debug!(
@@ -797,7 +844,7 @@ async fn retrieve_context_with_single_qdrant_config(
                     );
 
                     if requires_tool_call {
-                        let bytes = response.bytes().await.map_err(|e| {
+                        let bytes = ds_response.bytes().await.map_err(|e| {
                             let err_msg = format!("Failed to get the response bytes: {e}");
                             dual_error!("{} - request_id: {}", err_msg, request_id);
                             ServerError::Operation(err_msg)
