@@ -1,7 +1,7 @@
 use crate::{
     dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
-    mcp::MCP_CLIENTS,
+    mcp::MCP_SERVICES,
     server::{RoutingPolicy, ServerKind},
     AppState,
 };
@@ -1226,7 +1226,7 @@ async fn call_keyword_search_mcp_server(
     let arguments =
         serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(tool_args).ok();
 
-    match MCP_CLIENTS.get() {
+    match MCP_SERVICES.get() {
         Some(mcp_clients) => {
             for (_, mcp_client) in mcp_clients.read().await.iter() {
                 if mcp_client.read().await.has_tool(tool_name) {
@@ -1419,7 +1419,7 @@ async fn call_vector_search_mcp_server(
         serde_json::Value::Array(vector.iter().map(|v| serde_json::Value::from(*v)).collect()),
     )]));
 
-    match MCP_CLIENTS.get() {
+    match MCP_SERVICES.get() {
         Some(mcp_clients) => {
             for (_, mcp_client) in mcp_clients.read().await.iter() {
                 if mcp_client.read().await.has_tool(tool_name) {

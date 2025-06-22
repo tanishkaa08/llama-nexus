@@ -7,23 +7,23 @@ use std::collections::HashMap;
 use tokio::sync::RwLock as TokioRwLock;
 
 // Global MCP tools and clients
-pub static MCP_TOOLS: OnceCell<TokioRwLock<HashMap<McpToolName, McpClientName>>> = OnceCell::new();
+pub static MCP_TOOLS: OnceCell<TokioRwLock<HashMap<McpToolName, ServiceName>>> = OnceCell::new();
 // Global MCP clients
-pub static MCP_CLIENTS: OnceCell<TokioRwLock<HashMap<McpClientName, TokioRwLock<McpClient>>>> =
+pub static MCP_SERVICES: OnceCell<TokioRwLock<HashMap<ServiceName, TokioRwLock<McpService>>>> =
     OnceCell::new();
 
-pub type RawMcpClient = RunningService<RoleClient, Box<dyn DynService<RoleClient>>>;
-pub type McpClientName = String;
+pub type RawMcpService = RunningService<RoleClient, Box<dyn DynService<RoleClient>>>;
+pub type ServiceName = String;
 pub type McpToolName = String;
 
 #[allow(dead_code)]
-pub struct McpClient {
-    pub name: McpClientName,
-    pub raw: RawMcpClient,
+pub struct McpService {
+    pub name: ServiceName,
+    pub raw: RawMcpService,
     pub tools: Vec<McpToolName>,
 }
-impl McpClient {
-    pub fn new(name: McpClientName, raw: RawMcpClient) -> Self {
+impl McpService {
+    pub fn new(name: ServiceName, raw: RawMcpService) -> Self {
         Self {
             name,
             raw,

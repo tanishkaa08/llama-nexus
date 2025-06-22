@@ -2,7 +2,7 @@ use crate::{
     dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
     info::ApiServer,
-    mcp::{MCP_CLIENTS, MCP_TOOLS},
+    mcp::{MCP_SERVICES, MCP_TOOLS},
     rag,
     server::{RoutingPolicy, Server, ServerIdToRemove, ServerKind},
     AppState,
@@ -479,7 +479,7 @@ async fn call_mcp_server(
 
         // look up the tool name in MCP_TOOLS
         if let Some(mcp_client_name) = tools.get(tool_name) {
-            if let Some(lock_mcp_clients) = MCP_CLIENTS.get() {
+            if let Some(lock_mcp_clients) = MCP_SERVICES.get() {
                 let mcp_clients = lock_mcp_clients.read().await;
 
                 // get the mcp client

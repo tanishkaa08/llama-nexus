@@ -1,7 +1,7 @@
 use crate::{
     dual_debug, dual_error, dual_info,
     error::{ServerError, ServerResult},
-    mcp::{McpClient, MCP_CLIENTS, MCP_TOOLS},
+    mcp::{McpService, MCP_SERVICES, MCP_TOOLS},
 };
 use chat_prompts::MergeRagContextPolicy;
 use clap::ValueEnum;
@@ -178,27 +178,19 @@ impl McpToolServerConfig {
                     })?;
 
                     // create a mcp client
-                    let mcp_client = ().into_dyn().serve(transport).await.map_err(|e| {
+                    let service = ().into_dyn().serve(transport).await.map_err(|e| {
                         let err_msg = format!("Failed to create mcp client: {e}");
                         dual_error!("{}", &err_msg);
                         ServerError::Operation(err_msg)
                     })?;
 
                     // list tools
-                    let tools = mcp_client
-                        .peer()
-                        .list_tools(Default::default())
-                        .await
-                        .map_err(|e| {
-                            let err_msg = format!("Failed to list tools: {e}");
-                            dual_error!("{}", &err_msg);
-                            ServerError::Operation(err_msg)
-                        })?;
-                    dual_info!(
-                        "Found {} tools from {} mcp server",
-                        &tools.tools.len(),
-                        self.name,
-                    );
+                    let tools = service.list_all_tools().await.map_err(|e| {
+                        let err_msg = format!("Failed to list tools: {e}");
+                        dual_error!("{}", &err_msg);
+                        ServerError::Operation(err_msg)
+                    })?;
+                    dual_info!("Found {} tools from {} mcp server", tools.len(), self.name,);
 
                     dual_debug!(
                         "Retrieved mcp tools: {}",
@@ -206,17 +198,13 @@ impl McpToolServerConfig {
                     );
 
                     // update tools
-                    self.tools = Some(tools.tools.clone());
+                    self.tools = Some(tools.clone());
 
-                    let mut client = McpClient::new(self.name.clone(), mcp_client);
-                    client.tools = tools
-                        .tools
-                        .iter()
-                        .map(|tool| tool.name.to_string())
-                        .collect();
+                    let mut client = McpService::new(self.name.clone(), service);
+                    client.tools = tools.iter().map(|tool| tool.name.to_string()).collect();
 
                     // print name of all tools
-                    for (idx, tool) in tools.tools.iter().enumerate() {
+                    for (idx, tool) in tools.iter().enumerate() {
                         dual_debug!(
                             "Tool {} - name: {}, description: {}",
                             idx,
@@ -243,13 +231,13 @@ impl McpToolServerConfig {
                     }
 
                     // add mcp client to MCP_CLIENTS
-                    match MCP_CLIENTS.get() {
+                    match MCP_SERVICES.get() {
                         Some(clients) => {
                             let mut clients = clients.write().await;
                             clients.insert(self.name.clone(), TokioRwLock::new(client));
                         }
                         None => {
-                            MCP_CLIENTS
+                            MCP_SERVICES
                                 .set(TokioRwLock::new(HashMap::from([(
                                     self.name.clone(),
                                     TokioRwLock::new(client),
@@ -286,28 +274,19 @@ impl McpToolServerConfig {
                             version: "0.0.1".to_string(),
                         },
                     };
-                    let mcp_client =
-                        client_info.into_dyn().serve(transport).await.map_err(|e| {
-                            let err_msg = format!("Failed to create mcp client: {e}");
-                            dual_error!("{}", &err_msg);
-                            ServerError::Operation(err_msg)
-                        })?;
+                    let service = client_info.into_dyn().serve(transport).await.map_err(|e| {
+                        let err_msg = format!("Failed to create mcp client: {e}");
+                        dual_error!("{}", &err_msg);
+                        ServerError::Operation(err_msg)
+                    })?;
 
                     // list tools
-                    let tools = mcp_client
-                        .peer()
-                        .list_tools(Default::default())
-                        .await
-                        .map_err(|e| {
-                            let err_msg = format!("Failed to list tools: {e}");
-                            dual_error!("{}", &err_msg);
-                            ServerError::Operation(err_msg)
-                        })?;
-                    dual_info!(
-                        "Found {} tools from {} mcp server",
-                        &tools.tools.len(),
-                        self.name,
-                    );
+                    let tools = service.list_all_tools().await.map_err(|e| {
+                        let err_msg = format!("Failed to list tools: {e}");
+                        dual_error!("{}", &err_msg);
+                        ServerError::Operation(err_msg)
+                    })?;
+                    dual_info!("Found {} tools from {} mcp server", tools.len(), self.name,);
 
                     dual_debug!(
                         "Retrieved mcp tools: {}",
@@ -315,17 +294,13 @@ impl McpToolServerConfig {
                     );
 
                     // update tools
-                    self.tools = Some(tools.tools.clone());
+                    self.tools = Some(tools.clone());
 
-                    let mut client = McpClient::new(self.name.clone(), mcp_client);
-                    client.tools = tools
-                        .tools
-                        .iter()
-                        .map(|tool| tool.name.to_string())
-                        .collect();
+                    let mut client = McpService::new(self.name.clone(), service);
+                    client.tools = tools.iter().map(|tool| tool.name.to_string()).collect();
 
                     // print name of all tools
-                    for (idx, tool) in tools.tools.iter().enumerate() {
+                    for (idx, tool) in tools.iter().enumerate() {
                         dual_debug!(
                             "Tool {} - name: {}, description: {}",
                             idx,
@@ -352,13 +327,13 @@ impl McpToolServerConfig {
                     }
 
                     // add mcp client to MCP_CLIENTS
-                    match MCP_CLIENTS.get() {
+                    match MCP_SERVICES.get() {
                         Some(clients) => {
                             let mut clients = clients.write().await;
                             clients.insert(self.name.clone(), TokioRwLock::new(client));
                         }
                         None => {
-                            MCP_CLIENTS
+                            MCP_SERVICES
                                 .set(TokioRwLock::new(HashMap::from([(
                                     self.name.clone(),
                                     TokioRwLock::new(client),
