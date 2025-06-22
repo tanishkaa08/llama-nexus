@@ -179,7 +179,10 @@ impl McpToolServerConfig {
 
                     // create a mcp client
                     let service = ().into_dyn().serve(transport).await.map_err(|e| {
-                        let err_msg = format!("Failed to create mcp client: {e}");
+                        let err_msg = format!(
+                            "Failed to connect to mcp server (name: {}, url: {}, transport: {}). {e}. Please check if the mcp server is running.",
+                            self.name, self.url, self.transport
+                        );
                         dual_error!("{}", &err_msg);
                         ServerError::Operation(err_msg)
                     })?;
@@ -275,7 +278,10 @@ impl McpToolServerConfig {
                         },
                     };
                     let service = client_info.into_dyn().serve(transport).await.map_err(|e| {
-                        let err_msg = format!("Failed to create mcp client: {e}");
+                        let err_msg = format!(
+                            "Failed to connect to mcp server (name: {}, url: {}, transport: {}). {e}. Please check if the mcp server is running.",
+                            self.name, self.url, self.transport
+                        );
                         dual_error!("{}", &err_msg);
                         ServerError::Operation(err_msg)
                     })?;
