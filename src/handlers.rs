@@ -510,7 +510,7 @@ async fn call_mcp_server(
                 };
 
                 // call a tool
-                let tool_sum = CallToolRequestParam {
+                let request_param = CallToolRequestParam {
                     name: tool_name.to_string().into(),
                     arguments,
                 };
@@ -518,7 +518,7 @@ async fn call_mcp_server(
                     .read()
                     .await
                     .raw
-                    .call_tool(tool_sum)
+                    .call_tool(request_param)
                     .await
                     .map_err(|e| {
                         dual_error!("Failed to call the tool: {}", e);
@@ -554,6 +554,12 @@ async fn call_mcp_server(
                                         request.messages.push(assistant_completion_message);
                                         // append tool message with tool result to request messages
                                         request.messages.push(tool_completion_message);
+
+                                        dual_info!(
+                                            "request messages: {}",
+                                            serde_json::to_string_pretty(&request.messages)
+                                                .unwrap()
+                                        );
 
                                         // Create a request client that can be cancelled
                                         let ds_request = if headers.contains_key("authorization") {
