@@ -100,6 +100,8 @@ Llama-Nexus is a gateway service for managing and orchestrating LlamaEdge API se
   }'
   ```
 
+  > The `kind` can be `chat`, `embeddings`, `image`, `transcribe`, `translate`, or `tts`.
+
   If register successfully, you will see a similar response like:
 
   ```bash
@@ -109,6 +111,8 @@ Llama-Nexus is a gateway service for managing and orchestrating LlamaEdge API se
       "url": "http://localhost:10010"
   }
   ```
+
+
 
 ## Usage
 
