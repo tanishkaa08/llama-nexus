@@ -555,8 +555,13 @@ async fn call_mcp_server(
                                         // append tool message with tool result to request messages
                                         request.messages.push(tool_completion_message);
 
+                                        // disable tool choice
+                                        if !request.tool_choice.is_none() {
+                                            request.tool_choice = Some(ToolChoice::None);
+                                        }
+
                                         dual_info!(
-                                            "request messages: {}",
+                                            "request messages:\n{}",
                                             serde_json::to_string_pretty(&request.messages)
                                                 .unwrap()
                                         );
