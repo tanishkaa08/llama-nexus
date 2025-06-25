@@ -12,7 +12,7 @@ use rmcp::{
     transport::{SseClientTransport, StreamableHttpClientTransport},
 };
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::{collections::HashMap, env};
 use tokio::sync::RwLock as TokioRwLock;
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -273,8 +273,8 @@ impl McpToolServerConfig {
                         protocol_version: Default::default(),
                         capabilities: ClientCapabilities::default(),
                         client_info: Implementation {
-                            name: "test stream-http client".to_string(),
-                            version: "0.0.1".to_string(),
+                            name: env!("CARGO_PKG_NAME").to_string(),
+                            version: env!("CARGO_PKG_VERSION").to_string(),
                         },
                     };
                     let service = client_info.into_dyn().serve(transport).await.map_err(|e| {
