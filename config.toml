@@ -87,3 +87,9 @@ name      = "gaia-weather"
 transport = "stream-http"
 url       = "http://127.0.0.1:8002/mcp"
 enable    = false
+
+[[mcp.server.tool]]
+name      = "gaia-agentic-search"
+transport = "stream-http"
+url       = "http://127.0.0.1:8009/mcp"
+enable    = false
