@@ -313,7 +313,10 @@ pub async fn chat(
     // get the rag policy
     let (rag_policy, rag_prompt) = {
         let config = state.config.read().await;
-        (config.rag.policy, config.rag.prompt.clone())
+        (
+            config.rag.as_ref().unwrap().policy,
+            config.rag.as_ref().unwrap().prompt.clone(),
+        )
     };
     if let Err(e) = RagPromptBuilder::build(
         &mut chat_request.messages,
@@ -606,7 +609,14 @@ async fn retrieve_context_with_single_qdrant_config(
     };
 
     // get the context window from config
-    let config_ctx_window = state.config.read().await.rag.context_window;
+    let config_ctx_window = state
+        .config
+        .read()
+        .await
+        .rag
+        .as_ref()
+        .unwrap()
+        .context_window;
 
     // get context_window: chat_request.context_window prioritized CONTEXT_WINDOW
     let context_window = chat_request

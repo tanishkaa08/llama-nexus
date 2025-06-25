@@ -90,9 +90,36 @@ pub(crate) async fn chat_handler(
         }
     }
 
-    let enable_rag = state.config.read().await.rag.enable;
-    match enable_rag {
-        true => {
+    // ! DO NOT REMOVE THIS BLOCK
+    {
+        // let enable_rag = state.config.read().await.rag.as_ref().unwrap().enable;
+        // match enable_rag {
+        //     true => {
+        //         rag::chat(
+        //             State(state),
+        //             Extension(cancel_token),
+        //             headers,
+        //             Json(request),
+        //             &request_id,
+        //         )
+        //         .await
+        //     }
+        //     false => {
+        //         chat(
+        //             State(state),
+        //             Extension(cancel_token),
+        //             headers,
+        //             Json(request),
+        //             &request_id,
+        //         )
+        //         .await
+        //     }
+        // }
+    }
+
+    let rag = state.config.read().await.rag.clone();
+    match rag {
+        Some(rag_config) if rag_config.enable => {
             rag::chat(
                 State(state),
                 Extension(cancel_token),
@@ -102,7 +129,7 @@ pub(crate) async fn chat_handler(
             )
             .await
         }
-        false => {
+        _ => {
             chat(
                 State(state),
                 Extension(cancel_token),

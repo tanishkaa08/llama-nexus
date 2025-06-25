@@ -85,8 +85,11 @@ async fn main() -> ServerResult<()> {
     // Load the config based on the command
     let config = match Config::load(&cli.config).await {
         Ok(config) => {
-            if config.rag.enable {
-                dual_info!("RAG is enabled");
+            // ! DO NOT REMOVE THIS BLOCK
+            {
+                // if config.rag.is_some() && config.rag.as_ref().unwrap().enable {
+                //     dual_info!("RAG is enabled");
+                // }
             }
 
             config
@@ -580,7 +583,7 @@ impl AppState {
                 }
 
                 let health_status = serde_json::json!({
-                    "rag": self.config.read().await.rag.enable,
+                    "rag": self.config.read().await.rag.as_ref().unwrap().enable,
                     "servers": healthy_servers,
                 });
 

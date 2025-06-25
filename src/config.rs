@@ -18,7 +18,8 @@ use tokio::sync::RwLock as TokioRwLock;
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {
     pub server: ServerConfig,
-    pub rag: RagConfig,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rag: Option<RagConfig>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub server_info_push_url: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -65,12 +66,7 @@ impl Default for Config {
                 host: "127.0.0.1".to_string(),
                 port: 8080,
             },
-            rag: RagConfig {
-                enable: false,
-                prompt: None,
-                policy: MergeRagContextPolicy::SystemMessage,
-                context_window: 1,
-            },
+            rag: None,
             server_info_push_url: None,
             server_health_push_url: None,
             mcp: None,
