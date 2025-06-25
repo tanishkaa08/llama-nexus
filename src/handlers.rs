@@ -1615,14 +1615,18 @@ pub(crate) mod admin {
             || server_kind.contains(ServerKind::translate)
             || server_kind.contains(ServerKind::tts)
         {
-            verify_server(
-                State(state.clone()),
-                &request_id,
-                &server_id,
-                &server_url,
-                &server_kind,
-            )
-            .await?;
+            dual_warn!(
+                "Ignore the server verification for: {server_id} - request_id: {request_id}"
+            );
+            // _verify_server(
+            //     State(state.clone()),
+            //     &headers,
+            //     &request_id,
+            //     &server_id,
+            //     &server_url,
+            //     &server_kind,
+            // )
+            // .await?;
         }
 
         // update health status of the server
@@ -1658,8 +1662,9 @@ pub(crate) mod admin {
     }
 
     // verify the server and get the server info and model list
-    async fn verify_server(
+    async fn _verify_server(
         State(state): State<Arc<AppState>>,
+        headers: &HeaderMap,
         request_id: impl AsRef<str>,
         server_id: impl AsRef<str>,
         server_url: impl AsRef<str>,
@@ -1669,15 +1674,36 @@ pub(crate) mod admin {
         let server_url = server_url.as_ref();
         let server_id = server_id.as_ref();
 
-        let client = reqwest::Client::new();
-
         let server_info_url = format!("{server_url}/v1/info");
-        let response = client.get(&server_info_url).send().await.map_err(|e| {
-            let err_msg = format!("Failed to verify the {server_kind} downstream server: {e}",);
-            dual_error!("{err_msg} - request_id: {request_id}");
-            ServerError::Operation(err_msg)
-        })?;
 
+        let client = reqwest::Client::new();
+        let response = if headers.contains_key("authorization") {
+            let authorization = headers
+                .get("authorization")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string();
+
+            client
+                .get(&server_info_url)
+                .header(CONTENT_TYPE, "application/json")
+                .header(AUTHORIZATION, authorization)
+                .send()
+                .await
+                .map_err(|e| {
+                    let err_msg =
+                        format!("Failed to verify the {server_kind} downstream server: {e}",);
+                    dual_error!("{err_msg} - request_id: {request_id}");
+                    ServerError::Operation(err_msg)
+                })?
+        } else {
+            client.get(&server_info_url).send().await.map_err(|e| {
+                let err_msg = format!("Failed to verify the {server_kind} downstream server: {e}",);
+                dual_error!("{err_msg} - request_id: {request_id}");
+                ServerError::Operation(err_msg)
+            })?
+        };
         if !response.status().is_success() {
             let err_msg = format!(
                 "Failed to verify the {} downstream server: {}",
