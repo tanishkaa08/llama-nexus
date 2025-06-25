@@ -556,7 +556,7 @@ async fn call_mcp_server(
                                         request.messages.push(tool_completion_message);
 
                                         // disable tool choice
-                                        if !request.tool_choice.is_none() {
+                                        if request.tool_choice.is_some() {
                                             request.tool_choice = Some(ToolChoice::None);
                                         }
 
