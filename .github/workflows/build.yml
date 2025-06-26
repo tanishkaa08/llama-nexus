@@ -76,11 +76,11 @@ jobs:
           - build: linux-x86_64
             runner: ubuntu-latest
             image: ubuntu:20.04
-            arch: x86_64
+            target: x86_64-unknown-linux-gnu
           - build: linux-aarch64
             runner: ubuntu-24.04-arm
             image: arm64v8/ubuntu:20.04
-            arch: arm64
+            target: aarch64-unknown-linux-gnu
         toolchain: [stable]
       fail-fast: false
 
@@ -96,8 +96,10 @@ jobs:
 
       - name: Install Rust-stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: stable
+          target: ${{ matrix.target }}
 
       - name: Build
         run: |
-          echo "Building for architecture: ${{ matrix.arch }}"
-          cargo build --release
+          cargo build --release --target ${{ matrix.target }}
