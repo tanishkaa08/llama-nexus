@@ -13,25 +13,13 @@ on:
         type: string
 
 jobs:
-  build:
-    name: build
+  build_macos:
+    name: build_macos
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        build: [linux-x86_64, linux-aarch64, macos-x86_64, macos-arm64]
+        build: [macos-x86_64, macos-arm64]
         include:
-          - build: linux-x86_64
-            os: ubuntu-22.04
-            rust: nightly
-            target: x86_64-unknown-linux-gnu
-            archive-name: llama-nexus-unknown-linux-gnu-x86_64.tar.gz
-            bin-path: linux-x86_64-binary
-          - build: linux-aarch64
-            os: ubuntu-22.04-arm
-            rust: nightly
-            target: aarch64-unknown-linux-gnu
-            archive-name: llama-nexus-unknown-linux-gnu-aarch64.tar.gz
-            bin-path: linux-aarch64-binary
           - build: macos-x86_64
             os: macos-latest
             rust: nightly
@@ -59,20 +47,12 @@ jobs:
           override: true
           target: ${{ matrix.target }}
 
-      - name: Install dependencies
-        if: matrix.build == 'linux-x86_64' || matrix.build == 'linux-aarch64'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y build-essential pkg-config
-          rustup target add ${{ matrix.target }}
-
       - name: Build binary (linux and macos)
         run: cargo build --verbose --release --target ${{ matrix.target }}
         env:
           RUST_BACKTRACE: 1
 
       - name: Strip binary (linux and macos)
-        if: matrix.build == 'linux-x86_64' || matrix.build == 'macos-x86_64' || matrix.build == 'macos-arm64'
         run: |
           strip "target/${{ matrix.target }}/release/llama-nexus"
           ls -al "target/${{ matrix.target }}/release/llama-nexus"
@@ -88,15 +68,6 @@ jobs:
           #   cp "../target/${{ matrix.target }}/release/llama-nexus.exe" ./
           #   7z a "${{ matrix.archive-name }}" llama-nexus.exe
           # fi
-
-          if [ "${{ matrix.build }}" = "linux-x86_64" ] || [ "${{ matrix.build }}" = "linux-aarch64" ]; then
-            cp "../target/${{ matrix.target }}/release/llama-nexus" ./
-            cp "../config.toml" ./
-            sha256sum llama-nexus > SHA256SUM
-            echo "Debug info(SHA256SUM):"
-            cat SHA256SUM
-            tar -czf "${{ matrix.archive-name }}" SHA256SUM llama-nexus config.toml
-          fi
 
           if [ "${{ matrix.build }}" = "macos-x86_64" ] || [ "${{ matrix.build }}" = "macos-arm64" ]; then
             cp "../target/${{ matrix.target }}/release/llama-nexus" ./
@@ -114,10 +85,84 @@ jobs:
           name: ${{ matrix.bin-path }}
           path: archive/${{ matrix.archive-name }}
 
+  build_linux:
+    name: build_linux
+    runs-on: ${{ matrix.os }}
+    container:
+      image: ${{ matrix.image }}
+    strategy:
+      matrix:
+        build: [linux-x86_64, linux-aarch64]
+        include:
+          - build: linux-x86_64
+            os: ubuntu-22.04
+            image: ubuntu:20.04
+            rust: nightly
+            target: x86_64-unknown-linux-gnu
+            archive-name: llama-nexus-unknown-linux-gnu-x86_64.tar.gz
+            bin-path: linux-x86_64-binary
+          - build: linux-aarch64
+            os: ubuntu-22.04-arm
+            image: arm64v8/ubuntu:20.04
+            rust: nightly
+            target: aarch64-unknown-linux-gnu
+            archive-name: llama-nexus-unknown-linux-gnu-aarch64.tar.gz
+            bin-path: linux-aarch64-binary
+      fail-fast: false
+
+    steps:
+      - name: Checkout repository
+        id: checkout
+        uses: actions/checkout@v3
+
+      - name: Install dependencies silently
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt update && apt install -y curl build-essential pkg-config
+
+      - name: Install Rust
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: ${{ matrix.rust }}
+          profile: minimal
+          override: true
+          target: ${{ matrix.target }}
+
+      - name: Build binary
+        run: cargo build --verbose --release --target ${{ matrix.target }}
+        env:
+          RUST_BACKTRACE: 1
+
+      - name: Strip binary
+        run: |
+          strip "target/${{ matrix.target }}/release/llama-nexus"
+          ls -al "target/${{ matrix.target }}/release/llama-nexus"
+
+      - name: Build archive
+        shell: bash
+        run: |
+          mkdir archive
+          cd archive
+
+          cp "../target/${{ matrix.target }}/release/llama-nexus" ./
+          cp "../config.toml" ./
+          sha256sum llama-nexus > SHA256SUM
+          echo "Debug info(SHA256SUM):"
+          cat SHA256SUM
+          tar -czf "${{ matrix.archive-name }}" SHA256SUM llama-nexus config.toml
+
+          ls -al
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.bin-path }}
+          path: archive/${{ matrix.archive-name }}
+
   release:
     name: release
     runs-on: ubuntu-latest
-    needs: build
+    needs: [build_macos, build_linux]
     steps:
       - name: Download artifacts (linux-x86_64-binary)
         uses: actions/download-artifact@v4
