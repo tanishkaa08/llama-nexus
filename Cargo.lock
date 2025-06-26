@@ -397,12 +397,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bufstream"
-version = "0.1.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "40e38929add23cdf8a366df9b0e088953150724bcbe5fc330b0d8eb3b328eec8"
-
-[[package]]
 name = "built"
 version = "0.7.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -706,15 +700,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "crossbeam-queue"
-version = "0.3.12"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f58bbc28f91df819d0aa2a2c00cd19754769c2fad90579b3592b1c9ba7a3115"
-dependencies = [
- "crossbeam-utils",
-]
-
-[[package]]
 name = "crossbeam-utils"
 version = "0.8.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -722,9 +707,9 @@ checksum = "d0a5c400df2834b80a4c3327b3aad3a4c4cd4de0629063962b03235697506a28"
 
 [[package]]
 name = "crunchy"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43da5946c66ffcc7745f48db692ffbb10a83bfe0afd96235c5c2a4fb23994929"
+checksum = "460fbee9c2c2f33933d720630a6a0bac33ba7053db5344fac858d4b8952d77d5"
 
 [[package]]
 name = "crypto-common"
@@ -1073,7 +1058,7 @@ dependencies = [
 [[package]]
 name = "gaia-elastic-mcp-common"
 version = "0.6.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=31581860#31581860ac2ef9a1aa29f19eee6528f147846fe6"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=78411a98#78411a98384c15e2da0ea9f0e765ca28d68f4fee"
 dependencies = [
  "rmcp",
  "serde",
@@ -1083,7 +1068,7 @@ dependencies = [
 [[package]]
 name = "gaia-kwsearch-mcp-common"
 version = "0.6.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=31581860#31581860ac2ef9a1aa29f19eee6528f147846fe6"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=78411a98#78411a98384c15e2da0ea9f0e765ca28d68f4fee"
 dependencies = [
  "anyhow",
  "endpoints",
@@ -1106,7 +1091,7 @@ dependencies = [
 [[package]]
 name = "gaia-qdrant-mcp-common"
 version = "0.6.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=31581860#31581860ac2ef9a1aa29f19eee6528f147846fe6"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=78411a98#78411a98384c15e2da0ea9f0e765ca28d68f4fee"
 dependencies = [
  "rmcp",
  "serde",
@@ -1116,10 +1101,10 @@ dependencies = [
 [[package]]
 name = "gaia-tidb-mcp-common"
 version = "0.6.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=31581860#31581860ac2ef9a1aa29f19eee6528f147846fe6"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=78411a98#78411a98384c15e2da0ea9f0e765ca28d68f4fee"
 dependencies = [
  "endpoints",
- "mysql",
+ "mysql_common",
  "rmcp",
  "serde",
  "serde_json",
@@ -1752,15 +1737,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "io-enum"
-version = "1.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d197db2f7ebf90507296df3aebaf65d69f5dce8559d8dbd82776a6cadab61bbf"
-dependencies = [
- "derive_utils",
-]
-
-[[package]]
 name = "ipnet"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1930,12 +1906,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "lru"
-version = "0.12.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "234cf4f4a04dc1f57e24b96cc0cd600cf2af460d4161ac5ecdd0af8e1f3b2a38"
-
-[[package]]
 name = "lru-slab"
 version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2032,28 +2002,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "mysql"
-version = "26.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "64453aedc258ac8c720b46c8264302fad39cef6c02483f68adbad4bcd22d6fab"
-dependencies = [
- "bufstream",
- "bytes",
- "crossbeam-queue",
- "flate2",
- "io-enum",
- "libc",
- "lru",
- "mysql_common",
- "named_pipe",
- "pem",
- "percent-encoding",
- "socket2",
- "twox-hash",
- "url",
-]
-
-[[package]]
 name = "mysql-common-derive"
 version = "0.32.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2101,15 +2049,6 @@ dependencies = [
  "thiserror 1.0.69",
  "uuid",
  "zstd",
-]
-
-[[package]]
-name = "named_pipe"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ad9c443cce91fc3e12f017290db75dde490d685cdaaf508d7159d7cf41f0eb2b"
-dependencies = [
- "winapi",
 ]
 
 [[package]]
@@ -2280,16 +2219,6 @@ name = "pathdiff"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df94ce210e5bc13cb6651479fa48d14f601d9858cfe0467f43ae157023b938d3"
-
-[[package]]
-name = "pem"
-version = "3.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "38af38e8470ac9dee3ce1bae1af9c1671fffc44ddfd8bd1d0a3445bf349a8ef3"
-dependencies = [
- "base64 0.22.1",
- "serde",
-]
 
 [[package]]
 name = "percent-encoding"
@@ -4029,12 +3958,6 @@ dependencies = [
  "thiserror 2.0.12",
  "utf-8",
 ]
-
-[[package]]
-name = "twox-hash"
-version = "2.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8b907da542cbced5261bd3256de1b3a1bf340a3d37f93425a07362a1d687de56"
 
 [[package]]
 name = "typeid"
