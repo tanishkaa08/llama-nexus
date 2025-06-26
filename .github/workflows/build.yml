@@ -28,14 +28,10 @@ on:
       - '**/*.sh'
 
 jobs:
-  build:
-    runs-on: ${{ matrix.os }}
-    strategy:
-      matrix:
-        os: [ubuntu-22.04, ubuntu-22.04-arm, macos-13, macos-14, macos-15]
+  check:
+    runs-on: ubuntu-latest
     steps:
       - name: Clone project
-        id: checkout
         uses: actions/checkout@v3
 
       - name: Install Rust-nightly
@@ -44,9 +40,64 @@ jobs:
           toolchain: nightly
           components: rustfmt, clippy
 
+      - name: Run clippy
+        run: |
+          cargo +nightly clippy --all-features -- -D warnings
+
+      - name: Run fmt
+        run: |
+          cargo +nightly fmt --all -- --check
+
+  build_macos:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        os: [macos-13, macos-14, macos-15]
+    steps:
+      - name: Clone project
+        id: checkout
+        uses: actions/checkout@v3
+
       - name: Install Rust-stable
         uses: actions-rust-lang/setup-rust-toolchain@v1
 
       - name: Build
         run: |
+          cargo build --release
+
+  build_linux:
+    runs-on: ${{ matrix.runner }}
+    container:
+      image: ${{ matrix.image }}
+    strategy:
+      matrix:
+        build: [linux-x86_64, linux-aarch64]
+        include:
+          - build: linux-x86_64
+            runner: ubuntu-latest
+            image: ubuntu:20.04
+            arch: x86_64
+          - build: linux-aarch64
+            runner: ubuntu-24.04-arm
+            image: arm64v8/ubuntu:20.04
+            arch: arm64
+        toolchain: [stable]
+      fail-fast: false
+
+    steps:
+      - name: Clone project
+        id: checkout
+        uses: actions/checkout@v3
+
+      - name: Install dependencies silently
+        run: |
+          export DEBIAN_FRONTEND=noninteractive
+          apt update && apt install -y curl build-essential pkg-config
+
+      - name: Install Rust-stable
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Build
+        run: |
+          echo "Building for architecture: ${{ matrix.arch }}"
           cargo build --release
