@@ -1656,6 +1656,16 @@ pub(crate) mod admin {
             // .await?;
         }
 
+        // update the model list
+        update_model_list(
+            State(state.clone()),
+            &headers,
+            &request_id,
+            &server_id,
+            &server_url,
+        )
+        .await?;
+
         // update health status of the server
         server.health_status.is_healthy = true;
         server.health_status.last_check = SystemTime::now();
@@ -1793,22 +1803,68 @@ pub(crate) mod admin {
             .servers
             .insert(server_id.to_string(), api_server);
 
+        Ok(())
+    }
+
+    // update the model list
+    pub(crate) async fn update_model_list(
+        State(state): State<Arc<AppState>>,
+        headers: &HeaderMap,
+        request_id: impl AsRef<str>,
+        server_id: impl AsRef<str>,
+        server_url: impl AsRef<str>,
+    ) -> ServerResult<()> {
+        let request_id = request_id.as_ref();
+        let server_url = server_url.as_ref();
+        let server_id = server_id.as_ref();
+
         // get the models from the downstream server
         let list_models_url = format!("{server_url}/v1/models");
-        let list_models_response = client.get(&list_models_url).send().await.map_err(|e| {
-            let err_msg = format!("Failed to get the models from the downstream server: {e}");
+        let response = if headers.contains_key("authorization") {
+            let authorization = headers
+                .get("authorization")
+                .unwrap()
+                .to_str()
+                .unwrap()
+                .to_string();
+            reqwest::Client::new()
+                .get(&list_models_url)
+                .header(CONTENT_TYPE, "application/json")
+                .header(AUTHORIZATION, authorization)
+                .send()
+                .await
+                .map_err(|e| {
+                    let err_msg =
+                        format!("Failed to get the models from the downstream server: {e}");
+                    dual_error!("{err_msg} - request_id: {request_id}");
+                    ServerError::Operation(err_msg)
+                })?
+        } else {
+            reqwest::Client::new()
+                .get(&list_models_url)
+                .send()
+                .await
+                .map_err(|e| {
+                    let err_msg =
+                        format!("Failed to get the models from the downstream server: {e}");
+                    dual_error!("{err_msg} - request_id: {request_id}");
+                    ServerError::Operation(err_msg)
+                })?
+        };
+        let status = response.status();
+        if !status.is_success() {
+            let err_msg = format!(
+                "Failed to get model info from {server_url} downstream server. Status: {status}",
+            );
+            dual_error!("{} - request_id: {}", err_msg, request_id);
+            return Err(ServerError::Operation(err_msg));
+        }
+
+        let list_models_response = response.json::<ListModelsResponse>().await.map_err(|e| {
+            let err_msg = format!("Failed to parse the models: {e}");
             dual_error!("{err_msg} - request_id: {request_id}");
             ServerError::Operation(err_msg)
         })?;
-
-        let list_models_response = list_models_response
-            .json::<ListModelsResponse>()
-            .await
-            .map_err(|e| {
-                let err_msg = format!("Failed to parse the models: {e}");
-                dual_error!("{err_msg} - request_id: {request_id}");
-                ServerError::Operation(err_msg)
-            })?;
 
         // update the models
         let mut models = state.models.write().await;
