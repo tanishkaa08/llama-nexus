@@ -1,7 +1,7 @@
 use crate::{
     dual_debug, dual_error, dual_info,
     error::{ServerError, ServerResult},
-    mcp::{McpService, MCP_SERVICES, MCP_TOOLS},
+    mcp::{MCP_SERVICES, MCP_TOOLS, McpService},
 };
 use chat_prompts::MergeRagContextPolicy;
 use clap::ValueEnum;
@@ -46,11 +46,11 @@ impl Config {
 
         dual_debug!("config:\n{:#?}", config);
 
-        if let Some(mcp_config) = config.mcp.as_mut() {
-            if !mcp_config.server.tool_servers.is_empty() {
-                for server_config in mcp_config.server.tool_servers.iter_mut() {
-                    server_config.connect_mcp_server().await?;
-                }
+        if let Some(mcp_config) = config.mcp.as_mut()
+            && !mcp_config.server.tool_servers.is_empty()
+        {
+            for server_config in mcp_config.server.tool_servers.iter_mut() {
+                server_config.connect_mcp_server().await?;
             }
         }
 

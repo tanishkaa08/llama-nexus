@@ -1,16 +1,15 @@
 use crate::{
-    dual_debug, dual_error, dual_info, dual_warn,
+    AppState, dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
     mcp::MCP_SERVICES,
     server::{RoutingPolicy, ServerKind},
-    AppState,
 };
 use axum::{
+    Json,
     extract::{Extension, State},
     http::HeaderMap,
-    Json,
 };
-use chat_prompts::{error as ChatPromptsError, MergeRagContext, MergeRagContextPolicy};
+use chat_prompts::{MergeRagContext, MergeRagContextPolicy, error as ChatPromptsError};
 use endpoints::{
     chat::{
         ChatCompletionObject, ChatCompletionRequest, ChatCompletionRequestBuilder,
@@ -26,7 +25,7 @@ use gaia_tidb_mcp_common::TidbSearchResponse;
 use rmcp::model::CallToolRequestParam;
 use serde_json::Value;
 use std::{
-    collections::{hash_map::DefaultHasher, HashMap, HashSet},
+    collections::{HashMap, HashSet, hash_map::DefaultHasher},
     hash::{Hash, Hasher},
     sync::Arc,
 };
@@ -372,9 +371,9 @@ async fn perform_keyword_search(
     };
 
     let text = query.as_ref();
-    let user_prompt  = format!(
-            "Please extract 3 to 5 keywords from my question, separated by spaces. Then, try to return a tool call that invokes the keyword search tool.\n\nMy question is: {text:#?}",
-        );
+    let user_prompt = format!(
+        "Please extract 3 to 5 keywords from my question, separated by spaces. Then, try to return a tool call that invokes the keyword search tool.\n\nMy question is: {text:#?}",
+    );
 
     let user_message = ChatCompletionRequestMessage::new_user_message(
         ChatCompletionUserMessageContent::Text(user_prompt),
@@ -553,36 +552,36 @@ async fn retrieve_context_with_multiple_qdrant_configs(
     )
     .await?;
 
-    if let Some(points) = retrieve_object.points.as_mut() {
+    if let Some(points) = retrieve_object.points.as_mut()
+        && !points.is_empty()
+    {
+        // find the duplicate points
+        let mut idx_removed = vec![];
+        for (idx, point) in points.iter().enumerate() {
+            if set.contains(&point.source) {
+                idx_removed.push(idx);
+            } else {
+                set.insert(point.source.clone());
+            }
+        }
+
+        // remove the duplicate points
+        if !idx_removed.is_empty() {
+            let num = idx_removed.len();
+
+            for idx in idx_removed.iter().rev() {
+                points.remove(*idx);
+            }
+
+            dual_info!(
+                "Removed {} duplicated vector search results - request_id: {}",
+                num,
+                request_id.as_ref()
+            );
+        }
+
         if !points.is_empty() {
-            // find the duplicate points
-            let mut idx_removed = vec![];
-            for (idx, point) in points.iter().enumerate() {
-                if set.contains(&point.source) {
-                    idx_removed.push(idx);
-                } else {
-                    set.insert(point.source.clone());
-                }
-            }
-
-            // remove the duplicate points
-            if !idx_removed.is_empty() {
-                let num = idx_removed.len();
-
-                for idx in idx_removed.iter().rev() {
-                    points.remove(*idx);
-                }
-
-                dual_info!(
-                    "Removed {} duplicated vector search results - request_id: {}",
-                    num,
-                    request_id.as_ref()
-                );
-            }
-
-            if !points.is_empty() {
-                retrieve_object_vec.push(retrieve_object);
-            }
+            retrieve_object_vec.push(retrieve_object);
         }
     }
 
@@ -644,15 +643,15 @@ async fn retrieve_context_with_single_qdrant_config(
             // `n` is determined by the `context_window` in the chat request.
             let mut last_n_user_messages = Vec::new();
             for (idx, message) in chat_request.messages.iter().rev().enumerate() {
-                if let ChatCompletionRequestMessage::User(user_message) = message {
-                    if let ChatCompletionUserMessageContent::Text(text) = user_message.content() {
-                        if !text.ends_with("<server-health>") {
-                            last_n_user_messages.push(text.clone());
-                        } else if idx == 0 {
-                            let content = text.trim_end_matches("<server-health>").to_string();
-                            last_n_user_messages.push(content);
-                            break;
-                        }
+                if let ChatCompletionRequestMessage::User(user_message) = message
+                    && let ChatCompletionUserMessageContent::Text(text) = user_message.content()
+                {
+                    if !text.ends_with("<server-health>") {
+                        last_n_user_messages.push(text.clone());
+                    } else if idx == 0 {
+                        let content = text.trim_end_matches("<server-health>").to_string();
+                        last_n_user_messages.push(content);
+                        break;
                     }
                 }
 
@@ -941,7 +940,9 @@ impl MergeRagContext for RagPromptBuilder {
         let mut policy = policy;
         if policy == MergeRagContextPolicy::SystemMessage && !has_system_prompt {
             // log
-            dual_info!("The chat model does not support system message. Switch the currect rag policy to `last-user-message`");
+            dual_info!(
+                "The chat model does not support system message. Switch the currect rag policy to `last-user-message`"
+            );
 
             policy = MergeRagContextPolicy::LastUserMessage;
         }
@@ -1522,10 +1523,10 @@ async fn call_vector_search_service(
                                     .collect();
 
                                 dual_debug!(
-                                        "Retrieved {} unique vector search results in total - request_id: {}",
-                                        unique_scored_points.len(),
-                                        request_id
-                                    );
+                                    "Retrieved {} unique vector search results in total - request_id: {}",
+                                    unique_scored_points.len(),
+                                    request_id
+                                );
 
                                 let mut points: Vec<RagScoredPoint> = vec![];
                                 for point in unique_scored_points.iter() {

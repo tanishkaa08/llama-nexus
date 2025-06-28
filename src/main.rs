@@ -14,7 +14,7 @@ use crate::{
 use axum::{
     body::Body,
     http::{self, HeaderValue, Request},
-    routing::{get, post, Router},
+    routing::{Router, get, post},
 };
 use clap::Parser;
 use config::Config;
@@ -303,14 +303,14 @@ fn init_logging(destination: &str, file_path: Option<&str>) -> ServerResult<()> 
         "both" => {
             if let Some(path) = file_path {
                 // Create directory if it doesn't exist
-                if let Some(parent) = std::path::Path::new(path).parent() {
-                    if !parent.exists() {
-                        std::fs::create_dir_all(parent).map_err(|e| {
-                            let err_msg = format!("Failed to create directory for log file: {e}");
-                            eprintln!("{err_msg}");
-                            ServerError::Operation(err_msg)
-                        })?;
-                    }
+                if let Some(parent) = std::path::Path::new(path).parent()
+                    && !parent.exists()
+                {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        let err_msg = format!("Failed to create directory for log file: {e}");
+                        eprintln!("{err_msg}");
+                        ServerError::Operation(err_msg)
+                    })?;
                 }
 
                 // Create file appender and disable colors

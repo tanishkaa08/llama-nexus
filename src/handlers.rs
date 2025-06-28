@@ -1,17 +1,16 @@
 use crate::{
-    dual_debug, dual_error, dual_info, dual_warn,
+    AppState, dual_debug, dual_error, dual_info, dual_warn,
     error::{ServerError, ServerResult},
     info::ApiServer,
     mcp::{MCP_SERVICES, MCP_TOOLS},
     rag,
     server::{RoutingPolicy, Server, ServerIdToRemove, ServerKind},
-    AppState,
 };
 use axum::{
+    Json,
     body::Body,
     extract::{Extension, State},
     http::{HeaderMap, Response, StatusCode},
-    Json,
 };
 use endpoints::{
     chat::{
@@ -53,39 +52,39 @@ pub(crate) async fn chat_handler(
 
     // update the request with MCP tools
     dual_info!("Updating the request with MCP tools");
-    if let Some(mcp_config) = state.config.read().await.mcp.as_ref() {
-        if !mcp_config.server.tool_servers.is_empty() {
-            let mut more_tools = Vec::new();
-            for server_config in mcp_config.server.tool_servers.iter() {
-                if server_config.enable {
-                    server_config
-                        .tools
-                        .as_ref()
-                        .unwrap()
-                        .iter()
-                        .for_each(|mcp_tool| {
-                            let tool = Tool::new(ToolFunction {
-                                name: mcp_tool.name.to_string(),
-                                description: mcp_tool.description.as_ref().map(|s| s.to_string()),
-                                parameters: Some((*mcp_tool.input_schema).clone()),
-                            });
-
-                            more_tools.push(tool.clone());
+    if let Some(mcp_config) = state.config.read().await.mcp.as_ref()
+        && !mcp_config.server.tool_servers.is_empty()
+    {
+        let mut more_tools = Vec::new();
+        for server_config in mcp_config.server.tool_servers.iter() {
+            if server_config.enable {
+                server_config
+                    .tools
+                    .as_ref()
+                    .unwrap()
+                    .iter()
+                    .for_each(|mcp_tool| {
+                        let tool = Tool::new(ToolFunction {
+                            name: mcp_tool.name.to_string(),
+                            description: mcp_tool.description.as_ref().map(|s| s.to_string()),
+                            parameters: Some((*mcp_tool.input_schema).clone()),
                         });
-                }
+
+                        more_tools.push(tool.clone());
+                    });
+            }
+        }
+
+        if !more_tools.is_empty() {
+            if let Some(tools) = &mut request.tools {
+                tools.extend(more_tools);
+            } else {
+                request.tools = Some(more_tools);
             }
 
-            if !more_tools.is_empty() {
-                if let Some(tools) = &mut request.tools {
-                    tools.extend(more_tools);
-                } else {
-                    request.tools = Some(more_tools);
-                }
-
-                // set the tool choice to auto
-                if let Some(ToolChoice::None) | None = request.tool_choice {
-                    request.tool_choice = Some(ToolChoice::Auto);
-                }
+            // set the tool choice to auto
+            if let Some(ToolChoice::None) | None = request.tool_choice {
+                request.tool_choice = Some(ToolChoice::Auto);
             }
         }
     }
