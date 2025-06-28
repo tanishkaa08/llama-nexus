@@ -1,11 +1,5 @@
-use crate::{
-    AppState, dual_debug, dual_error, dual_info, dual_warn,
-    error::{ServerError, ServerResult},
-    info::ApiServer,
-    mcp::{MCP_SERVICES, MCP_TOOLS},
-    rag,
-    server::{RoutingPolicy, Server, ServerIdToRemove, ServerKind},
-};
+use std::{sync::Arc, time::SystemTime};
+
 use axum::{
     Json,
     body::Body,
@@ -24,9 +18,17 @@ use endpoints::{
 use futures_util::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
 use rmcp::model::{CallToolRequestParam, RawContent};
-use std::{sync::Arc, time::SystemTime};
 use tokio::select;
 use tokio_util::sync::CancellationToken;
+
+use crate::{
+    AppState, dual_debug, dual_error, dual_info, dual_warn,
+    error::{ServerError, ServerResult},
+    info::ApiServer,
+    mcp::{MCP_SERVICES, MCP_TOOLS},
+    rag,
+    server::{RoutingPolicy, Server, ServerIdToRemove, ServerKind},
+};
 
 pub(crate) async fn chat_handler(
     State(state): State<Arc<AppState>>,

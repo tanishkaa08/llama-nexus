@@ -1,9 +1,10 @@
+use std::collections::HashMap;
+
 use once_cell::sync::OnceCell;
 use rmcp::{
-    service::{DynService, RunningService},
     RoleClient,
+    service::{DynService, RunningService},
 };
-use std::collections::HashMap;
 use tokio::sync::RwLock as TokioRwLock;
 
 // Global MCP tools and clients

@@ -1,4 +1,4 @@
-use axum::{http::StatusCode, response::IntoResponse, Json};
+use axum::{Json, http::StatusCode, response::IntoResponse};
 use thiserror::Error;
 
 pub type ServerResult<T> = std::result::Result<T, ServerError>;
@@ -7,7 +7,9 @@ pub type ServerResult<T> = std::result::Result<T, ServerError>;
 pub enum ServerError {
     #[error("{0}")]
     Operation(String),
-    #[error("Not found available server. Please register a(n) {0} server via the `/admin/servers/register` endpoint.")]
+    #[error(
+        "Not found available server. Please register a(n) {0} server via the `/admin/servers/register` endpoint."
+    )]
     NotFoundServer(String),
     #[error("Invalid server kind: {0}")]
     InvalidServerKind(String),

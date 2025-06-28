@@ -1,9 +1,9 @@
-use crate::{
-    AppState, dual_debug, dual_error, dual_info, dual_warn,
-    error::{ServerError, ServerResult},
-    mcp::MCP_SERVICES,
-    server::{RoutingPolicy, ServerKind},
+use std::{
+    collections::{HashMap, HashSet, hash_map::DefaultHasher},
+    hash::{Hash, Hasher},
+    sync::Arc,
 };
+
 use axum::{
     Json,
     extract::{Extension, State},
@@ -24,13 +24,15 @@ use gaia_qdrant_mcp_common::{ScoredPoint, SearchPointsResponse};
 use gaia_tidb_mcp_common::TidbSearchResponse;
 use rmcp::model::CallToolRequestParam;
 use serde_json::Value;
-use std::{
-    collections::{HashMap, HashSet, hash_map::DefaultHasher},
-    hash::{Hash, Hasher},
-    sync::Arc,
-};
 use text_splitter::{MarkdownSplitter, TextSplitter};
 use tokio_util::sync::CancellationToken;
+
+use crate::{
+    AppState, dual_debug, dual_error, dual_info, dual_warn,
+    error::{ServerError, ServerResult},
+    mcp::MCP_SERVICES,
+    server::{RoutingPolicy, ServerKind},
+};
 
 const DEFAULT_FILTER_WEIGHTED_ALPHA: f64 = 0.5;
 

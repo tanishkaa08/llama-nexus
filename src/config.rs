@@ -1,8 +1,5 @@
-use crate::{
-    dual_debug, dual_error, dual_info,
-    error::{ServerError, ServerResult},
-    mcp::{MCP_SERVICES, MCP_TOOLS, McpService},
-};
+use std::{collections::HashMap, env};
+
 use chat_prompts::MergeRagContextPolicy;
 use clap::ValueEnum;
 use endpoints::chat::McpTransport;
@@ -12,8 +9,13 @@ use rmcp::{
     transport::{SseClientTransport, StreamableHttpClientTransport},
 };
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, env};
 use tokio::sync::RwLock as TokioRwLock;
+
+use crate::{
+    dual_debug, dual_error, dual_info,
+    error::{ServerError, ServerResult},
+    mcp::{MCP_SERVICES, MCP_TOOLS, McpService},
+};
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Config {

@@ -7,10 +7,14 @@ mod rag;
 mod server;
 mod utils;
 
-use crate::{
-    info::ServerInfo,
-    server::{Server, ServerGroup, ServerId, ServerKind},
+use std::{
+    collections::{HashMap, HashSet},
+    net::{IpAddr, SocketAddr},
+    path::PathBuf,
+    str::FromStr,
+    sync::Arc,
 };
+
 use axum::{
     body::Body,
     http::{self, HeaderValue, Request},
@@ -21,15 +25,7 @@ use config::Config;
 use error::{ServerError, ServerResult};
 use futures_util::stream::{self, StreamExt};
 use once_cell::sync::OnceCell;
-use std::{
-    collections::{HashMap, HashSet},
-    net::{IpAddr, SocketAddr},
-    path::PathBuf,
-    str::FromStr,
-    sync::Arc,
-};
-use tokio::signal;
-use tokio::sync::RwLock;
+use tokio::{signal, sync::RwLock};
 use tokio_util::sync::CancellationToken;
 use tower_http::{
     cors::{Any, CorsLayer},
@@ -38,6 +34,11 @@ use tower_http::{
 };
 use tracing::Level;
 use uuid::Uuid;
+
+use crate::{
+    info::ServerInfo,
+    server::{Server, ServerGroup, ServerId, ServerKind},
+};
 
 // Global health check interval for downstream servers in seconds
 pub(crate) static HEALTH_CHECK_INTERVAL: OnceCell<u64> = OnceCell::new();

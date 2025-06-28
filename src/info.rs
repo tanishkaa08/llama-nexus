@@ -1,7 +1,9 @@
-use crate::server::ServerId;
+use std::collections::HashMap;
+
 use chat_prompts::PromptTemplateType;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+
+use crate::server::ServerId;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub(crate) struct ServerInfo {

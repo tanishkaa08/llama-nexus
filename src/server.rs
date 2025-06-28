@@ -1,17 +1,18 @@
-use crate::{
-    dual_error, dual_warn,
-    error::{ServerError, ServerResult},
-    HEALTH_CHECK_INTERVAL,
-};
-use async_trait::async_trait;
-use bitflags::bitflags;
-use serde::{Deserialize, Serialize};
 use std::{
     collections::HashSet,
     sync::atomic::{AtomicUsize, Ordering},
     time::{Duration, SystemTime},
 };
+
+use async_trait::async_trait;
+use bitflags::bitflags;
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
+
+use crate::{
+    HEALTH_CHECK_INTERVAL, dual_error, dual_warn,
+    error::{ServerError, ServerResult},
+};
 
 /// Timeout duration for health checks (in seconds)
 const TIMEOUT: u64 = 10;
