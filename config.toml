@@ -3,13 +3,6 @@ host = "127.0.0.1" # The host to listen on.
 port = 3389        # The port to listen on.
 
 
-[[mcp.server.tool]]
-name      = "gaia-agentic-search"
-transport = "stream-http"
-url       = "http://127.0.0.1:8009/mcp"
-enable    = false
-
-
 # MCP Servers
 #
 # The following items are the configuration for the MCP tool servers:
@@ -22,12 +15,33 @@ enable    = false
 # Note that, if any of the MCP tool servers are enabled, then please guarantee that the
 # corresponding mcp server is started.
 
+
+# The following config is for the gaia-agentic-search mcp server.
+# The details about the server are available at https://github.com/decentralized-mcp/gaia-mcp-servers/tree/main/gaia-agentic-search
+[[mcp.server.tool]]
+name      = "gaia-agentic-search"
+transport = "stream-http"
+url       = "http://127.0.0.1:8009/mcp"
+enable    = false
+
+# The following config is for the markitdown mcp server.
+# The details about the server are available at https://github.com/microsoft/markitdown/tree/main/packages/markitdown-mcp
+[[mcp.server.tool]]
+name      = "markitdown"
+transport = "stream-http"
+url       = "http://127.0.0.1:8011/mcp"
+enable    = false
+
+# The following config is for the gaia-calculator mcp server.
+# The details about the server are available at https://github.com/decentralized-mcp/gaia-mcp-servers/tree/main/gaia-calculator
 [[mcp.server.tool]]
 name      = "gaia-calculator"
 transport = "stream-http"
 url       = "http://127.0.0.1:8001/mcp"
 enable    = false
 
+# The following config is for the gaia-weather mcp server.
+# The details about the server are available at https://github.com/decentralized-mcp/gaia-mcp-servers/tree/main/gaia-weather
 [[mcp.server.tool]]
 name      = "gaia-weather"
 transport = "stream-http"
@@ -44,6 +58,8 @@ enable    = false
 # - url: The URL of the mcp server.
 # - enable: Whether to enable the mcp server.
 
+# The following config is for the gaia-qdrant mcp server.
+# The details about the server are available at https://github.com/decentralized-mcp/gaia-mcp-servers/tree/main/gaia-qdrant
 [[mcp.server.tool]]
 name      = "gaia-qdrant"
 transport = "stream-http"
@@ -63,18 +79,24 @@ enable    = false
 # If you want to use keyword search in the retrieval phase, please enable one of the following
 # three keyword search mcp servers.
 
+# The following config is for the gaia-keyword-search mcp server.
+# The details about the server are available at https://github.com/decentralized-mcp/gaia-mcp-servers/tree/main/gaia-kwsearch
 [[mcp.server.tool]]
 name      = "gaia-keyword-search"
 transport = "stream-http"
 url       = "http://127.0.0.1:8005/mcp"
 enable    = false
 
+# The following config is for the gaia-elastic-search mcp server.
+# The details about the server are available at https://github.com/decentralized-mcp/gaia-mcp-servers/tree/main/gaia-elastic
 [[mcp.server.tool]]
 name      = "gaia-elastic-search"
 transport = "stream-http"
 url       = "http://127.0.0.1:8006/mcp"
 enable    = false
 
+# The following config is for the gaia-tidb-search mcp server.
+# The details about the server are available at https://github.com/decentralized-mcp/gaia-mcp-servers/tree/main/gaia-tidb
 [[mcp.server.tool]]
 name      = "gaia-tidb-search"
 transport = "stream-http"
