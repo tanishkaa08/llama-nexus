@@ -434,9 +434,9 @@ checksum = "d71b6127be86fdcfddb610f7182ac57211d4b18a3e9c82eb2d17662f2227ad6a"
 
 [[package]]
 name = "cc"
-version = "1.2.27"
+version = "1.2.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d487aa071b5f64da6f19a3e848e3578944b726ee5a4854b82172f02aa876bfdc"
+checksum = "4ad45f4f74e4e20eaa392913b7b33a7091c87e59628f4dd27888205ad888843c"
 dependencies = [
  "jobserver",
  "libc",
@@ -467,9 +467,9 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chat-prompts"
-version = "0.31.4"
+version = "0.31.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4bbfefd0aee76c084af878745d0f7eb7128c227b5f1f1fe1a4fb73bc7d66c7bf"
+checksum = "592a39842b44340989fdd0afa70f6a54ed6258469e06ca57c8298bcccc6b9b36"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -841,9 +841,9 @@ dependencies = [
 
 [[package]]
 name = "endpoints"
-version = "0.32.0"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af29050d07175806d02d42e74eecbc13e4fbc3fe507ea4a6a64f145ae4e4583f"
+checksum = "2a6d20ed551bd4f3493b4b1f583b26b3a4237dd2b63ff99bd0beafc65a78ce33"
 dependencies = [
  "indexmap",
  "serde",
@@ -1058,7 +1058,7 @@ dependencies = [
 [[package]]
 name = "gaia-elastic-mcp-common"
 version = "0.6.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=f9b34ccc#f9b34ccc5e18b87b5dd24302263936f9a8f0258c"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=59fa462e#59fa462e90ce9a5a788050f2d620071dff40c190"
 dependencies = [
  "rmcp",
  "serde",
@@ -1068,7 +1068,7 @@ dependencies = [
 [[package]]
 name = "gaia-kwsearch-mcp-common"
 version = "0.6.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=f9b34ccc#f9b34ccc5e18b87b5dd24302263936f9a8f0258c"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=59fa462e#59fa462e90ce9a5a788050f2d620071dff40c190"
 dependencies = [
  "anyhow",
  "endpoints",
@@ -1090,7 +1090,7 @@ dependencies = [
 [[package]]
 name = "gaia-qdrant-mcp-common"
 version = "0.6.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=f9b34ccc#f9b34ccc5e18b87b5dd24302263936f9a8f0258c"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=59fa462e#59fa462e90ce9a5a788050f2d620071dff40c190"
 dependencies = [
  "rmcp",
  "serde",
@@ -1100,7 +1100,7 @@ dependencies = [
 [[package]]
 name = "gaia-tidb-mcp-common"
 version = "0.6.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=f9b34ccc#f9b34ccc5e18b87b5dd24302263936f9a8f0258c"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=59fa462e#59fa462e90ce9a5a788050f2d620071dff40c190"
 dependencies = [
  "endpoints",
  "mysql_common",
