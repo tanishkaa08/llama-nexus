@@ -24,6 +24,14 @@ transport = "stream-http"
 url       = "http://127.0.0.1:8009/mcp"
 enable    = false
 
+# The following config is for the gaia-web-search mcp server.
+# The details about the server are available at https://github.com/decentralized-mcp/gaia-mcp-servers/tree/main/gaia-web-search
+[[mcp.server.tool]]
+name      = "gaia-web-search"
+transport = "stream-http"
+url       = "http://127.0.0.1:8010/mcp"
+enable    = false
+
 # The following config is for the markitdown mcp server.
 # The details about the server are available at https://github.com/microsoft/markitdown/tree/main/packages/markitdown-mcp
 [[mcp.server.tool]]
