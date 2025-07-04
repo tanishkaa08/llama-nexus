@@ -13,10 +13,10 @@ clap = { version = "^4.5", features = ["cargo", "derive"] }
 config = { version = "^0.15", features = ["toml"] }
 endpoints = { version = "0.32.0", features = ["whisper", "rag", "index"] }
 futures-util = "0.3"
-gaia-elastic-mcp-common = { git = "https://github.com/decentralized-mcp/gaia-mcp-servers.git", rev = "4e90e21c" }
-gaia-kwsearch-mcp-common = { git = "https://github.com/decentralized-mcp/gaia-mcp-servers.git", rev = "4e90e21c" }
-gaia-qdrant-mcp-common = { git = "https://github.com/decentralized-mcp/gaia-mcp-servers.git", rev = "4e90e21c" }
-gaia-tidb-mcp-common = { git = "https://github.com/decentralized-mcp/gaia-mcp-servers.git", rev = "4e90e21c" }
+gaia-elastic-mcp-common = { git = "https://github.com/decentralized-mcp/gaia-mcp-servers.git", rev = "f9b34ccc" }
+gaia-kwsearch-mcp-common = { git = "https://github.com/decentralized-mcp/gaia-mcp-servers.git", rev = "f9b34ccc" }
+gaia-qdrant-mcp-common = { git = "https://github.com/decentralized-mcp/gaia-mcp-servers.git", rev = "f9b34ccc" }
+gaia-tidb-mcp-common = { git = "https://github.com/decentralized-mcp/gaia-mcp-servers.git", rev = "f9b34ccc" }
 http = "1.2"
 mime_guess = "2.0.4"
 once_cell = "1.18"
