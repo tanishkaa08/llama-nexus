@@ -1058,7 +1058,7 @@ dependencies = [
 [[package]]
 name = "gaia-elastic-mcp-common"
 version = "0.6.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=59fa462e#59fa462e90ce9a5a788050f2d620071dff40c190"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=6edb84e9#6edb84e983e261b1d1fabe9f9efbb7062438b4cf"
 dependencies = [
  "rmcp",
  "serde",
@@ -1068,7 +1068,7 @@ dependencies = [
 [[package]]
 name = "gaia-kwsearch-mcp-common"
 version = "0.6.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=59fa462e#59fa462e90ce9a5a788050f2d620071dff40c190"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=6edb84e9#6edb84e983e261b1d1fabe9f9efbb7062438b4cf"
 dependencies = [
  "anyhow",
  "endpoints",
@@ -1090,7 +1090,7 @@ dependencies = [
 [[package]]
 name = "gaia-qdrant-mcp-common"
 version = "0.6.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=59fa462e#59fa462e90ce9a5a788050f2d620071dff40c190"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=6edb84e9#6edb84e983e261b1d1fabe9f9efbb7062438b4cf"
 dependencies = [
  "rmcp",
  "serde",
@@ -1100,7 +1100,7 @@ dependencies = [
 [[package]]
 name = "gaia-tidb-mcp-common"
 version = "0.6.0"
-source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=59fa462e#59fa462e90ce9a5a788050f2d620071dff40c190"
+source = "git+https://github.com/decentralized-mcp/gaia-mcp-servers.git?rev=6edb84e9#6edb84e983e261b1d1fabe9f9efbb7062438b4cf"
 dependencies = [
  "endpoints",
  "mysql_common",
@@ -3646,9 +3646,9 @@ checksum = "1f3ccbac311fea05f86f61904b462b55fb3df8837a366dfc601a0161d0532f20"
 
 [[package]]
 name = "tokio"
-version = "1.46.0"
+version = "1.46.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1140bb80481756a8cbe10541f37433b459c5aa1e727b4c020fbfebdc25bf3ec4"
+checksum = "0cc3a2344dafbe23a245241fe8b09735b521110d30fcefbbd5feb1797ca35d17"
 dependencies = [
  "backtrace",
  "bytes",
