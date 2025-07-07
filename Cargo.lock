@@ -10,6 +10,7 @@ dependencies = [
  "async-trait",
  "axum",
  "bitflags 2.9.1",
+ "bytes",
  "chat-prompts",
  "clap",
  "config",
