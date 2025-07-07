@@ -2,35 +2,18 @@
 host = "127.0.0.1" # The host to listen on.
 port = 3389        # The port to listen on.
 
+# Note that, if any of the MCP tool servers are enabled, then please guarantee that the
+# corresponding mcp server is started before starting the LlamaNexus server.
 
-# MCP Servers
+
+# Section 1: Third Party MCP Servers
 #
-# The following items are the configuration for the MCP tool servers:
+# The following items are the configuration for the third party MCP tool servers:
 #
 # - name: The name of the MCP tool server.
 # - transport: The transport protocol to use. Possible values: "sse" and "stream-http".
 # - url: The URL of the MCP tool server.
 # - enable: Whether to enable the MCP tool server.
-#
-# Note that, if any of the MCP tool servers are enabled, then please guarantee that the
-# corresponding mcp server is started.
-
-
-# The following config is for the gaia-agentic-search mcp server.
-# The details about the server are available at https://github.com/decentralized-mcp/gaia-mcp-servers/tree/main/gaia-agentic-search
-[[mcp.server.tool]]
-name      = "gaia-agentic-search"
-transport = "stream-http"
-url       = "http://127.0.0.1:8009/mcp"
-enable    = false
-
-# The following config is for the gaia-web-search mcp server.
-# The details about the server are available at https://github.com/decentralized-mcp/gaia-mcp-servers/tree/main/gaia-web-search
-[[mcp.server.tool]]
-name      = "gaia-web-search"
-transport = "stream-http"
-url       = "http://127.0.0.1:8010/mcp"
-enable    = false
 
 # The following config is for the markitdown mcp server.
 # The details about the server are available at https://github.com/microsoft/markitdown/tree/main/packages/markitdown-mcp
@@ -40,40 +23,56 @@ transport = "stream-http"
 url       = "http://127.0.0.1:8011/mcp"
 enable    = false
 
-# The following config is for the gaia-calculator mcp server.
-# The details about the server are available at https://github.com/decentralized-mcp/gaia-mcp-servers/tree/main/gaia-calculator
+
+# Section 2: Cardea MCP Servers
+#
+# The following items are the configuration for the MCP tool servers:
+#
+# - name: The name of the MCP tool server.
+# - transport: The transport protocol to use. Possible values: "sse" and "stream-http".
+# - url: The URL of the MCP tool server.
+# - enable: Whether to enable the MCP tool server.
+
+
+# The following config is for the cardea-agentic-search mcp server.
+# The details about the server are available at https://github.com/cardea-mcp/gaia-mcp-servers/tree/main/cardea-agentic-search
 [[mcp.server.tool]]
-name      = "gaia-calculator"
+name      = "cardea-agentic-search"
+transport = "stream-http"
+url       = "http://127.0.0.1:8009/mcp"
+enable    = false
+
+# The following config is for the cardea-web-search mcp server.
+# The details about the server are available at https://github.com/cardea-mcp/gaia-mcp-servers/tree/main/cardea-web-search
+[[mcp.server.tool]]
+name      = "cardea-web-search"
+transport = "stream-http"
+url       = "http://127.0.0.1:8010/mcp"
+enable    = false
+
+# The following config is for the cardea-calculator mcp server.
+# The details about the server are available at https://github.com/cardea-mcp/gaia-mcp-servers/tree/main/cardea-calculator
+[[mcp.server.tool]]
+name      = "cardea-calculator"
 transport = "stream-http"
 url       = "http://127.0.0.1:8001/mcp"
 enable    = false
 
-# The following config is for the gaia-weather mcp server.
-# The details about the server are available at https://github.com/decentralized-mcp/gaia-mcp-servers/tree/main/gaia-weather
+# The following config is for the cardea-weather mcp server.
+# The details about the server are available at https://github.com/cardea-mcp/gaia-mcp-servers/tree/main/cardea-weather
 [[mcp.server.tool]]
-name      = "gaia-weather"
+name      = "cardea-weather"
 transport = "stream-http"
 url       = "http://127.0.0.1:8002/mcp"
 enable    = false
 
-
-# Vector Search MCP Server
-#
-# The following items are the vector search mcp server configurations:
-#
-# - name: The name of the mcp server.
-# - transport: The transport protocol to use. Possible values: "sse" and "stream-http".
-# - url: The URL of the mcp server.
-# - enable: Whether to enable the mcp server.
-
-# The following config is for the gaia-qdrant mcp server.
-# The details about the server are available at https://github.com/decentralized-mcp/gaia-mcp-servers/tree/main/gaia-qdrant
+# The following config is for the cardea-qdrant mcp server.
+# The details about the server are available at https://github.com/cardea-mcp/gaia-mcp-servers/tree/main/cardea-qdrant
 [[mcp.server.tool]]
-name      = "gaia-qdrant"
+name      = "cardea-qdrant"
 transport = "stream-http"
 url       = "http://127.0.0.1:8003/mcp"
 enable    = false
-
 
 # Keyword Search MCP Servers
 #
@@ -84,29 +83,29 @@ enable    = false
 # - url: The URL of the mcp server.
 # - enable: Whether to enable the mcp server.
 #
-# If you want to use keyword search in the retrieval phase, please enable one of the following
+# If you want to use keyword search in the retrieval phase, please enable ONLY one of the following
 # three keyword search mcp servers.
 
-# The following config is for the gaia-keyword-search mcp server.
-# The details about the server are available at https://github.com/decentralized-mcp/gaia-mcp-servers/tree/main/gaia-kwsearch
+# The following config is for the cardea-keyword-search mcp server.
+# The details about the server are available at https://github.com/cardea-mcp/gaia-mcp-servers/tree/main/cardea-kwsearch
 [[mcp.server.tool]]
-name      = "gaia-keyword-search"
+name      = "cardea-keyword-search"
 transport = "stream-http"
 url       = "http://127.0.0.1:8005/mcp"
 enable    = false
 
-# The following config is for the gaia-elastic-search mcp server.
-# The details about the server are available at https://github.com/decentralized-mcp/gaia-mcp-servers/tree/main/gaia-elastic
+# The following config is for the cardea-elastic-search mcp server.
+# The details about the server are available at https://github.com/cardea-mcp/gaia-mcp-servers/tree/main/cardea-elastic
 [[mcp.server.tool]]
-name      = "gaia-elastic-search"
+name      = "cardea-elastic-search"
 transport = "stream-http"
 url       = "http://127.0.0.1:8006/mcp"
 enable    = false
 
-# The following config is for the gaia-tidb-search mcp server.
-# The details about the server are available at https://github.com/decentralized-mcp/gaia-mcp-servers/tree/main/gaia-tidb
+# The following config is for the cardea-tidb-search mcp server.
+# The details about the server are available at https://github.com/cardea-m
 [[mcp.server.tool]]
-name      = "gaia-tidb-search"
+name      = "cardea-tidb-search"
 transport = "stream-http"
 url       = "http://127.0.0.1:8007/mcp"
 enable    = false
