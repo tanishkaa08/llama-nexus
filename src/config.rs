@@ -46,8 +46,6 @@ impl Config {
             ServerError::Operation(err_msg)
         })?;
 
-        dual_debug!("config:\n{:#?}", config);
-
         if let Some(mcp_config) = config.mcp.as_mut()
             && !mcp_config.server.tool_servers.is_empty()
         {
@@ -55,6 +53,8 @@ impl Config {
                 server_config.connect_mcp_server().await?;
             }
         }
+
+        dual_debug!("config:\n{:#?}", config);
 
         Ok(config)
     }
@@ -150,6 +150,7 @@ pub struct McpToolServerConfig {
     pub enable: bool,
     #[serde(skip_deserializing)]
     pub tools: Option<Vec<RmcpTool>>,
+    pub fallback_message: Option<String>,
 }
 impl McpToolServerConfig {
     /// Connect the mcp server if it is enabled
@@ -203,6 +204,7 @@ impl McpToolServerConfig {
 
                     let mut client = McpService::new(self.name.clone(), service);
                     client.tools = tools.iter().map(|tool| tool.name.to_string()).collect();
+                    client.fallback_message = self.fallback_message.clone();
 
                     // print name of all tools
                     for (idx, tool) in tools.iter().enumerate() {
@@ -302,6 +304,7 @@ impl McpToolServerConfig {
 
                     let mut client = McpService::new(self.name.clone(), service);
                     client.tools = tools.iter().map(|tool| tool.name.to_string()).collect();
+                    client.fallback_message = self.fallback_message.clone();
 
                     // print name of all tools
                     for (idx, tool) in tools.iter().enumerate() {

@@ -32,15 +32,17 @@ enable    = false
 # - transport: The transport protocol to use. Possible values: "sse" and "stream-http".
 # - url: The URL of the MCP tool server.
 # - enable: Whether to enable the MCP tool server.
+# - fallback_message (Optional): The fallback message to use if the MCP tool server returns an empty response.
 
 
 # The following config is for the cardea-agentic-search mcp server.
 # The details about the server are available at https://github.com/cardea-mcp/gaia-mcp-servers/tree/main/cardea-agentic-search
 [[mcp.server.tool]]
-name      = "cardea-agentic-search"
-transport = "stream-http"
-url       = "http://127.0.0.1:8009/mcp"
-enable    = false
+name             = "cardea-agentic-search"
+transport        = "stream-http"
+url              = "http://127.0.0.1:8009/mcp"
+enable           = false
+fallback_message = "Hmm, I couldn’t find enough info to answer that one just yet. Want to try asking in a different way?"
 
 # The following config is for the cardea-web-search mcp server.
 # The details about the server are available at https://github.com/cardea-mcp/gaia-mcp-servers/tree/main/cardea-web-search

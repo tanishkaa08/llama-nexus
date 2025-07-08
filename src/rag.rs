@@ -1290,7 +1290,7 @@ async fn call_keyword_search_service(
                     match service.read().await.raw.peer_info() {
                         Some(peer_info) => {
                             match peer_info.server_info.name.as_str() {
-                                "gaia-kwsearch-mcp-server" => {
+                                "cardea-kwsearch-mcp-server" => {
                                     // call a tool
                                     let request_param = CallToolRequestParam {
                                         name: tool_name.to_string().into(),
@@ -1328,7 +1328,7 @@ async fn call_keyword_search_service(
 
                                     return Ok(search_response.hits);
                                 }
-                                "gaia-tidb-mcp-server" => {
+                                "cardea-tidb-mcp-server" => {
                                     // call a tool
                                     let request_param = CallToolRequestParam {
                                         name: tool_name.to_string().into(),
@@ -1368,7 +1368,7 @@ async fn call_keyword_search_service(
 
                                     return Ok(kw_hits);
                                 }
-                                "gaia-elastic-mcp-server" => {
+                                "cardea-elastic-mcp-server" => {
                                     // request param
                                     let request_param = CallToolRequestParam {
                                         name: tool_name.to_string().into(),

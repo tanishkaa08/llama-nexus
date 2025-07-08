@@ -13,6 +13,15 @@ pub static MCP_TOOLS: OnceCell<TokioRwLock<HashMap<McpToolName, ServiceName>>> =
 pub static MCP_SERVICES: OnceCell<TokioRwLock<HashMap<ServiceName, TokioRwLock<McpService>>>> =
     OnceCell::new();
 
+pub(crate) const SEARCH_MCP_SERVER_NAMES: [&str; 5] = [
+    "cardea-agentic-search-mcp-server",
+    "cardea-tidb-mcp-server",
+    "cardea-qdrant-mcp-server",
+    "cardea-elastic-mcp-server",
+    "cardea-kwsearch-mcp-server",
+];
+pub(crate) const DEFAULT_SEARCH_FALLBACK_MESSAGE: &str = "I’m unable to retrieve the necessary information to answer your question right now. Please try rephrasing or asking about something else.";
+
 pub type RawMcpService = RunningService<RoleClient, Box<dyn DynService<RoleClient>>>;
 pub type ServiceName = String;
 pub type McpToolName = String;
@@ -22,6 +31,7 @@ pub struct McpService {
     pub name: ServiceName,
     pub raw: RawMcpService,
     pub tools: Vec<McpToolName>,
+    pub fallback_message: Option<String>,
 }
 impl McpService {
     pub fn new(name: ServiceName, raw: RawMcpService) -> Self {
@@ -29,6 +39,7 @@ impl McpService {
             name,
             raw,
             tools: Vec::new(),
+            fallback_message: None,
         }
     }
 
@@ -37,6 +48,14 @@ impl McpService {
             false
         } else {
             self.tools.contains(&tool_name.as_ref().to_string())
+        }
+    }
+
+    pub fn has_fallback_message(&self) -> bool {
+        if let Some(fallback_message) = &self.fallback_message {
+            !fallback_message.is_empty()
+        } else {
+            false
         }
     }
 }
