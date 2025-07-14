@@ -46,6 +46,8 @@ pub struct Server {
     pub id: ServerId,
     pub url: String,
     pub kind: ServerKind,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
     #[serde(skip)]
     connections: AtomicUsize,
     #[serde(skip)]
@@ -61,6 +63,7 @@ impl<'de> Deserialize<'de> for Server {
         struct ServerHelper {
             url: String,
             kind: ServerKind,
+            api_key: Option<String>,
         }
 
         // Deserialize into the helper struct
@@ -74,6 +77,7 @@ impl<'de> Deserialize<'de> for Server {
             id,
             url: helper.url,
             kind: helper.kind,
+            api_key: helper.api_key,
             connections: AtomicUsize::new(0),
             health_status: HealthStatus::default(),
         })
@@ -85,6 +89,7 @@ impl Clone for Server {
             id: self.id.clone(),
             url: self.url.clone(),
             kind: self.kind,
+            api_key: self.api_key.clone(),
             connections: AtomicUsize::new(self.connections.load(Ordering::Relaxed)),
             health_status: self.health_status.clone(),
         }
@@ -159,6 +164,7 @@ fn test_serialize_server() {
         id,
         url: "http://localhost:8000".to_string(),
         kind: ServerKind::chat | ServerKind::tts,
+        api_key: None,
         connections: AtomicUsize::new(0),
         health_status: HealthStatus::default(),
     };
@@ -173,13 +179,14 @@ fn test_serialize_server() {
         id,
         url: "http://localhost:8000".to_string(),
         kind: ServerKind::chat,
+        api_key: Some("test-api-key".to_string()),
         connections: AtomicUsize::new(0),
         health_status: HealthStatus::default(),
     };
     let serialized = serde_json::to_string(&server).unwrap();
     assert_eq!(
         serialized,
-        r#"{"id":"chat-2424f42e-fcfb-458e-9a6a-ad419e24b5f5","url":"http://localhost:8000","kind":"chat"}"#
+        r#"{"id":"chat-2424f42e-fcfb-458e-9a6a-ad419e24b5f5","url":"http://localhost:8000","kind":"chat","api_key":"test-api-key"}"#
     );
 }
 
@@ -438,8 +445,8 @@ impl RoutingPolicy for ServerGroup {
             TargetServerInfo {
                 id: server.id.clone(),
                 url: server.url.clone(),
+                api_key: server.api_key.clone(),
             }
-            // server.url.parse().unwrap()
         };
 
         Ok(target_server_info)
@@ -451,6 +458,7 @@ impl RoutingPolicy for ServerGroup {
 pub struct TargetServerInfo {
     pub id: ServerId,
     pub url: String,
+    pub api_key: Option<String>,
 }
 
 #[async_trait]

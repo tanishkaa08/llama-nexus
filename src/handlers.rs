@@ -28,7 +28,7 @@ use crate::{
     info::ApiServer,
     mcp::{DEFAULT_SEARCH_FALLBACK_MESSAGE, MCP_SERVICES, MCP_TOOLS, SEARCH_MCP_SERVER_NAMES},
     rag,
-    server::{RoutingPolicy, Server, ServerIdToRemove, ServerKind},
+    server::{RoutingPolicy, Server, ServerIdToRemove, ServerKind, TargetServerInfo},
 };
 
 pub(crate) async fn chat_handler(
@@ -154,15 +154,11 @@ pub(crate) async fn chat(
     let request_id = request_id.as_ref();
 
     // Get target server
-    let target_server_info = get_chat_server(&state, request_id).await?;
-    let chat_service_url = format!(
-        "{}/v1/chat/completions",
-        target_server_info.url.trim_end_matches('/')
-    );
+    let chat_server = get_chat_server(&state, request_id).await?;
 
     // Send request and handle response
     let response = send_request_with_retry(
-        &chat_service_url,
+        &chat_server,
         &mut request,
         &headers,
         request_id,
@@ -178,7 +174,7 @@ pub(crate) async fn chat(
                 response,
                 &mut request,
                 &headers,
-                &chat_service_url,
+                &chat_server,
                 request_id,
                 cancel_token,
             )
@@ -190,7 +186,7 @@ pub(crate) async fn chat(
                 response,
                 &mut request,
                 &headers,
-                &chat_service_url,
+                &chat_server,
                 request_id,
                 cancel_token,
             )
@@ -228,7 +224,7 @@ pub(crate) async fn embeddings_handler(
         }
     };
 
-    let target_server_info = match embeddings_servers.next().await {
+    let embedding_server = match embeddings_servers.next().await {
         Ok(target_server_info) => target_server_info,
         Err(e) => {
             let err_msg = format!("Failed to get the embeddings server: {e}");
@@ -238,7 +234,7 @@ pub(crate) async fn embeddings_handler(
     };
     let embeddings_service_url = format!(
         "{}/v1/embeddings",
-        target_server_info.url.trim_end_matches('/')
+        embedding_server.url.trim_end_matches('/')
     );
     dual_info!(
         "Forward the embeddings request to {} - request_id: {}",
@@ -263,7 +259,15 @@ pub(crate) async fn embeddings_handler(
     );
 
     // Create request client
-    let ds_request = if headers.contains_key("authorization") {
+    let ds_request = if let Some(api_key) = &embedding_server.api_key
+        && !api_key.is_empty()
+    {
+        reqwest::Client::new()
+            .post(embeddings_service_url)
+            .header("Content-Type", content_type)
+            .header(AUTHORIZATION, api_key)
+            .json(&request)
+    } else if headers.contains_key("authorization") {
         let authorization = headers
             .get("authorization")
             .unwrap()
@@ -358,7 +362,7 @@ pub(crate) async fn audio_transcriptions_handler(
     );
 
     // get the transcribe server
-    let target_server_info = {
+    let transcription_server = {
         let servers = state.server_group.read().await;
         let transcribe_servers = match servers.get(&ServerKind::transcribe) {
             Some(servers) => servers,
@@ -379,18 +383,23 @@ pub(crate) async fn audio_transcriptions_handler(
         }
     };
 
-    let transcription_service_url = format!(
+    let transcription_server_url = format!(
         "{}/v1/audio/transcriptions",
-        target_server_info.url.trim_end_matches('/')
+        transcription_server.url.trim_end_matches('/')
     );
     dual_info!(
         "Forward the audio transcription request to {} - request_id: {}",
-        transcription_service_url,
+        transcription_server_url,
         request_id
     );
 
     // Create request client
-    let mut ds_request = reqwest::Client::new().post(transcription_service_url);
+    let mut ds_request = reqwest::Client::new().post(transcription_server_url);
+    if let Some(api_key) = &transcription_server.api_key
+        && !api_key.is_empty()
+    {
+        ds_request = ds_request.header(AUTHORIZATION, api_key);
+    }
     for (name, value) in req.headers().iter() {
         ds_request = ds_request.header(name, value);
     }
@@ -480,7 +489,7 @@ pub(crate) async fn audio_translations_handler(
     );
 
     // get the transcribe server
-    let target_server_info = {
+    let translation_server = {
         let servers = state.server_group.read().await;
         let translate_servers = match servers.get(&ServerKind::translate) {
             Some(servers) => servers,
@@ -501,18 +510,23 @@ pub(crate) async fn audio_translations_handler(
         }
     };
 
-    let translation_service_url = format!(
+    let translation_server_url = format!(
         "{}/v1/audio/translations",
-        target_server_info.url.trim_end_matches('/')
+        translation_server.url.trim_end_matches('/')
     );
     dual_info!(
         "Forward the audio translation request to {} - request_id: {}",
-        translation_service_url,
+        translation_server_url,
         request_id
     );
 
     // Create request client
-    let mut ds_request = reqwest::Client::new().post(translation_service_url);
+    let mut ds_request = reqwest::Client::new().post(translation_server_url);
+    if let Some(api_key) = &translation_server.api_key
+        && !api_key.is_empty()
+    {
+        ds_request = ds_request.header(AUTHORIZATION, api_key);
+    }
     for (name, value) in req.headers().iter() {
         ds_request = ds_request.header(name, value);
     }
@@ -602,7 +616,7 @@ pub(crate) async fn audio_tts_handler(
     );
 
     // get the tts server
-    let target_server_info = {
+    let tts_server = {
         let servers = state.server_group.read().await;
         let tts_servers = match servers.get(&ServerKind::tts) {
             Some(servers) => servers,
@@ -623,18 +637,20 @@ pub(crate) async fn audio_tts_handler(
         }
     };
 
-    let tts_service_url = format!(
-        "{}/v1/audio/speech",
-        target_server_info.url.trim_end_matches('/')
-    );
+    let tts_server_url = format!("{}/v1/audio/speech", tts_server.url.trim_end_matches('/'));
     dual_info!(
         "Forward the audio speech request to {} - request_id: {}",
-        tts_service_url,
+        tts_server_url,
         request_id
     );
 
     // Create request client
-    let mut ds_request = reqwest::Client::new().post(tts_service_url);
+    let mut ds_request = reqwest::Client::new().post(tts_server_url);
+    if let Some(api_key) = &tts_server.api_key
+        && !api_key.is_empty()
+    {
+        ds_request = ds_request.header(AUTHORIZATION, api_key);
+    }
     for (name, value) in req.headers().iter() {
         ds_request = ds_request.header(name, value);
     }
@@ -720,7 +736,7 @@ pub(crate) async fn image_handler(
     dual_info!("Received a new image request - request_id: {}", request_id);
 
     // get the image server
-    let target_server_info = {
+    let image_server = {
         let servers = state.server_group.read().await;
         let image_servers = match servers.get(&ServerKind::image) {
             Some(servers) => servers,
@@ -741,18 +757,23 @@ pub(crate) async fn image_handler(
         }
     };
 
-    let image_service_url = format!(
+    let image_server_url = format!(
         "{}/v1/images/generations",
-        target_server_info.url.trim_end_matches('/')
+        image_server.url.trim_end_matches('/')
     );
     dual_info!(
         "Forward the image request to {} - request_id: {}",
-        image_service_url,
+        image_server_url,
         request_id
     );
 
     // Create request client
-    let mut ds_request = reqwest::Client::new().post(image_service_url);
+    let mut ds_request = reqwest::Client::new().post(image_server_url);
+    if let Some(api_key) = &image_server.api_key
+        && !api_key.is_empty()
+    {
+        ds_request = ds_request.header(AUTHORIZATION, api_key);
+    }
     for (name, value) in req.headers().iter() {
         ds_request = ds_request.header(name, value);
     }
@@ -1072,26 +1093,11 @@ pub(crate) mod admin {
             dual_warn!(
                 "Ignore the server verification for: {server_id} - request_id: {request_id}"
             );
-            // _verify_server(
-            //     State(state.clone()),
-            //     &headers,
-            //     &request_id,
-            //     &server_id,
-            //     &server_url,
-            //     &server_kind,
-            // )
-            // .await?;
+            // _verify_server(State(state.clone()), &headers, &request_id, &server).await?;
         }
 
         // update the model list
-        update_model_list(
-            State(state.clone()),
-            &headers,
-            &request_id,
-            &server_id,
-            &server_url,
-        )
-        .await?;
+        update_model_list(State(state.clone()), &headers, &request_id, &server).await?;
 
         // update health status of the server
         server.health_status.is_healthy = true;
@@ -1130,18 +1136,32 @@ pub(crate) mod admin {
         State(state): State<Arc<AppState>>,
         headers: &HeaderMap,
         request_id: impl AsRef<str>,
-        server_id: impl AsRef<str>,
-        server_url: impl AsRef<str>,
-        server_kind: &ServerKind,
+        server: &Server,
     ) -> ServerResult<()> {
         let request_id = request_id.as_ref();
-        let server_url = server_url.as_ref();
-        let server_id = server_id.as_ref();
+        let server_url = &server.url;
+        let server_id = &server.id;
+        let server_kind = server.kind;
 
         let server_info_url = format!("{server_url}/v1/info");
 
         let client = reqwest::Client::new();
-        let response = if headers.contains_key("authorization") {
+        let response = if let Some(api_key) = &server.api_key
+            && !api_key.is_empty()
+        {
+            client
+                .get(&server_info_url)
+                .header(CONTENT_TYPE, "application/json")
+                .header(AUTHORIZATION, api_key)
+                .send()
+                .await
+                .map_err(|e| {
+                    let err_msg =
+                        format!("Failed to verify the {server_kind} downstream server: {e}",);
+                    dual_error!("{err_msg} - request_id: {request_id}");
+                    ServerError::Operation(err_msg)
+                })?
+        } else if headers.contains_key("authorization") {
             let authorization = headers
                 .get("authorization")
                 .unwrap()
@@ -1238,16 +1258,30 @@ pub(crate) mod admin {
         State(state): State<Arc<AppState>>,
         headers: &HeaderMap,
         request_id: impl AsRef<str>,
-        server_id: impl AsRef<str>,
-        server_url: impl AsRef<str>,
+        server: &Server,
     ) -> ServerResult<()> {
         let request_id = request_id.as_ref();
-        let server_url = server_url.as_ref();
-        let server_id = server_id.as_ref();
+        let server_url = &server.url;
+        let server_id = &server.id;
 
         // get the models from the downstream server
         let list_models_url = format!("{server_url}/v1/models");
-        let response = if headers.contains_key("authorization") {
+        let response = if let Some(api_key) = &server.api_key
+            && !api_key.is_empty()
+        {
+            reqwest::Client::new()
+                .get(&list_models_url)
+                .header(CONTENT_TYPE, "application/json")
+                .header(AUTHORIZATION, api_key)
+                .send()
+                .await
+                .map_err(|e| {
+                    let err_msg =
+                        format!("Failed to get the models from the downstream server: {e}");
+                    dual_error!("{err_msg} - request_id: {request_id}");
+                    ServerError::Operation(err_msg)
+                })?
+        } else if headers.contains_key("authorization") {
             let authorization = headers
                 .get("authorization")
                 .unwrap()
@@ -1376,12 +1410,16 @@ async fn call_mcp_server(
     tool_calls: &[ToolCall],
     request: &mut ChatCompletionRequest,
     headers: &HeaderMap,
-    chat_service_url: impl AsRef<str>,
+    chat_server: &TargetServerInfo,
     request_id: impl AsRef<str>,
     cancel_token: CancellationToken,
 ) -> ServerResult<axum::response::Response> {
     let request_id = request_id.as_ref();
-    let chat_service_url = chat_service_url.as_ref();
+    // let chat_service_url = chat_service_url.as_ref();
+    let chat_service_url = format!(
+        "{}/v1/chat/completions",
+        chat_server.url.trim_end_matches('/')
+    );
 
     let tool_call = &tool_calls[0];
     let tool_name = tool_call.function.name.as_str();
@@ -1457,7 +1495,11 @@ async fn call_mcp_server(
                 match res.is_error {
                     Some(false) => {
                         match res.content.is_empty() {
-                            true => Err(ServerError::McpEmptyContent),
+                            true => {
+                                let err_msg = "The mcp tool result is empty";
+                                dual_error!("{} - request_id: {}", err_msg, request_id);
+                                Err(ServerError::McpEmptyContent)
+                            }
                             false => {
                                 let content = &res.content[0];
                                 match &content.raw {
@@ -1529,9 +1571,16 @@ async fn call_mcp_server(
                                                 );
 
                                                 // Create a request client that can be cancelled
-                                                let ds_request = if headers
-                                                    .contains_key("authorization")
+                                                let ds_request = if let Some(api_key) =
+                                                    &chat_server.api_key
+                                                    && !api_key.is_empty()
                                                 {
+                                                    reqwest::Client::new()
+                                                        .post(&chat_service_url)
+                                                        .header(CONTENT_TYPE, "application/json")
+                                                        .header(AUTHORIZATION, api_key)
+                                                        .json(&request)
+                                                } else if headers.contains_key("authorization") {
                                                     let authorization = headers
                                                         .get("authorization")
                                                         .unwrap()
@@ -1540,13 +1589,13 @@ async fn call_mcp_server(
                                                         .to_string();
 
                                                     reqwest::Client::new()
-                                                        .post(chat_service_url)
+                                                        .post(&chat_service_url)
                                                         .header(CONTENT_TYPE, "application/json")
                                                         .header(AUTHORIZATION, authorization)
                                                         .json(&request)
                                                 } else {
                                                     reqwest::Client::new()
-                                                        .post(chat_service_url)
+                                                        .post(&chat_service_url)
                                                         .header(CONTENT_TYPE, "application/json")
                                                         .json(&request)
                                                 };
@@ -1714,9 +1763,16 @@ async fn call_mcp_server(
                                                 );
 
                                                 // Create a request client that can be cancelled
-                                                let ds_request = if headers
-                                                    .contains_key("authorization")
+                                                let ds_request = if let Some(api_key) =
+                                                    &chat_server.api_key
+                                                    && !api_key.is_empty()
                                                 {
+                                                    reqwest::Client::new()
+                                                        .post(&chat_service_url)
+                                                        .header(CONTENT_TYPE, "application/json")
+                                                        .header(AUTHORIZATION, api_key)
+                                                        .json(&request)
+                                                } else if headers.contains_key("authorization") {
                                                     let authorization = headers
                                                         .get("authorization")
                                                         .unwrap()
@@ -1725,13 +1781,13 @@ async fn call_mcp_server(
                                                         .to_string();
 
                                                     reqwest::Client::new()
-                                                        .post(chat_service_url)
+                                                        .post(&chat_service_url)
                                                         .header(CONTENT_TYPE, "application/json")
                                                         .header(AUTHORIZATION, authorization)
                                                         .json(&request)
                                                 } else {
                                                     reqwest::Client::new()
-                                                        .post(chat_service_url)
+                                                        .post(&chat_service_url)
                                                         .header(CONTENT_TYPE, "application/json")
                                                         .json(&request)
                                                 };
@@ -1941,7 +1997,7 @@ async fn get_chat_server(
 ///
 /// # Arguments
 ///
-/// * `chat_service_url` - URL of downstream chat service
+/// * `chat_server` - The downstream chat server to send request to
 /// * `request` - Chat completion request, may be modified (e.g., reset tool choice)
 /// * `headers` - HTTP request headers, including authentication info
 /// * `request_id` - Request ID for log tracking
@@ -1956,7 +2012,7 @@ async fn get_chat_server(
 /// * Other errors: Return error directly, no retry
 /// * Retry logic: Maximum one retry to avoid infinite loops
 async fn send_request_with_retry(
-    chat_service_url: &str,
+    chat_server: &TargetServerInfo,
     request: &mut ChatCompletionRequest,
     headers: &HeaderMap,
     request_id: &str,
@@ -1964,7 +2020,7 @@ async fn send_request_with_retry(
 ) -> ServerResult<reqwest::Response> {
     // First attempt to send request to downstream server
     let response =
-        build_and_send_request(chat_service_url, request, headers, cancel_token.clone()).await;
+        build_and_send_request(chat_server, request, headers, cancel_token.clone()).await;
 
     match response {
         // If first request succeeds, return response directly
@@ -1994,18 +2050,14 @@ async fn send_request_with_retry(
                         );
 
                         // Re-send with reset request
-                        let response = build_and_send_request(
-                            chat_service_url,
-                            request,
-                            headers,
-                            cancel_token,
-                        )
-                        .await
-                        .map_err(|e| {
-                            let err_msg = format!("Failed to send request: {e}");
-                            dual_error!("{} - request_id: {}", err_msg, request_id);
-                            ServerError::Operation(err_msg)
-                        })?;
+                        let response =
+                            build_and_send_request(chat_server, request, headers, cancel_token)
+                                .await
+                                .map_err(|e| {
+                                    let err_msg = format!("Failed to send request: {e}");
+                                    dual_error!("{} - request_id: {}", err_msg, request_id);
+                                    ServerError::Operation(err_msg)
+                                })?;
 
                         return Ok(response);
                     }
@@ -2030,7 +2082,7 @@ async fn send_request_with_retry(
 ///
 /// # Arguments
 ///
-/// * `url` - Complete URL of the target server
+/// * `chat_server` - The downstream chat server to send request to
 /// * `request` - Chat completion request object
 /// * `headers` - HTTP request headers, including authentication info
 /// * `cancel_token` - Cancellation token for request cancellation support
@@ -2044,18 +2096,26 @@ async fn send_request_with_retry(
 /// * Cancellation logs warning messages for debugging and monitoring
 /// * Cancellation operation releases related resources to prevent leaks
 async fn build_and_send_request(
-    url: &str,
+    chat_server: &TargetServerInfo,
     request: &ChatCompletionRequest,
     headers: &HeaderMap,
     cancel_token: CancellationToken,
 ) -> ServerResult<reqwest::Response> {
-    let mut client = reqwest::Client::new().post(url);
+    let url = format!(
+        "{}/v1/chat/completions",
+        chat_server.url.trim_end_matches('/')
+    );
+    let mut client = reqwest::Client::new().post(&url);
 
     // Add common headers
     client = client.header(CONTENT_TYPE, "application/json");
 
     // Add authorization header
-    if let Some(auth) = headers.get("authorization")
+    if let Some(api_key) = &chat_server.api_key
+        && !api_key.is_empty()
+    {
+        client = client.header(AUTHORIZATION, api_key);
+    } else if let Some(auth) = headers.get("authorization")
         && let Ok(auth_str) = auth.to_str()
     {
         client = client.header(AUTHORIZATION, auth_str);
@@ -2092,7 +2152,7 @@ async fn handle_stream_response(
     response: reqwest::Response,
     request: &mut ChatCompletionRequest,
     headers: &HeaderMap,
-    chat_service_url: &str,
+    chat_server: &TargetServerInfo,
     request_id: &str,
     cancel_token: CancellationToken,
 ) -> ServerResult<axum::response::Response> {
@@ -2108,7 +2168,7 @@ async fn handle_stream_response(
             response,
             request,
             headers,
-            chat_service_url,
+            chat_server,
             request_id,
             cancel_token,
         )
@@ -2159,7 +2219,7 @@ async fn handle_non_stream_response(
     response: reqwest::Response,
     request: &mut ChatCompletionRequest,
     headers: &HeaderMap,
-    chat_service_url: &str,
+    chat_server: &TargetServerInfo,
     request_id: &str,
     cancel_token: CancellationToken,
 ) -> ServerResult<axum::response::Response> {
@@ -2178,7 +2238,7 @@ async fn handle_non_stream_response(
             bytes,
             request,
             headers,
-            chat_service_url,
+            chat_server,
             request_id,
             cancel_token,
         )
@@ -2193,7 +2253,7 @@ async fn handle_tool_call_stream(
     response: reqwest::Response,
     request: &mut ChatCompletionRequest,
     headers: &HeaderMap,
-    chat_service_url: &str,
+    chat_server: &TargetServerInfo,
     request_id: &str,
     cancel_token: CancellationToken,
 ) -> ServerResult<axum::response::Response> {
@@ -2202,7 +2262,7 @@ async fn handle_tool_call_stream(
         tool_calls.as_slice(),
         request,
         headers,
-        chat_service_url,
+        chat_server,
         request_id,
         cancel_token,
     )
@@ -2226,7 +2286,7 @@ async fn handle_tool_call_non_stream(
     bytes: Bytes,
     request: &mut ChatCompletionRequest,
     headers: &HeaderMap,
-    chat_service_url: &str,
+    chat_server: &TargetServerInfo,
     request_id: &str,
     cancel_token: CancellationToken,
 ) -> ServerResult<axum::response::Response> {
@@ -2237,7 +2297,7 @@ async fn handle_tool_call_non_stream(
         assistant_message.tool_calls.as_slice(),
         request,
         headers,
-        chat_service_url,
+        chat_server,
         request_id,
         cancel_token,
     )

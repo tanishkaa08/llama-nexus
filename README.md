@@ -96,11 +96,13 @@ Llama-Nexus is a gateway service for managing and orchestrating LlamaEdge API se
   --header 'Content-Type: application/json' \
   --data '{
       "url": "http://localhost:10010",
-      "kind": "chat"
+      "kind": "chat",
+      "api_key": "Bearer <your-api-key>"
   }'
   ```
 
   > The `kind` can be `chat`, `embeddings`, `image`, `transcribe`, `translate`, or `tts`.
+  > The `api_key` is optional. If the `api_key` is provided, it will be used to authenticate the request to the downstream server.
 
   If register successfully, you will see a similar response like:
 
@@ -111,8 +113,6 @@ Llama-Nexus is a gateway service for managing and orchestrating LlamaEdge API se
       "url": "http://localhost:10010"
   }
   ```
-
-
 
 ## Usage
 
