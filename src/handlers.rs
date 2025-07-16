@@ -2249,6 +2249,19 @@ async fn handle_non_stream_response(
     }
 }
 
+/// Handle tool calls in streaming responses
+///
+/// Parse tool call information from streaming response, call MCP server to execute tools,
+/// then add tool execution results to the request and re-send the request.
+///
+/// # Arguments
+///
+/// * `response` - HTTP response from downstream server
+/// * `request` - Chat request, will be modified to include tool call results
+/// * `headers` - HTTP request headers
+/// * `chat_server` - Chat server information
+/// * `request_id` - Request ID
+/// * `cancel_token` - Cancellation token
 async fn handle_tool_call_stream(
     response: reqwest::Response,
     request: &mut ChatCompletionRequest,
@@ -2279,7 +2292,7 @@ async fn handle_tool_call_stream(
 /// * `bytes` - Response body data
 /// * `request` - Chat request, will be modified to include tool call results
 /// * `headers` - HTTP request headers
-/// * `chat_service_url` - Chat service URL
+/// * `chat_server` - Chat server information
 /// * `request_id` - Request ID
 /// * `cancel_token` - Cancellation token
 async fn handle_tool_call_non_stream(
