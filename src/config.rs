@@ -835,24 +835,24 @@ impl McpToolServerConfig {
 //     }
 // }
 
-#[derive(Debug, Deserialize, Serialize, Clone)]
-pub enum Transport {
-    #[serde(rename = "sse")]
-    Sse,
-    #[serde(rename = "stdio")]
-    Stdio,
-    #[serde(rename = "stream-http")]
-    StreamHttp,
-}
-impl std::fmt::Display for Transport {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Transport::Sse => write!(f, "sse"),
-            Transport::Stdio => write!(f, "stdio"),
-            Transport::StreamHttp => write!(f, "streamable-http"),
-        }
-    }
-}
+// #[derive(Debug, Deserialize, Serialize, Clone)]
+// pub enum Transport {
+//     #[serde(rename = "sse")]
+//     Sse,
+//     #[serde(rename = "stdio")]
+//     Stdio,
+//     #[serde(rename = "stream-http")]
+//     StreamHttp,
+// }
+// impl std::fmt::Display for Transport {
+//     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+//         match self {
+//             Transport::Sse => write!(f, "sse"),
+//             Transport::Stdio => write!(f, "stdio"),
+//             Transport::StreamHttp => write!(f, "streamable-http"),
+//         }
+//     }
+// }
 
 #[derive(Debug, Clone)]
 struct AppState {
