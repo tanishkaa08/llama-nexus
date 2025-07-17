@@ -232,10 +232,8 @@ pub(crate) async fn embeddings_handler(
             return Err(ServerError::Operation(err_msg));
         }
     };
-    let embeddings_service_url = format!(
-        "{}/v1/embeddings",
-        embedding_server.url.trim_end_matches('/')
-    );
+    let embeddings_service_url =
+        format!("{}/embeddings", embedding_server.url.trim_end_matches('/'));
     dual_info!(
         "Forward the embeddings request to {} - request_id: {}",
         embeddings_service_url,
@@ -384,7 +382,7 @@ pub(crate) async fn audio_transcriptions_handler(
     };
 
     let transcription_server_url = format!(
-        "{}/v1/audio/transcriptions",
+        "{}/audio/transcriptions",
         transcription_server.url.trim_end_matches('/')
     );
     dual_info!(
@@ -511,7 +509,7 @@ pub(crate) async fn audio_translations_handler(
     };
 
     let translation_server_url = format!(
-        "{}/v1/audio/translations",
+        "{}/audio/translations",
         translation_server.url.trim_end_matches('/')
     );
     dual_info!(
@@ -637,7 +635,7 @@ pub(crate) async fn audio_tts_handler(
         }
     };
 
-    let tts_server_url = format!("{}/v1/audio/speech", tts_server.url.trim_end_matches('/'));
+    let tts_server_url = format!("{}/audio/speech", tts_server.url.trim_end_matches('/'));
     dual_info!(
         "Forward the audio speech request to {} - request_id: {}",
         tts_server_url,
@@ -758,7 +756,7 @@ pub(crate) async fn image_handler(
     };
 
     let image_server_url = format!(
-        "{}/v1/images/generations",
+        "{}/images/generations",
         image_server.url.trim_end_matches('/')
     );
     dual_info!(
@@ -1143,7 +1141,7 @@ pub(crate) mod admin {
         let server_id = &server.id;
         let server_kind = server.kind;
 
-        let server_info_url = format!("{server_url}/v1/info");
+        let server_info_url = format!("{server_url}/info");
 
         let client = reqwest::Client::new();
         let response = if let Some(api_key) = &server.api_key
@@ -1265,7 +1263,8 @@ pub(crate) mod admin {
         let server_id = &server.id;
 
         // get the models from the downstream server
-        let list_models_url = format!("{server_url}/v1/models");
+        let list_models_url = format!("{server_url}/models");
+        dual_debug!("list_models_url: {}", list_models_url);
         let response = if let Some(api_key) = &server.api_key
             && !api_key.is_empty()
         {
@@ -1314,9 +1313,8 @@ pub(crate) mod admin {
         };
         let status = response.status();
         if !status.is_success() {
-            let err_msg = format!(
-                "Failed to get model info from {server_url} downstream server. Status: {status}",
-            );
+            let err_msg =
+                format!("Status: {status}. Failed to get model info from {list_models_url}.",);
             dual_error!("{} - request_id: {}", err_msg, request_id);
             return Err(ServerError::Operation(err_msg));
         }
@@ -1416,10 +1414,7 @@ async fn call_mcp_server(
 ) -> ServerResult<axum::response::Response> {
     let request_id = request_id.as_ref();
     // let chat_service_url = chat_service_url.as_ref();
-    let chat_service_url = format!(
-        "{}/v1/chat/completions",
-        chat_server.url.trim_end_matches('/')
-    );
+    let chat_service_url = format!("{}/chat/completions", chat_server.url.trim_end_matches('/'));
 
     let tool_call = &tool_calls[0];
     let tool_name = tool_call.function.name.as_str();
@@ -2101,10 +2096,7 @@ async fn build_and_send_request(
     headers: &HeaderMap,
     cancel_token: CancellationToken,
 ) -> ServerResult<reqwest::Response> {
-    let url = format!(
-        "{}/v1/chat/completions",
-        chat_server.url.trim_end_matches('/')
-    );
+    let url = format!("{}/chat/completions", chat_server.url.trim_end_matches('/'));
     let mut client = reqwest::Client::new().post(&url);
 
     // Add common headers

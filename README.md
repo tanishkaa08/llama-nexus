@@ -95,7 +95,7 @@ Llama-Nexus is a gateway service for managing and orchestrating LlamaEdge API se
   curl --location 'http://localhost:3389/admin/servers/register' \
   --header 'Content-Type: application/json' \
   --data '{
-      "url": "http://localhost:10010",
+      "url": "http://localhost:10010/v1",
       "kind": "chat",
       "api_key": "Bearer <your-api-key>"
   }'
@@ -110,7 +110,7 @@ Llama-Nexus is a gateway service for managing and orchestrating LlamaEdge API se
   {
       "id": "chat-server-36537062-9bea-4234-bc59-3166c43cf3f1",
       "kind": "chat",
-      "url": "http://localhost:10010"
+      "url": "http://localhost:10010/v1"
   }
   ```
 

@@ -417,7 +417,7 @@ async fn perform_keyword_search(
     };
 
     let chat_service_url = format!(
-        "{}/v1/chat/completions",
+        "{}/chat/completions",
         target_server_info.url.trim_end_matches('/')
     );
     dual_debug!(
@@ -780,7 +780,7 @@ async fn retrieve_context_with_single_qdrant_config(
         };
 
         let chat_service_url = format!(
-            "{}/v1/chat/completions",
+            "{}/chat/completions",
             target_server_info.url.trim_end_matches('/')
         );
         dual_debug!(

@@ -112,7 +112,7 @@ impl Server {
 
         // Perform new health check
         let client = reqwest::Client::new();
-        let health_url = format!("{}/v1/info", self.url);
+        let health_url = format!("{}/info", self.url);
 
         // Use configured timeout duration
         let timeout = Duration::from_secs(TIMEOUT);

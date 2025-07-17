@@ -120,12 +120,12 @@ jobs:
 
       - name: Register llama-api-server
         run: |
-          curl --location 'http://localhost:3389/admin/servers/register' --header 'Content-Type: application/json' --data '{"url": "http://localhost:9068","kind": "chat"}'
+          curl --location 'http://localhost:3389/admin/servers/register' --header 'Content-Type: application/json' --data '{"url": "http://localhost:9068/v1","kind": "chat"}'
           sleep 5
 
       - name: Register whisper-api-server
         run: |
-          curl --location 'http://localhost:3389/admin/servers/register' --header 'Content-Type: application/json' --data '{"url": "http://localhost:9069","kind": "translate,transcribe"}'
+          curl --location 'http://localhost:3389/admin/servers/register' --header 'Content-Type: application/json' --data '{"url": "http://localhost:9069/v1","kind": "translate,transcribe"}'
           sleep 5
 
       - name: Print LlamaEdge-Nexus logs on failure
