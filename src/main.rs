@@ -3,7 +3,6 @@ mod error;
 mod handlers;
 mod info;
 mod mcp;
-mod rag;
 mod server;
 mod utils;
 
@@ -149,7 +148,6 @@ async fn main() -> ServerResult<()> {
             .route("/v1/audio/speech", post(handlers::audio_tts_handler))
             .route("/v1/images/generations", post(handlers::image_handler))
             .route("/v1/images/edits", post(handlers::image_handler))
-            .route("/v1/chunks", post(handlers::chunks_handler))
             .route("/v1/models", get(handlers::models_handler))
             .route("/v1/info", get(handlers::info_handler))
             .route(

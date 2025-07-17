@@ -43,14 +43,6 @@ impl McpService {
         }
     }
 
-    pub fn has_tool(&self, tool_name: impl AsRef<str>) -> bool {
-        if self.tools.is_empty() {
-            false
-        } else {
-            self.tools.contains(&tool_name.as_ref().to_string())
-        }
-    }
-
     pub fn has_fallback_message(&self) -> bool {
         if let Some(fallback_message) = &self.fallback_message {
             !fallback_message.is_empty()
