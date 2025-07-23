@@ -1337,6 +1337,13 @@ async fn call_mcp_server(
                     }
                 };
 
+                dual_info!(
+                    "Call `{}::{}` mcp tool - request_id: {}",
+                    raw_server_name,
+                    tool_name,
+                    request_id
+                );
+
                 // call a tool
                 let request_param = CallToolRequestParam {
                     name: tool_name.to_string().into(),
@@ -1366,7 +1373,7 @@ async fn call_mcp_server(
                                 let content = &res.content[0];
                                 match &content.raw {
                                     RawContent::Text(text) => {
-                                        dual_debug!("tool result: {:#?}", text.text);
+                                        dual_info!("The mcp tool call result: {:#?}", text.text);
 
                                         match SEARCH_MCP_SERVER_NAMES
                                             .contains(&raw_server_name.as_str())
@@ -1426,12 +1433,6 @@ async fn call_mcp_server(
                                                     request.tool_choice = Some(ToolChoice::None);
                                                 }
 
-                                                dual_info!(
-                                                    "request messages:\n{}",
-                                                    serde_json::to_string_pretty(&request.messages)
-                                                        .unwrap()
-                                                );
-
                                                 // Create a request client that can be cancelled
                                                 let ds_request = if let Some(api_key) =
                                                     &chat_server.api_key
@@ -1461,6 +1462,12 @@ async fn call_mcp_server(
                                                         .header(CONTENT_TYPE, "application/json")
                                                         .json(&request)
                                                 };
+
+                                                dual_info!(
+                                                    "Request to downstream chat server - request_id: {}\n{}",
+                                                    request_id,
+                                                    serde_json::to_string_pretty(&request).unwrap()
+                                                );
 
                                                 // Use select! to handle request cancellation
                                                 let ds_response = select! {
@@ -1618,12 +1625,6 @@ async fn call_mcp_server(
                                                     request.tool_choice = Some(ToolChoice::None);
                                                 }
 
-                                                dual_info!(
-                                                    "request messages:\n{}",
-                                                    serde_json::to_string_pretty(&request.messages)
-                                                        .unwrap()
-                                                );
-
                                                 // Create a request client that can be cancelled
                                                 let ds_request = if let Some(api_key) =
                                                     &chat_server.api_key
@@ -1653,6 +1654,12 @@ async fn call_mcp_server(
                                                         .header(CONTENT_TYPE, "application/json")
                                                         .json(&request)
                                                 };
+
+                                                dual_info!(
+                                                    "Request to downstream chat server - request_id: {}\n{}",
+                                                    request_id,
+                                                    serde_json::to_string_pretty(&request).unwrap()
+                                                );
 
                                                 // Use select! to handle request cancellation
                                                 let ds_response = select! {
@@ -1881,8 +1888,14 @@ async fn send_request_with_retry(
     cancel_token: CancellationToken,
 ) -> ServerResult<reqwest::Response> {
     // First attempt to send request to downstream server
-    let response =
-        build_and_send_request(chat_server, request, headers, cancel_token.clone()).await;
+    let response = build_and_send_request(
+        chat_server,
+        request,
+        headers,
+        cancel_token.clone(),
+        request_id,
+    )
+    .await;
 
     match response {
         // If first request succeeds, return response directly
@@ -1912,14 +1925,19 @@ async fn send_request_with_retry(
                         );
 
                         // Re-send with reset request
-                        let response =
-                            build_and_send_request(chat_server, request, headers, cancel_token)
-                                .await
-                                .map_err(|e| {
-                                    let err_msg = format!("Failed to send request: {e}");
-                                    dual_error!("{} - request_id: {}", err_msg, request_id);
-                                    ServerError::Operation(err_msg)
-                                })?;
+                        let response = build_and_send_request(
+                            chat_server,
+                            request,
+                            headers,
+                            cancel_token,
+                            request_id,
+                        )
+                        .await
+                        .map_err(|e| {
+                            let err_msg = format!("Failed to send request: {e}");
+                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                            ServerError::Operation(err_msg)
+                        })?;
 
                         return Ok(response);
                     }
@@ -1962,6 +1980,7 @@ async fn build_and_send_request(
     request: &ChatCompletionRequest,
     headers: &HeaderMap,
     cancel_token: CancellationToken,
+    request_id: &str,
 ) -> ServerResult<reqwest::Response> {
     let url = format!("{}/chat/completions", chat_server.url.trim_end_matches('/'));
     let mut client = reqwest::Client::new().post(&url);
@@ -1979,6 +1998,12 @@ async fn build_and_send_request(
     {
         client = client.header(AUTHORIZATION, auth_str);
     }
+
+    dual_info!(
+        "Request to downstream chat server - request_id: {}\n{}",
+        request_id,
+        serde_json::to_string_pretty(request).unwrap()
+    );
 
     // Use select! to support cancellation
     select! {
