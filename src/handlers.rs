@@ -1274,6 +1274,15 @@ async fn call_mcp_server(
     // let chat_service_url = chat_service_url.as_ref();
     let chat_service_url = format!("{}/chat/completions", chat_server.url.trim_end_matches('/'));
 
+    dual_debug!(
+        "tool calls:\n{}",
+        serde_json::to_string_pretty(tool_calls).unwrap()
+    );
+    dual_debug!(
+        "first tool call:\n{}",
+        serde_json::to_string_pretty(&tool_calls[0]).unwrap()
+    );
+
     let tool_call = &tool_calls[0];
     let tool_name = tool_call.function.name.as_str();
     let tool_args = &tool_call.function.arguments;
