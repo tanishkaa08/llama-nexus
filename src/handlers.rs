@@ -14,7 +14,7 @@ use endpoints::{
         ToolCall, ToolChoice, ToolFunction,
     },
     embeddings::EmbeddingRequest,
-    models::ListModelsResponse,
+    models::{ListModelsResponse, Model},
 };
 use futures_util::StreamExt;
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
@@ -1177,15 +1177,61 @@ pub(crate) mod admin {
             return Err(ServerError::Operation(err_msg));
         }
 
-        let list_models_response = response.json::<ListModelsResponse>().await.map_err(|e| {
-            let err_msg = format!("Failed to parse the models: {e}");
-            dual_error!("{err_msg} - request_id: {request_id}");
-            ServerError::Operation(err_msg)
-        })?;
+        match server_url.as_str() {
+            "https://openrouter.ai/api/v1" => {
+                let list_models_response =
+                    response.json::<serde_json::Value>().await.map_err(|e| {
+                        let err_msg =
+                            format!("Failed to get the models from {list_models_url}: {e}");
+                        dual_error!("{err_msg} - request_id: {request_id}");
+                        ServerError::Operation(err_msg)
+                    })?;
 
-        // update the models
-        let mut models = state.models.write().await;
-        models.insert(server_id.to_string(), list_models_response.data);
+                match list_models_response.get("data") {
+                    Some(data) => {
+                        // get `id` field from each model
+                        let models = data.as_array().unwrap();
+                        let model_info_vec = models
+                            .iter()
+                            .map(|model| {
+                                let id = model.get("id").unwrap().as_str().unwrap();
+                                let created = model.get("created").unwrap().as_u64().unwrap();
+                                Model {
+                                    id: id.to_string(),
+                                    created,
+                                    object: "model".to_string(),
+                                    owned_by: "openrouter.ai".to_string(),
+                                }
+                            })
+                            .collect::<Vec<Model>>();
+
+                        // update the models
+                        let mut models = state.models.write().await;
+                        models.insert(server_id.to_string(), model_info_vec);
+                    }
+                    None => {
+                        let err_msg = format!(
+                            "Failed to get the models from {list_models_url}. Not found `data` field in the response."
+                        );
+                        dual_error!("{err_msg} - request_id: {request_id}");
+                        return Err(ServerError::Operation(err_msg.to_string()));
+                    }
+                }
+            }
+            _ => {
+                let list_models_response =
+                    response.json::<ListModelsResponse>().await.map_err(|e| {
+                        let err_msg =
+                            format!("Failed to get the models from {list_models_url}: {e}");
+                        dual_error!("{err_msg} - request_id: {request_id}");
+                        ServerError::Operation(err_msg)
+                    })?;
+
+                // update the models
+                let mut models = state.models.write().await;
+                models.insert(server_id.to_string(), list_models_response.data);
+            }
+        }
 
         Ok(())
     }
