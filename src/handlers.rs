@@ -1308,569 +1308,6 @@ pub(crate) mod admin {
     }
 }
 
-async fn call_mcp_server(
-    tool_calls: &[ToolCall],
-    request: &mut ChatCompletionRequest,
-    headers: &HeaderMap,
-    chat_server: &TargetServerInfo,
-    request_id: impl AsRef<str>,
-    cancel_token: CancellationToken,
-) -> ServerResult<axum::response::Response> {
-    let request_id = request_id.as_ref();
-    // let chat_service_url = chat_service_url.as_ref();
-    let chat_service_url = format!("{}/chat/completions", chat_server.url.trim_end_matches('/'));
-
-    dual_debug!(
-        "tool calls:\n{}",
-        serde_json::to_string_pretty(tool_calls).unwrap()
-    );
-    dual_debug!(
-        "first tool call:\n{}",
-        serde_json::to_string_pretty(&tool_calls[0]).unwrap()
-    );
-
-    let tool_call = &tool_calls[0];
-    let tool_name = tool_call.function.name.as_str();
-    let tool_args = &tool_call.function.arguments;
-
-    dual_debug!(
-        "tool name: {}, tool args: {} - request_id: {}",
-        tool_name,
-        tool_args,
-        request_id
-    );
-
-    // convert the func_args to a json object
-    let arguments =
-        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(tool_args).ok();
-
-    // find mcp client by tool name
-    if let Some(mcp_tools) = MCP_TOOLS.get() {
-        let tools = mcp_tools.read().await;
-        dual_debug!("mcp_tools: {:?}", mcp_tools);
-
-        // look up the tool name in MCP_TOOLS
-        if let Some(mcp_client_name) = tools.get(tool_name) {
-            if let Some(services) = MCP_SERVICES.get() {
-                let service_map = services.read().await;
-                // get the mcp client
-                let service = match service_map.get(mcp_client_name) {
-                    Some(mcp_client) => mcp_client,
-                    None => {
-                        let err_msg = format!("Tool not found: {tool_name}");
-                        dual_error!("{} - request_id: {}", err_msg, request_id);
-                        return Err(ServerError::Operation(err_msg.to_string()));
-                    }
-                };
-
-                // get the server name from the peer info
-                let raw_server_name = match service.read().await.raw.peer_info() {
-                    Some(peer_info) => {
-                        let server_name = peer_info.server_info.name.clone();
-                        dual_debug!(
-                            "server name from peer info: {} - request_id: {}",
-                            server_name,
-                            request_id
-                        );
-                        server_name
-                    }
-                    None => {
-                        dual_warn!(
-                            "Failed to get peer info from the MCP client: {mcp_client_name}"
-                        );
-
-                        String::new()
-                    }
-                };
-
-                dual_info!(
-                    "Call `{}::{}` mcp tool - request_id: {}",
-                    raw_server_name,
-                    tool_name,
-                    request_id
-                );
-
-                // call a tool
-                let request_param = CallToolRequestParam {
-                    name: tool_name.to_string().into(),
-                    arguments,
-                };
-                let res = service
-                    .read()
-                    .await
-                    .raw
-                    .call_tool(request_param)
-                    .await
-                    .map_err(|e| {
-                        dual_error!("Failed to call the tool: {}", e);
-                        ServerError::Operation(e.to_string())
-                    })?;
-                dual_debug!("{}", serde_json::to_string_pretty(&res).unwrap());
-
-                match res.is_error {
-                    Some(false) => {
-                        match res.content.is_empty() {
-                            true => {
-                                let err_msg = "The mcp tool result is empty";
-                                dual_error!("{} - request_id: {}", err_msg, request_id);
-                                Err(ServerError::McpEmptyContent)
-                            }
-                            false => {
-                                let content = &res.content[0];
-                                match &content.raw {
-                                    RawContent::Text(text) => {
-                                        dual_info!("The mcp tool call result: {:#?}", text.text);
-
-                                        match SEARCH_MCP_SERVER_NAMES
-                                            .contains(&raw_server_name.as_str())
-                                        {
-                                            true => {
-                                                // get the fallback message from the mcp client
-                                                let fallback = if service
-                                                    .read()
-                                                    .await
-                                                    .has_fallback_message()
-                                                {
-                                                    service
-                                                        .read()
-                                                        .await
-                                                        .fallback_message
-                                                        .clone()
-                                                        .unwrap()
-                                                } else {
-                                                    DEFAULT_SEARCH_FALLBACK_MESSAGE.to_string()
-                                                };
-
-                                                dual_debug!(
-                                                    "fallback message: {} - request_id: {}",
-                                                    fallback,
-                                                    request_id
-                                                );
-
-                                                // format the content
-                                                let content = format!(
-                                                    "Please answer the question based on the information between **---BEGIN CONTEXT---** and **---END CONTEXT---**. Do not use any external knowledge. If the information between **---BEGIN CONTEXT---** and **---END CONTEXT---** is empty, please respond with `{fallback}`. Note that DO NOT use any tools if provided.\n\n---BEGIN CONTEXT---\n\n{context}\n\n---END CONTEXT---",
-                                                    fallback = fallback,
-                                                    context = &text.text,
-                                                );
-
-                                                // append assistant message with tool call to request messages
-                                                let assistant_completion_message =
-                                                    ChatCompletionRequestMessage::Assistant(
-                                                        ChatCompletionAssistantMessage::new(
-                                                            None,
-                                                            None,
-                                                            Some(tool_calls.to_vec()),
-                                                        ),
-                                                    );
-                                                request.messages.push(assistant_completion_message);
-
-                                                // append tool message with tool result to request messages
-                                                let tool_completion_message =
-                                                    ChatCompletionRequestMessage::Tool(
-                                                        ChatCompletionToolMessage::new(
-                                                            &content, None,
-                                                        ),
-                                                    );
-                                                request.messages.push(tool_completion_message);
-
-                                                // disable tool choice
-                                                if request.tool_choice.is_some() {
-                                                    request.tool_choice = Some(ToolChoice::None);
-                                                }
-
-                                                // Create a request client that can be cancelled
-                                                let ds_request = if let Some(api_key) =
-                                                    &chat_server.api_key
-                                                    && !api_key.is_empty()
-                                                {
-                                                    reqwest::Client::new()
-                                                        .post(&chat_service_url)
-                                                        .header(CONTENT_TYPE, "application/json")
-                                                        .header(AUTHORIZATION, api_key)
-                                                        .json(&request)
-                                                } else if headers.contains_key("authorization") {
-                                                    let authorization = headers
-                                                        .get("authorization")
-                                                        .unwrap()
-                                                        .to_str()
-                                                        .unwrap()
-                                                        .to_string();
-
-                                                    reqwest::Client::new()
-                                                        .post(&chat_service_url)
-                                                        .header(CONTENT_TYPE, "application/json")
-                                                        .header(AUTHORIZATION, authorization)
-                                                        .json(&request)
-                                                } else {
-                                                    reqwest::Client::new()
-                                                        .post(&chat_service_url)
-                                                        .header(CONTENT_TYPE, "application/json")
-                                                        .json(&request)
-                                                };
-
-                                                dual_info!(
-                                                    "Request to downstream chat server - request_id: {}\n{}",
-                                                    request_id,
-                                                    serde_json::to_string_pretty(&request).unwrap()
-                                                );
-
-                                                // Use select! to handle request cancellation
-                                                let ds_response = select! {
-                                                    response = ds_request.send() => {
-                                                        response.map_err(|e| {
-                                                            let err_msg = format!(
-                                                                "Failed to forward the request to the downstream server: {e}"
-                                                            );
-                                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-                                                            ServerError::Operation(err_msg)
-                                                        })?
-                                                    }
-                                                    _ = cancel_token.cancelled() => {
-                                                        let warn_msg = "Request was cancelled by client";
-                                                        dual_warn!("{} - request_id: {}", warn_msg, request_id);
-                                                        return Err(ServerError::Operation(warn_msg.to_string()));
-                                                    }
-                                                };
-
-                                                let status = ds_response.status();
-                                                let headers = ds_response.headers().clone();
-
-                                                // Handle response body reading with cancellation
-                                                let bytes = select! {
-                                                    bytes = ds_response.bytes() => {
-                                                        bytes.map_err(|e| {
-                                                            let err_msg = format!("Failed to get the full response as bytes: {e}");
-                                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-                                                            ServerError::Operation(err_msg)
-                                                        })?
-                                                    }
-                                                    _ = cancel_token.cancelled() => {
-                                                        let warn_msg = "Request was cancelled while reading response";
-                                                        dual_warn!("{} - request_id: {}", warn_msg, request_id);
-                                                        return Err(ServerError::Operation(warn_msg.to_string()));
-                                                    }
-                                                };
-
-                                                let mut response_builder =
-                                                    Response::builder().status(status);
-
-                                                // Copy all headers from downstream response
-                                                match request.stream {
-                                                    Some(true) => {
-                                                        for (name, value) in headers.iter() {
-                                                            match name.as_str() {
-                                                                "access-control-allow-origin" => {
-                                                                    response_builder =
-                                                                        response_builder
-                                                                            .header(name, value);
-                                                                }
-                                                                "access-control-allow-headers" => {
-                                                                    response_builder =
-                                                                        response_builder
-                                                                            .header(name, value);
-                                                                }
-                                                                "access-control-allow-methods" => {
-                                                                    response_builder =
-                                                                        response_builder
-                                                                            .header(name, value);
-                                                                }
-                                                                "content-type" => {
-                                                                    response_builder =
-                                                                        response_builder
-                                                                            .header(name, value);
-                                                                }
-                                                                "cache-control" => {
-                                                                    response_builder =
-                                                                        response_builder
-                                                                            .header(name, value);
-                                                                }
-                                                                "connection" => {
-                                                                    response_builder =
-                                                                        response_builder
-                                                                            .header(name, value);
-                                                                }
-                                                                "user" => {
-                                                                    response_builder =
-                                                                        response_builder
-                                                                            .header(name, value);
-                                                                }
-                                                                "date" => {
-                                                                    response_builder =
-                                                                        response_builder
-                                                                            .header(name, value);
-                                                                }
-                                                                _ => {
-                                                                    dual_debug!(
-                                                                        "ignore header: {} - {}",
-                                                                        name,
-                                                                        value.to_str().unwrap()
-                                                                    );
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                    Some(false) | None => {
-                                                        for (name, value) in headers.iter() {
-                                                            dual_debug!(
-                                                                "{}: {}",
-                                                                name,
-                                                                value.to_str().unwrap()
-                                                            );
-                                                            response_builder = response_builder
-                                                                .header(name, value);
-                                                        }
-                                                    }
-                                                }
-
-                                                match response_builder.body(Body::from(bytes)) {
-                                                    Ok(response) => {
-                                                        dual_info!(
-                                                            "Chat request completed successfully - request_id: {}",
-                                                            request_id
-                                                        );
-                                                        Ok(response)
-                                                    }
-                                                    Err(e) => {
-                                                        let err_msg = format!(
-                                                            "Failed to create the response: {e}"
-                                                        );
-                                                        dual_error!(
-                                                            "{} - request_id: {}",
-                                                            err_msg,
-                                                            request_id
-                                                        );
-                                                        Err(ServerError::Operation(err_msg))
-                                                    }
-                                                }
-                                            }
-                                            false => {
-                                                // create an assistant message
-                                                let tool_completion_message =
-                                                    ChatCompletionRequestMessage::Tool(
-                                                        ChatCompletionToolMessage::new(
-                                                            &text.text, None,
-                                                        ),
-                                                    );
-
-                                                // append assistant message with tool call to request messages
-                                                let assistant_completion_message =
-                                                    ChatCompletionRequestMessage::Assistant(
-                                                        ChatCompletionAssistantMessage::new(
-                                                            None,
-                                                            None,
-                                                            Some(tool_calls.to_vec()),
-                                                        ),
-                                                    );
-                                                request.messages.push(assistant_completion_message);
-                                                // append tool message with tool result to request messages
-                                                request.messages.push(tool_completion_message);
-
-                                                // disable tool choice
-                                                if request.tool_choice.is_some() {
-                                                    request.tool_choice = Some(ToolChoice::None);
-                                                }
-
-                                                // Create a request client that can be cancelled
-                                                let ds_request = if let Some(api_key) =
-                                                    &chat_server.api_key
-                                                    && !api_key.is_empty()
-                                                {
-                                                    reqwest::Client::new()
-                                                        .post(&chat_service_url)
-                                                        .header(CONTENT_TYPE, "application/json")
-                                                        .header(AUTHORIZATION, api_key)
-                                                        .json(&request)
-                                                } else if headers.contains_key("authorization") {
-                                                    let authorization = headers
-                                                        .get("authorization")
-                                                        .unwrap()
-                                                        .to_str()
-                                                        .unwrap()
-                                                        .to_string();
-
-                                                    reqwest::Client::new()
-                                                        .post(&chat_service_url)
-                                                        .header(CONTENT_TYPE, "application/json")
-                                                        .header(AUTHORIZATION, authorization)
-                                                        .json(&request)
-                                                } else {
-                                                    reqwest::Client::new()
-                                                        .post(&chat_service_url)
-                                                        .header(CONTENT_TYPE, "application/json")
-                                                        .json(&request)
-                                                };
-
-                                                dual_info!(
-                                                    "Request to downstream chat server - request_id: {}\n{}",
-                                                    request_id,
-                                                    serde_json::to_string_pretty(&request).unwrap()
-                                                );
-
-                                                // Use select! to handle request cancellation
-                                                let ds_response = select! {
-                                                    response = ds_request.send() => {
-                                                        response.map_err(|e| {
-                                                            let err_msg = format!(
-                                                                "Failed to forward the request to the downstream server: {e}"
-                                                            );
-                                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-                                                            ServerError::Operation(err_msg)
-                                                        })?
-                                                    }
-                                                    _ = cancel_token.cancelled() => {
-                                                        let warn_msg = "Request was cancelled by client";
-                                                        dual_warn!("{} - request_id: {}", warn_msg, request_id);
-                                                        return Err(ServerError::Operation(warn_msg.to_string()));
-                                                    }
-                                                };
-
-                                                let status = ds_response.status();
-                                                let headers = ds_response.headers().clone();
-
-                                                // Handle response body reading with cancellation
-                                                let bytes = select! {
-                                                    bytes = ds_response.bytes() => {
-                                                        bytes.map_err(|e| {
-                                                            let err_msg = format!("Failed to get the full response as bytes: {e}");
-                                                            dual_error!("{} - request_id: {}", err_msg, request_id);
-                                                            ServerError::Operation(err_msg)
-                                                        })?
-                                                    }
-                                                    _ = cancel_token.cancelled() => {
-                                                        let warn_msg = "Request was cancelled while reading response";
-                                                        dual_warn!("{} - request_id: {}", warn_msg, request_id);
-                                                        return Err(ServerError::Operation(warn_msg.to_string()));
-                                                    }
-                                                };
-
-                                                let mut response_builder =
-                                                    Response::builder().status(status);
-
-                                                // Copy all headers from downstream response
-                                                match request.stream {
-                                                    Some(true) => {
-                                                        for (name, value) in headers.iter() {
-                                                            match name.as_str() {
-                                                                "access-control-allow-origin" => {
-                                                                    response_builder =
-                                                                        response_builder
-                                                                            .header(name, value);
-                                                                }
-                                                                "access-control-allow-headers" => {
-                                                                    response_builder =
-                                                                        response_builder
-                                                                            .header(name, value);
-                                                                }
-                                                                "access-control-allow-methods" => {
-                                                                    response_builder =
-                                                                        response_builder
-                                                                            .header(name, value);
-                                                                }
-                                                                "content-type" => {
-                                                                    response_builder =
-                                                                        response_builder
-                                                                            .header(name, value);
-                                                                }
-                                                                "cache-control" => {
-                                                                    response_builder =
-                                                                        response_builder
-                                                                            .header(name, value);
-                                                                }
-                                                                "connection" => {
-                                                                    response_builder =
-                                                                        response_builder
-                                                                            .header(name, value);
-                                                                }
-                                                                "user" => {
-                                                                    response_builder =
-                                                                        response_builder
-                                                                            .header(name, value);
-                                                                }
-                                                                "date" => {
-                                                                    response_builder =
-                                                                        response_builder
-                                                                            .header(name, value);
-                                                                }
-                                                                _ => {
-                                                                    dual_debug!(
-                                                                        "ignore header: {} - {}",
-                                                                        name,
-                                                                        value.to_str().unwrap()
-                                                                    );
-                                                                }
-                                                            }
-                                                        }
-                                                    }
-                                                    Some(false) | None => {
-                                                        for (name, value) in headers.iter() {
-                                                            dual_debug!(
-                                                                "{}: {}",
-                                                                name,
-                                                                value.to_str().unwrap()
-                                                            );
-                                                            response_builder = response_builder
-                                                                .header(name, value);
-                                                        }
-                                                    }
-                                                }
-
-                                                match response_builder.body(Body::from(bytes)) {
-                                                    Ok(response) => {
-                                                        dual_info!(
-                                                            "Chat request completed successfully - request_id: {}",
-                                                            request_id
-                                                        );
-                                                        Ok(response)
-                                                    }
-                                                    Err(e) => {
-                                                        let err_msg = format!(
-                                                            "Failed to create the response: {e}"
-                                                        );
-                                                        dual_error!(
-                                                            "{} - request_id: {}",
-                                                            err_msg,
-                                                            request_id
-                                                        );
-                                                        Err(ServerError::Operation(err_msg))
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    _ => {
-                                        let err_msg =
-                                            "Only text content is supported for tool call results";
-                                        dual_error!("{} - request_id: {}", err_msg, request_id);
-                                        Err(ServerError::Operation(err_msg.to_string()))
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    _ => {
-                        let err_msg = format!("Failed to call the tool: {tool_name}");
-                        dual_error!("{} - request_id: {}", err_msg, request_id);
-                        Err(ServerError::Operation(err_msg))
-                    }
-                }
-            } else {
-                let err_msg = "Empty MCP CLIENTS";
-                dual_error!("{} - request_id: {}", err_msg, request_id);
-                Err(ServerError::Operation(err_msg.to_string()))
-            }
-        } else {
-            let err_msg = format!("Failed to find the MCP client with tool name: {tool_name}");
-            dual_error!("{} - request_id: {}", err_msg, request_id);
-            Err(ServerError::McpNotFoundClient)
-        }
-    } else {
-        let err_msg = "Empty MCP TOOLS";
-        dual_error!("{} - request_id: {}", err_msg, request_id);
-        Err(ServerError::Operation(err_msg.to_string()))
-    }
-}
-
 // Generate a unique chat id for the chat completion request
 fn gen_chat_id() -> String {
     format!("chatcmpl-{}", uuid::Uuid::new_v4())
@@ -2158,14 +1595,14 @@ async fn handle_non_stream_response(
 
     // Read the response body
     let bytes = read_response_bytes(response, request_id, cancel_token.clone()).await?;
+    let chat_completion = parse_chat_completion(&bytes, request_id)?;
 
     // Check if the response requires tool call
-    let requires_tool_call = parse_requires_tool_call_header(&response_headers);
+    let requires_tool_call = !chat_completion.choices[0].message.tool_calls.is_empty();
 
     if requires_tool_call {
-        // Handle tool call in non-stream mode
-        handle_tool_call_non_stream(
-            bytes,
+        call_mcp_server(
+            chat_completion.choices[0].message.tool_calls.as_slice(),
             request,
             headers,
             chat_server,
@@ -2203,41 +1640,6 @@ async fn handle_tool_call_stream(
     let tool_calls = extract_tool_calls_from_stream(response, request_id).await?;
     call_mcp_server(
         tool_calls.as_slice(),
-        request,
-        headers,
-        chat_server,
-        request_id,
-        cancel_token,
-    )
-    .await
-}
-
-/// Handle tool calls in non-streaming responses
-///
-/// Parse tool call information from response data, call MCP server to execute tools,
-/// then add tool execution results to the request and re-send the request.
-///
-/// # Arguments
-///
-/// * `bytes` - Response body data
-/// * `request` - Chat request, will be modified to include tool call results
-/// * `headers` - HTTP request headers
-/// * `chat_server` - Chat server information
-/// * `request_id` - Request ID
-/// * `cancel_token` - Cancellation token
-async fn handle_tool_call_non_stream(
-    bytes: Bytes,
-    request: &mut ChatCompletionRequest,
-    headers: &HeaderMap,
-    chat_server: &TargetServerInfo,
-    request_id: &str,
-    cancel_token: CancellationToken,
-) -> ServerResult<axum::response::Response> {
-    let chat_completion = parse_chat_completion(&bytes, request_id)?;
-    let assistant_message = &chat_completion.choices[0].message;
-
-    call_mcp_server(
-        assistant_message.tool_calls.as_slice(),
         request,
         headers,
         chat_server,
@@ -2286,7 +1688,7 @@ async fn handle_normal_stream(
     let response_builder = Response::builder().status(status);
 
     // copy the response headers
-    let response_builder = copy_response_headers(response_builder, &response_headers, true);
+    let response_builder = copy_response_headers(response_builder, &response_headers);
 
     match response_builder.body(Body::from(bytes)) {
         Ok(response) => {
@@ -2347,10 +1749,10 @@ fn build_response(
     request_id: &str,
 ) -> ServerResult<axum::response::Response> {
     // build the response builder
-    let response_builder = Response::builder().status(status);
+    let mut response_builder = Response::builder().status(status);
 
     // copy the response headers
-    let response_builder = copy_response_headers(response_builder, &response_headers, false);
+    response_builder = copy_response_headers(response_builder, &response_headers);
 
     match response_builder.body(Body::from(bytes)) {
         Ok(response) => {
@@ -2358,6 +1760,7 @@ fn build_response(
                 "Chat request completed successfully - request_id: {}",
                 request_id
             );
+
             Ok(response)
         }
         Err(e) => {
@@ -2444,45 +1847,539 @@ fn parse_chat_completion(bytes: &Bytes, request_id: &str) -> ServerResult<ChatCo
 /// Copy HTTP response headers to response builder
 ///
 /// Selectively copy response headers based on whether it's a streaming response.
-/// In streaming mode, only copy allowed headers; in non-streaming mode, copy all headers.
 ///
 /// # Arguments
 ///
 /// * `response_builder` - Response builder
 /// * `headers` - Source response headers
-/// * `is_stream` - Whether it's a streaming response
 fn copy_response_headers(
     response_builder: axum::http::response::Builder,
     headers: &HeaderMap,
-    is_stream: bool,
 ) -> axum::http::response::Builder {
-    let allowed_headers = if is_stream {
-        vec![
-            "access-control-allow-origin",
-            "access-control-allow-headers",
-            "access-control-allow-methods",
-            "content-type",
-            "cache-control",
-            "connection",
-            "user",
-            "date",
-        ]
-    } else {
-        vec![] // Copy all headers in non-stream mode
-    };
+    let allowed_headers = [
+        "access-control-allow-origin",
+        "access-control-allow-headers",
+        "access-control-allow-methods",
+        "content-type",
+        "content-length",
+        "cache-control",
+        "connection",
+        "user",
+        "date",
+        "requires-tool-call",
+    ];
 
     headers
         .iter()
         .fold(response_builder, |builder, (name, value)| {
-            if is_stream {
-                if allowed_headers.contains(&name.as_str()) {
-                    builder.header(name, value)
-                } else {
-                    dual_debug!("ignore header: {} - {}", name, value.to_str().unwrap());
-                    builder
-                }
-            } else {
+            if allowed_headers.contains(&name.as_str()) {
+                dual_debug!("copy header: {} - {}", name, value.to_str().unwrap());
                 builder.header(name, value)
+            } else {
+                dual_debug!("ignore header: {} - {}", name, value.to_str().unwrap());
+                builder
             }
         })
+}
+
+async fn call_mcp_server(
+    tool_calls: &[ToolCall],
+    request: &mut ChatCompletionRequest,
+    headers: &HeaderMap,
+    chat_server: &TargetServerInfo,
+    request_id: impl AsRef<str>,
+    cancel_token: CancellationToken,
+) -> ServerResult<axum::response::Response> {
+    let request_id = request_id.as_ref();
+    // let chat_service_url = chat_service_url.as_ref();
+    let chat_service_url = format!("{}/chat/completions", chat_server.url.trim_end_matches('/'));
+
+    dual_debug!(
+        "tool calls:\n{}",
+        serde_json::to_string_pretty(tool_calls).unwrap()
+    );
+    dual_debug!(
+        "first tool call:\n{}",
+        serde_json::to_string_pretty(&tool_calls[0]).unwrap()
+    );
+
+    let tool_call = &tool_calls[0];
+    let tool_call_id = tool_call.id.as_str();
+    let tool_name = tool_call.function.name.as_str();
+    let tool_args = &tool_call.function.arguments;
+
+    dual_debug!(
+        "tool name: {}, tool args: {} - request_id: {}",
+        tool_name,
+        tool_args,
+        request_id
+    );
+
+    // convert the func_args to a json object
+    let arguments =
+        serde_json::from_str::<serde_json::Map<String, serde_json::Value>>(tool_args).ok();
+
+    // find mcp client by tool name
+    if let Some(mcp_tools) = MCP_TOOLS.get() {
+        let tools = mcp_tools.read().await;
+        dual_debug!("mcp_tools: {:?}", mcp_tools);
+
+        // look up the tool name in MCP_TOOLS
+        if let Some(mcp_client_name) = tools.get(tool_name) {
+            if let Some(services) = MCP_SERVICES.get() {
+                let service_map = services.read().await;
+                // get the mcp client
+                let service = match service_map.get(mcp_client_name) {
+                    Some(mcp_client) => mcp_client,
+                    None => {
+                        let err_msg = format!("Tool not found: {tool_name}");
+                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                        return Err(ServerError::Operation(err_msg.to_string()));
+                    }
+                };
+
+                // get the server name from the peer info
+                let raw_server_name = match service.read().await.raw.peer_info() {
+                    Some(peer_info) => {
+                        let server_name = peer_info.server_info.name.clone();
+                        dual_debug!(
+                            "server name from peer info: {} - request_id: {}",
+                            server_name,
+                            request_id
+                        );
+                        server_name
+                    }
+                    None => {
+                        dual_warn!(
+                            "Failed to get peer info from the MCP client: {mcp_client_name}"
+                        );
+
+                        String::new()
+                    }
+                };
+
+                dual_info!(
+                    "Call `{}::{}` mcp tool - request_id: {}",
+                    raw_server_name,
+                    tool_name,
+                    request_id
+                );
+
+                // call a tool
+                let request_param = CallToolRequestParam {
+                    name: tool_name.to_string().into(),
+                    arguments,
+                };
+                let res = service
+                    .read()
+                    .await
+                    .raw
+                    .call_tool(request_param)
+                    .await
+                    .map_err(|e| {
+                        dual_error!("Failed to call the tool: {}", e);
+                        ServerError::Operation(e.to_string())
+                    })?;
+                dual_debug!("{}", serde_json::to_string_pretty(&res).unwrap());
+
+                match res.is_error {
+                    Some(false) => {
+                        match res.content.is_empty() {
+                            true => {
+                                let err_msg = "The mcp tool result is empty";
+                                dual_error!("{} - request_id: {}", err_msg, request_id);
+                                Err(ServerError::McpEmptyContent)
+                            }
+                            false => {
+                                let content = &res.content[0];
+                                match &content.raw {
+                                    RawContent::Text(text) => {
+                                        dual_info!("The mcp tool call result: {:#?}", text.text);
+
+                                        match SEARCH_MCP_SERVER_NAMES
+                                            .contains(&raw_server_name.as_str())
+                                        {
+                                            true => {
+                                                // get the fallback message from the mcp client
+                                                let fallback = if service
+                                                    .read()
+                                                    .await
+                                                    .has_fallback_message()
+                                                {
+                                                    service
+                                                        .read()
+                                                        .await
+                                                        .fallback_message
+                                                        .clone()
+                                                        .unwrap()
+                                                } else {
+                                                    DEFAULT_SEARCH_FALLBACK_MESSAGE.to_string()
+                                                };
+
+                                                dual_debug!(
+                                                    "fallback message: {} - request_id: {}",
+                                                    fallback,
+                                                    request_id
+                                                );
+
+                                                // format the content
+                                                let content = format!(
+                                                    "Please answer the question based on the information between **---BEGIN CONTEXT---** and **---END CONTEXT---**. Do not use any external knowledge. If the information between **---BEGIN CONTEXT---** and **---END CONTEXT---** is empty, please respond with `{fallback}`. Note that DO NOT use any tools if provided.\n\n---BEGIN CONTEXT---\n\n{context}\n\n---END CONTEXT---",
+                                                    fallback = fallback,
+                                                    context = &text.text,
+                                                );
+
+                                                // append assistant message with tool call to request messages
+                                                let assistant_completion_message =
+                                                    ChatCompletionRequestMessage::Assistant(
+                                                        ChatCompletionAssistantMessage::new(
+                                                            None,
+                                                            None,
+                                                            Some(tool_calls.to_vec()),
+                                                        ),
+                                                    );
+                                                request.messages.push(assistant_completion_message);
+
+                                                // append tool message with tool result to request messages
+                                                let tool_completion_message =
+                                                    ChatCompletionRequestMessage::Tool(
+                                                        ChatCompletionToolMessage::new(
+                                                            &content,
+                                                            Some(tool_call_id.to_string()),
+                                                        ),
+                                                    );
+                                                request.messages.push(tool_completion_message);
+
+                                                // disable tool choice
+                                                if request.tool_choice.is_some() {
+                                                    request.tool_choice = Some(ToolChoice::None);
+                                                }
+
+                                                // Create a request client that can be cancelled
+                                                let ds_request = if let Some(api_key) =
+                                                    &chat_server.api_key
+                                                    && !api_key.is_empty()
+                                                {
+                                                    reqwest::Client::new()
+                                                        .post(&chat_service_url)
+                                                        .header(CONTENT_TYPE, "application/json")
+                                                        .header(AUTHORIZATION, api_key)
+                                                        .json(&request)
+                                                } else if headers.contains_key("authorization") {
+                                                    let authorization = headers
+                                                        .get("authorization")
+                                                        .unwrap()
+                                                        .to_str()
+                                                        .unwrap()
+                                                        .to_string();
+
+                                                    reqwest::Client::new()
+                                                        .post(&chat_service_url)
+                                                        .header(CONTENT_TYPE, "application/json")
+                                                        .header(AUTHORIZATION, authorization)
+                                                        .json(&request)
+                                                } else {
+                                                    reqwest::Client::new()
+                                                        .post(&chat_service_url)
+                                                        .header(CONTENT_TYPE, "application/json")
+                                                        .json(&request)
+                                                };
+
+                                                dual_info!(
+                                                    "Request to downstream chat server - request_id: {}\n{}",
+                                                    request_id,
+                                                    serde_json::to_string_pretty(&request).unwrap()
+                                                );
+
+                                                // Use select! to handle request cancellation
+                                                let ds_response = select! {
+                                                    response = ds_request.send() => {
+                                                        response.map_err(|e| {
+                                                            let err_msg = format!(
+                                                                "Failed to forward the request to the downstream server: {e}"
+                                                            );
+                                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                                                            ServerError::Operation(err_msg)
+                                                        })?
+                                                    }
+                                                    _ = cancel_token.cancelled() => {
+                                                        let warn_msg = "Request was cancelled by client";
+                                                        dual_warn!("{} - request_id: {}", warn_msg, request_id);
+                                                        return Err(ServerError::Operation(warn_msg.to_string()));
+                                                    }
+                                                };
+
+                                                let status = ds_response.status();
+                                                let headers = ds_response.headers().clone();
+
+                                                // Handle response body reading with cancellation
+                                                let bytes = select! {
+                                                    bytes = ds_response.bytes() => {
+                                                        bytes.map_err(|e| {
+                                                            let err_msg = format!("Failed to get the full response as bytes: {e}");
+                                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                                                            ServerError::Operation(err_msg)
+                                                        })?
+                                                    }
+                                                    _ = cancel_token.cancelled() => {
+                                                        let warn_msg = "Request was cancelled while reading response";
+                                                        dual_warn!("{} - request_id: {}", warn_msg, request_id);
+                                                        return Err(ServerError::Operation(warn_msg.to_string()));
+                                                    }
+                                                };
+
+                                                let mut response_builder =
+                                                    Response::builder().status(status);
+
+                                                // Copy all headers from downstream response
+                                                match request.stream {
+                                                    Some(true) => {
+                                                        for (name, value) in headers.iter() {
+                                                            match name.as_str() {
+                                                                "access-control-allow-origin" => {
+                                                                    response_builder =
+                                                                        response_builder
+                                                                            .header(name, value);
+                                                                }
+                                                                "access-control-allow-headers" => {
+                                                                    response_builder =
+                                                                        response_builder
+                                                                            .header(name, value);
+                                                                }
+                                                                "access-control-allow-methods" => {
+                                                                    response_builder =
+                                                                        response_builder
+                                                                            .header(name, value);
+                                                                }
+                                                                "content-type" => {
+                                                                    response_builder =
+                                                                        response_builder
+                                                                            .header(name, value);
+                                                                }
+                                                                "cache-control" => {
+                                                                    response_builder =
+                                                                        response_builder
+                                                                            .header(name, value);
+                                                                }
+                                                                "connection" => {
+                                                                    response_builder =
+                                                                        response_builder
+                                                                            .header(name, value);
+                                                                }
+                                                                "user" => {
+                                                                    response_builder =
+                                                                        response_builder
+                                                                            .header(name, value);
+                                                                }
+                                                                "date" => {
+                                                                    response_builder =
+                                                                        response_builder
+                                                                            .header(name, value);
+                                                                }
+                                                                _ => {
+                                                                    dual_debug!(
+                                                                        "ignore header: {} - {}",
+                                                                        name,
+                                                                        value.to_str().unwrap()
+                                                                    );
+                                                                }
+                                                            }
+                                                        }
+                                                    }
+                                                    Some(false) | None => {
+                                                        for (name, value) in headers.iter() {
+                                                            dual_debug!(
+                                                                "{}: {}",
+                                                                name,
+                                                                value.to_str().unwrap()
+                                                            );
+                                                            response_builder = response_builder
+                                                                .header(name, value);
+                                                        }
+                                                    }
+                                                }
+
+                                                match response_builder.body(Body::from(bytes)) {
+                                                    Ok(response) => {
+                                                        dual_info!(
+                                                            "Chat request completed successfully - request_id: {}",
+                                                            request_id
+                                                        );
+                                                        Ok(response)
+                                                    }
+                                                    Err(e) => {
+                                                        let err_msg = format!(
+                                                            "Failed to create the response: {e}"
+                                                        );
+                                                        dual_error!(
+                                                            "{} - request_id: {}",
+                                                            err_msg,
+                                                            request_id
+                                                        );
+                                                        Err(ServerError::Operation(err_msg))
+                                                    }
+                                                }
+                                            }
+                                            false => {
+                                                // create an assistant message
+                                                let tool_completion_message =
+                                                    ChatCompletionRequestMessage::Tool(
+                                                        ChatCompletionToolMessage::new(
+                                                            &text.text,
+                                                            Some(tool_call_id.to_string()),
+                                                        ),
+                                                    );
+
+                                                // append assistant message with tool call to request messages
+                                                let assistant_completion_message =
+                                                    ChatCompletionRequestMessage::Assistant(
+                                                        ChatCompletionAssistantMessage::new(
+                                                            None,
+                                                            None,
+                                                            Some(tool_calls.to_vec()),
+                                                        ),
+                                                    );
+                                                request.messages.push(assistant_completion_message);
+                                                // append tool message with tool result to request messages
+                                                request.messages.push(tool_completion_message);
+
+                                                // disable tool choice
+                                                if request.tool_choice.is_some() {
+                                                    request.tool_choice = Some(ToolChoice::None);
+                                                }
+
+                                                // Create a request client that can be cancelled
+                                                let ds_request = if let Some(api_key) =
+                                                    &chat_server.api_key
+                                                    && !api_key.is_empty()
+                                                {
+                                                    reqwest::Client::new()
+                                                        .post(&chat_service_url)
+                                                        .header(CONTENT_TYPE, "application/json")
+                                                        .header(AUTHORIZATION, api_key)
+                                                        .json(&request)
+                                                } else if headers.contains_key("authorization") {
+                                                    let authorization = headers
+                                                        .get("authorization")
+                                                        .unwrap()
+                                                        .to_str()
+                                                        .unwrap()
+                                                        .to_string();
+
+                                                    reqwest::Client::new()
+                                                        .post(&chat_service_url)
+                                                        .header(CONTENT_TYPE, "application/json")
+                                                        .header(AUTHORIZATION, authorization)
+                                                        .json(&request)
+                                                } else {
+                                                    reqwest::Client::new()
+                                                        .post(&chat_service_url)
+                                                        .header(CONTENT_TYPE, "application/json")
+                                                        .json(&request)
+                                                };
+
+                                                dual_info!(
+                                                    "Request to downstream chat server - request_id: {}\n{}",
+                                                    request_id,
+                                                    serde_json::to_string_pretty(&request).unwrap()
+                                                );
+
+                                                // Use select! to handle request cancellation
+                                                let ds_response = select! {
+                                                    response = ds_request.send() => {
+                                                        response.map_err(|e| {
+                                                            let err_msg = format!(
+                                                                "Failed to forward the request to the downstream server: {e}"
+                                                            );
+                                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                                                            ServerError::Operation(err_msg)
+                                                        })?
+                                                    }
+                                                    _ = cancel_token.cancelled() => {
+                                                        let warn_msg = "Request was cancelled by client";
+                                                        dual_warn!("{} - request_id: {}", warn_msg, request_id);
+                                                        return Err(ServerError::Operation(warn_msg.to_string()));
+                                                    }
+                                                };
+
+                                                let status = ds_response.status();
+                                                let mut response_builder =
+                                                    Response::builder().status(status);
+
+                                                // copy the response headers
+                                                response_builder = copy_response_headers(
+                                                    response_builder,
+                                                    ds_response.headers(),
+                                                );
+
+                                                // Handle response body reading with cancellation
+                                                let bytes = select! {
+                                                    bytes = ds_response.bytes() => {
+                                                        bytes.map_err(|e| {
+                                                            let err_msg = format!("Failed to get the full response as bytes: {e}");
+                                                            dual_error!("{} - request_id: {}", err_msg, request_id);
+                                                            ServerError::Operation(err_msg)
+                                                        })?
+                                                    }
+                                                    _ = cancel_token.cancelled() => {
+                                                        let warn_msg = "Request was cancelled while reading response";
+                                                        dual_warn!("{} - request_id: {}", warn_msg, request_id);
+                                                        return Err(ServerError::Operation(warn_msg.to_string()));
+                                                    }
+                                                };
+
+                                                match response_builder.body(Body::from(bytes)) {
+                                                    Ok(response) => {
+                                                        dual_info!(
+                                                            "Chat request completed successfully - request_id: {}",
+                                                            request_id
+                                                        );
+                                                        Ok(response)
+                                                    }
+                                                    Err(e) => {
+                                                        let err_msg = format!(
+                                                            "Failed to create the response: {e}"
+                                                        );
+                                                        dual_error!(
+                                                            "{} - request_id: {}",
+                                                            err_msg,
+                                                            request_id
+                                                        );
+                                                        Err(ServerError::Operation(err_msg))
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    _ => {
+                                        let err_msg =
+                                            "Only text content is supported for tool call results";
+                                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                                        Err(ServerError::Operation(err_msg.to_string()))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    _ => {
+                        let err_msg = format!("Failed to call the tool: {tool_name}");
+                        dual_error!("{} - request_id: {}", err_msg, request_id);
+                        Err(ServerError::Operation(err_msg))
+                    }
+                }
+            } else {
+                let err_msg = "Empty MCP CLIENTS";
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                Err(ServerError::Operation(err_msg.to_string()))
+            }
+        } else {
+            let err_msg = format!("Failed to find the MCP client with tool name: {tool_name}");
+            dual_error!("{} - request_id: {}", err_msg, request_id);
+            Err(ServerError::McpNotFoundClient)
+        }
+    } else {
+        let err_msg = "Empty MCP TOOLS";
+        dual_error!("{} - request_id: {}", err_msg, request_id);
+        Err(ServerError::Operation(err_msg.to_string()))
+    }
 }
