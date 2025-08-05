@@ -1524,25 +1524,40 @@ async fn handle_stream_response(
     cancel_token: CancellationToken,
 ) -> ServerResult<axum::response::Response> {
     let status = response.status();
-    let response_headers = response.headers().clone();
 
-    // Check if the response requires tool call
-    let requires_tool_call = parse_requires_tool_call_header(&response_headers);
+    // check the status code
+    match status {
+        StatusCode::OK => {
+            let response_headers = response.headers().clone();
 
-    if requires_tool_call {
-        // Handle tool call in stream mode
-        handle_tool_call_stream(
-            response,
-            request,
-            headers,
-            chat_server,
-            request_id,
-            cancel_token,
-        )
-        .await
-    } else {
-        // Handle normal response in stream mode
-        handle_normal_stream(response, status, response_headers, request_id, cancel_token).await
+            // Check if the response requires tool call
+            let requires_tool_call = parse_requires_tool_call_header(&response_headers);
+
+            if requires_tool_call {
+                // Handle tool call in stream mode
+                handle_tool_call_stream(
+                    response,
+                    request,
+                    headers,
+                    chat_server,
+                    request_id,
+                    cancel_token,
+                )
+                .await
+            } else {
+                // Handle normal response in stream mode
+                handle_normal_stream(response, status, response_headers, request_id, cancel_token)
+                    .await
+            }
+        }
+        _ => {
+            let err = response.error_for_status().unwrap_err();
+            let err_msg = format!("{err}");
+
+            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+            return Err(ServerError::Operation(err_msg));
+        }
     }
 }
 
@@ -1591,28 +1606,42 @@ async fn handle_non_stream_response(
     cancel_token: CancellationToken,
 ) -> ServerResult<axum::response::Response> {
     let status = response.status();
-    let response_headers = response.headers().clone();
 
-    // Read the response body
-    let bytes = read_response_bytes(response, request_id, cancel_token.clone()).await?;
-    let chat_completion = parse_chat_completion(&bytes, request_id)?;
+    // check the status code
+    match status {
+        StatusCode::OK => {
+            let response_headers = response.headers().clone();
 
-    // Check if the response requires tool call
-    let requires_tool_call = !chat_completion.choices[0].message.tool_calls.is_empty();
+            // Read the response body
+            let bytes = read_response_bytes(response, request_id, cancel_token.clone()).await?;
+            let chat_completion = parse_chat_completion(&bytes, request_id)?;
 
-    if requires_tool_call {
-        call_mcp_server(
-            chat_completion.choices[0].message.tool_calls.as_slice(),
-            request,
-            headers,
-            chat_server,
-            request_id,
-            cancel_token,
-        )
-        .await
-    } else {
-        // Handle normal response in non-stream mode
-        build_response(status, response_headers, bytes, request_id)
+            // Check if the response requires tool call
+            let requires_tool_call = !chat_completion.choices[0].message.tool_calls.is_empty();
+
+            if requires_tool_call {
+                call_mcp_server(
+                    chat_completion.choices[0].message.tool_calls.as_slice(),
+                    request,
+                    headers,
+                    chat_server,
+                    request_id,
+                    cancel_token,
+                )
+                .await
+            } else {
+                // Handle normal response in non-stream mode
+                build_response(status, response_headers, bytes, request_id)
+            }
+        }
+        _ => {
+            let err = response.error_for_status().unwrap_err();
+            let err_msg = format!("{err}");
+
+            dual_error!("{} - request_id: {}", err_msg, request_id);
+
+            return Err(ServerError::Operation(err_msg));
+        }
     }
 }
 
@@ -1835,12 +1864,19 @@ async fn extract_tool_calls_from_stream(
 
 fn parse_chat_completion(bytes: &Bytes, request_id: &str) -> ServerResult<ChatCompletionObject> {
     serde_json::from_slice(bytes).map_err(|e| {
+        let value = serde_json::from_slice::<serde_json::Value>(bytes).unwrap();
+
         dual_error!(
-            "Failed to parse the response: {} - request_id: {}",
-            e,
-            request_id
+            "The response body received from the downstream server - request_id: {}:\n{}",
+            request_id,
+            serde_json::to_string_pretty(&value).unwrap()
         );
-        ServerError::Operation(e.to_string())
+
+        let err_msg = format!("Failed to parse the response: {e}");
+
+        dual_error!("{} - request_id: {}", err_msg, request_id);
+
+        ServerError::Operation(err_msg)
     })
 }
 
