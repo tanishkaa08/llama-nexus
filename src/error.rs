@@ -1,4 +1,9 @@
-use axum::{Json, http::StatusCode, response::IntoResponse};
+use axum::{
+    Json,
+    http::StatusCode,
+    response::{IntoResponse, Response},
+};
+use serde::Serialize;
 use thiserror::Error;
 
 pub type ServerResult<T> = std::result::Result<T, ServerError>;
@@ -23,23 +28,84 @@ pub enum ServerError {
     McpOperation(String),
 }
 impl IntoResponse for ServerError {
-    fn into_response(self) -> axum::response::Response {
-        let (status, err_response) = match &self {
-            ServerError::Operation(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-            ServerError::NotFoundServer(e) => (StatusCode::NOT_FOUND, e.to_string()),
-            ServerError::InvalidServerKind(e) => (StatusCode::BAD_REQUEST, e.to_string()),
-            ServerError::FailedToLoadConfig(e) => (StatusCode::BAD_REQUEST, e.to_string()),
+    fn into_response(self) -> Response {
+        let (status, message, error_type, param, code) = match &self {
+            ServerError::Operation(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                e.clone(),
+                "internal_error".into(),
+                None,
+                Some("operation_failed".into()),
+            ),
+            ServerError::NotFoundServer(kind) => (
+                StatusCode::NOT_FOUND,
+                format!(
+                    "Not found available server. Please register a(n) {kind} server via the `/admin/servers/register` endpoint."
+                ),
+                "not_found".into(),
+                Some("server_kind".into()),
+                Some("not_found_server".into()),
+            ),
+            ServerError::InvalidServerKind(kind) => (
+                StatusCode::BAD_REQUEST,
+                format!("Invalid server kind: {kind}"),
+                "invalid_request_error".into(),
+                Some("server_kind".into()),
+                Some("invalid_server_kind".into()),
+            ),
+            ServerError::FailedToLoadConfig(e) => (
+                StatusCode::BAD_REQUEST,
+                format!("Failed to load config: {e}"),
+                "invalid_request_error".into(),
+                Some("config".into()),
+                Some("failed_to_load_config".into()),
+            ),
             ServerError::McpEmptyContent => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Mcp server returned empty content".to_string(),
+                "Mcp server returned empty content".into(),
+                "internal_error".into(),
+                None,
+                Some("mcp_empty".into()),
             ),
             ServerError::McpNotFoundClient => (
                 StatusCode::INTERNAL_SERVER_ERROR,
-                "Mcp server not found".to_string(),
+                "Mcp server not found".into(),
+                "internal_error".into(),
+                None,
+                Some("mcp_not_found".into()),
             ),
-            ServerError::McpOperation(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+            ServerError::McpOperation(e) => (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Mcp operation failed: {e}"),
+                "internal_error".into(),
+                None,
+                Some("mcp_operation_failed".into()),
+            ),
         };
 
-        (status, Json(err_response)).into_response()
+        let body = OpenAIErrorResponse {
+            error: OpenAIError {
+                message,
+                error_type,
+                param,
+                code,
+            },
+        };
+
+        (status, Json(body)).into_response()
     }
+}
+
+#[derive(Serialize)]
+struct OpenAIErrorResponse {
+    error: OpenAIError,
+}
+
+#[derive(Serialize)]
+struct OpenAIError {
+    message: String,
+    #[serde(rename = "type")]
+    error_type: String,
+    param: Option<String>,
+    code: Option<String>,
 }
