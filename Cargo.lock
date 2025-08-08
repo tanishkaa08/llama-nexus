@@ -412,9 +412,9 @@ checksum = "613afe47fcd5fac7ccf1db93babcb082c5994d996f20b8b159f2ad1658eb5724"
 
 [[package]]
 name = "chat-prompts"
-version = "0.32.1"
+version = "0.33.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cebee7fbe623e95ef6e01f953c1816b5e10987a3e8dcc4c966e6367362b5521d"
+checksum = "ef2990e5522a20a6858e9c7e1d5e3f77de11908b72ead415820721564d1a661a"
 dependencies = [
  "base64 0.22.1",
  "clap",
@@ -741,9 +741,9 @@ dependencies = [
 
 [[package]]
 name = "endpoints"
-version = "0.33.0"
+version = "0.34.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2a6d20ed551bd4f3493b4b1f583b26b3a4237dd2b63ff99bd0beafc65a78ce33"
+checksum = "baed8a5313e11bf93218a978954437f4b8cfb889e48a2b096817156bfdd5eff3"
 dependencies = [
  "indexmap",
  "serde",
