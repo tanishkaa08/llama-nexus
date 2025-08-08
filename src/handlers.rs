@@ -202,7 +202,7 @@ pub(crate) async fn embeddings_handler(
     let embeddings_servers = match servers.get(&ServerKind::embeddings) {
         Some(servers) => servers,
         None => {
-            let err_msg = "No embeddings server available";
+            let err_msg = "No embedding server available. Please register a embedding server via the `/admin/servers/register` endpoint.";
             dual_error!("{} - request_id: {}", err_msg, request_id);
             return Err(ServerError::Operation(err_msg.to_string()));
         }
@@ -1321,7 +1321,7 @@ async fn get_chat_server(
     let chat_servers = match servers.get(&ServerKind::chat) {
         Some(servers) => servers,
         None => {
-            let err_msg = "No chat server available";
+            let err_msg = "No chat server available. Please register a chat server via the `/admin/servers/register` endpoint.";
             dual_error!("{} - request_id: {}", err_msg, request_id);
             return Err(ServerError::Operation(err_msg.to_string()));
         }
@@ -1551,12 +1551,20 @@ async fn handle_stream_response(
             }
         }
         _ => {
-            let err = response.error_for_status().unwrap_err();
-            let err_msg = format!("{err}");
+            // Convert reqwest::Response to axum::Response
+            let status = response.status();
 
+            let err_msg = format!("{status}");
             dual_error!("{} - request_id: {}", err_msg, request_id);
 
-            return Err(ServerError::Operation(err_msg));
+            let headers = response.headers().clone();
+            let bytes = response.bytes().await.map_err(|e| {
+                let err_msg = format!("Failed to get response bytes: {e}");
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                ServerError::Operation(err_msg)
+            })?;
+
+            build_response(status, headers, bytes, request_id)
         }
     }
 }
@@ -1635,12 +1643,20 @@ async fn handle_non_stream_response(
             }
         }
         _ => {
-            let err = response.error_for_status().unwrap_err();
-            let err_msg = format!("{err}");
+            // Convert reqwest::Response to axum::Response
+            let status = response.status();
 
+            let err_msg = format!("{status}");
             dual_error!("{} - request_id: {}", err_msg, request_id);
 
-            return Err(ServerError::Operation(err_msg));
+            let headers = response.headers().clone();
+            let bytes = response.bytes().await.map_err(|e| {
+                let err_msg = format!("Failed to get response bytes: {e}");
+                dual_error!("{} - request_id: {}", err_msg, request_id);
+                ServerError::Operation(err_msg)
+            })?;
+
+            build_response(status, headers, bytes, request_id)
         }
     }
 }
@@ -2081,7 +2097,7 @@ async fn call_mcp_server(
                                                     ChatCompletionRequestMessage::Tool(
                                                         ChatCompletionToolMessage::new(
                                                             &content,
-                                                            Some(tool_call_id.to_string()),
+                                                            tool_call_id,
                                                         ),
                                                     );
                                                 request.messages.push(tool_completion_message);
@@ -2262,7 +2278,7 @@ async fn call_mcp_server(
                                                     ChatCompletionRequestMessage::Tool(
                                                         ChatCompletionToolMessage::new(
                                                             &text.text,
-                                                            Some(tool_call_id.to_string()),
+                                                            tool_call_id,
                                                         ),
                                                     );
 
