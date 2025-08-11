@@ -5,6 +5,7 @@ mod info;
 mod mcp;
 mod server;
 mod utils;
+mod database;
 
 use std::{
     collections::{HashMap, HashSet},
@@ -16,14 +17,19 @@ use std::{
 
 use axum::{
     body::Body,
-    http::{self, HeaderValue, Request},
-    routing::{Router, get, post},
+    extract::{Json, State},
+    http::{self, HeaderMap, HeaderValue, Request, StatusCode},
+    response::IntoResponse,
+    routing::{get, post, Router},
 };
 use clap::Parser;
 use config::Config;
+use database::ChatMessage; 
 use error::{ServerError, ServerResult};
 use futures_util::stream::{self, StreamExt};
 use once_cell::sync::OnceCell;
+use serde::Deserialize;
+use serde_json::json;
 use tokio::{signal, sync::RwLock};
 use tokio_util::sync::CancellationToken;
 use tower_http::{
@@ -41,7 +47,18 @@ use crate::{
 
 // Global health check interval for downstream servers in seconds
 pub(crate) static HEALTH_CHECK_INTERVAL: OnceCell<u64> = OnceCell::new();
-
+/// Defines the structure of the JSON body for a `/responses` request.
+#[derive(Deserialize)]
+pub struct ResponsesRequest {
+    prompt: String,
+}
+/// Application state
+pub(crate) struct AppState {
+    server_group: Arc<RwLock<HashMap<ServerKind, ServerGroup>>>,
+    config: Arc<RwLock<Config>>,
+    server_info: Arc<RwLock<ServerInfo>>,
+    models: Arc<RwLock<HashMap<ServerId, Vec<endpoints::models::Model>>>>,
+}
 #[derive(Debug, Parser)]
 #[command(version = env!("CARGO_PKG_VERSION"), about = "LlamaEdge Nexus - A gateway service for LLM backends")]
 struct Cli {
@@ -64,7 +81,97 @@ struct Cli {
     #[arg(long)]
     log_file: Option<String>,
 }
+/// The handler for the stateful `/responses` API endpoint.
+pub(crate) async fn responses_handler(
+    // This State extractor gets the shared application state.
+    // The existing `chat_completions_handler` uses this, so we add it here
+    // to show how you would access the proxy client later.
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    Json(payload): Json<ResponsesRequest>,
+) -> impl IntoResponse {
+    println!("[INFO] Received request for /responses");
 
+    // 1. Establish a database connection.
+    // Panicking here is acceptable for the pre-test if the DB can't be opened.
+    let db_conn = database::connect().expect("Failed to connect to database");
+
+    // 2. Get or create a session ID.
+    // Check for an "X-Session-ID" header to continue an existing conversation.
+    let session_id = headers
+        .get("X-Session-ID")
+        .and_then(|value| value.to_str().ok())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            // If no header is found, create a new session ID.
+            let new_id = Uuid::new_v4().to_string();
+            println!("[INFO] New conversation started. Session ID: {}", new_id);
+            new_id
+        });
+
+    // 3. Retrieve this session's chat history from the database.
+    let history = database::get_history(&db_conn, &session_id).unwrap_or_else(|err| {
+        println!("[WARN] Could not retrieve history: {}. Starting fresh.", err);
+        Vec::new()
+    });
+
+    // 4. Create the new message from the user's prompt.
+    let user_message = ChatMessage {
+        role: "user".to_string(),
+        content: payload.prompt,
+    };
+
+    // 5. Construct the full message list for the LLM.
+    // This is the core logic of the pre-test: building the complete context.
+    let mut messages_for_llm = vec![];
+    messages_for_llm.push(ChatMessage {
+        role: "system".to_string(),
+        content: "You are a helpful assistant. Maintain conversation context.".to_string(),
+    });
+    messages_for_llm.extend(history.clone());
+    messages_for_llm.push(user_message.clone());
+
+    // --- IMPORTANT: Placeholder for actual LLM call ---
+    // For the pre-test, you don't need a live call to an LLM.
+    // We will simulate the response.
+    // In a real implementation, you would use `state.proxy_client` here,
+    // similar to how `chat_completions_handler` does it.
+    println!("[INFO] Simulating LLM response for session {}", session_id);
+    let assistant_content = if user_message.content.to_lowercase().contains("favorite color") && history.iter().any(|m| m.content.contains("blue")) {
+        "Of course, your favorite color is blue.".to_string()
+    } else {
+        format!("This is a simulated response to: '{}'", user_message.content)
+    };
+    // --- End of Placeholder ---
+
+    let assistant_message = ChatMessage {
+        role: "assistant".to_string(),
+        content: assistant_content,
+    };
+
+    // 6. Save the new user message and the assistant's response to the history.
+    database::save_message(&db_conn, &session_id, &user_message).expect("Failed to save user message");
+    database::save_message(&db_conn, &session_id, &assistant_message).expect("Failed to save assistant message");
+    println!("[INFO] Saved new messages to session {}", session_id);
+
+    // 7. Create the final JSON response to send back to the client.
+    let response_body = json!({
+        "id": format!("cmpl-{}", Uuid::new_v4()),
+        "object": "text_completion",
+        "created": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+        "model": "simulated-model-v1",
+        "session_id": session_id,
+        "choices": [{
+            "index": 0,
+            "message": {
+                "role": assistant_message.role,
+                "content": assistant_message.content,
+            }
+        }]
+    });
+
+    (StatusCode::OK, Json(response_body))
+}
 #[tokio::main]
 async fn main() -> ServerResult<()> {
     // parse the command line arguments
@@ -162,6 +269,9 @@ async fn main() -> ServerResult<()> {
                 "/admin/servers",
                 get(handlers::admin::list_downstream_servers_handler),
             )
+          
+            .route("/responses", post(responses_handler))
+           
             .layer(cors)
             .layer(TraceLayer::new_for_http())
             .layer(axum::middleware::from_fn(
@@ -361,13 +471,7 @@ fn get_log_level_from_env() -> Level {
     }
 }
 
-/// Application state
-pub(crate) struct AppState {
-    server_group: Arc<RwLock<HashMap<ServerKind, ServerGroup>>>,
-    config: Arc<RwLock<Config>>,
-    server_info: Arc<RwLock<ServerInfo>>,
-    models: Arc<RwLock<HashMap<ServerId, Vec<endpoints::models::Model>>>>,
-}
+
 impl AppState {
     pub(crate) fn new(config: Config, server_info: ServerInfo) -> Self {
         Self {
